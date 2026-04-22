@@ -6,7 +6,7 @@ import type {
     IUpdateSignerPayload,
     IListParams,
 } from '../types';
-import { ValidationError } from '../errors';
+import { ApiError, ValidationError } from '../errors';
 import { cleanParams } from '../utils';
 import { BaseResource } from './base';
 
@@ -26,10 +26,10 @@ export class SignerResource extends BaseResource {
         this.logger.info('Creating signer', { email: payload.email });
         try {
             return await this.call('Failed to create signer', () =>
-                this.http.post(`/accounts/${id}/signers`, normalizeSignerPayload(payload)),
+                this.http.post(`/accounts/${id}/signers`, normaliseSignerPayload(payload)),
             );
         } catch (err) {
-            if (looksLikeDuplicateSignerError(err)) {
+            if (err instanceof ApiError && err.statusCode === 409) {
                 const duplicate = await this.findByEmail(payload.email, id);
                 if (duplicate) {
                     this.logger.info('Signer already exists, using existing signer', {
@@ -43,7 +43,7 @@ export class SignerResource extends BaseResource {
     }
 
     /** Get a signer by ID. */
-    get(signerId: string, accountId?: string): Promise<ISigner> {
+    async get(signerId: string, accountId?: string): Promise<ISigner> {
         const id = this.accountId(accountId);
         const sid = this.requireId(signerId, 'Signer ID');
         return this.call('Failed to fetch signer', () =>
@@ -52,7 +52,7 @@ export class SignerResource extends BaseResource {
     }
 
     /** List signers for the workspace (supports `page`, `per_page`, `search`, `sort`). */
-    list(params: IListParams = {}, accountId?: string): Promise<ISignerListResponse> {
+    async list(params: IListParams = {}, accountId?: string): Promise<ISignerListResponse> {
         const id = this.accountId(accountId);
         return this.callList<ISigner>('Failed to list signers', () =>
             this.http.get(`/accounts/${id}/signers`, { params: cleanParams(params) }),
@@ -60,7 +60,7 @@ export class SignerResource extends BaseResource {
     }
 
     /** Update a signer. Fails if the signer has active assignments. */
-    update(
+    async update(
         signerId: string,
         payload: IUpdateSignerPayload,
         accountId?: string,
@@ -68,12 +68,12 @@ export class SignerResource extends BaseResource {
         const id = this.accountId(accountId);
         const sid = this.requireId(signerId, 'Signer ID');
         return this.call('Failed to update signer', () =>
-            this.http.put(`/accounts/${id}/signers/${sid}`, normalizeSignerPayload(payload)),
+            this.http.put(`/accounts/${id}/signers/${sid}`, normaliseSignerPayload(payload)),
         );
     }
 
     /** Delete a signer. */
-    delete(signerId: string, accountId?: string): Promise<void> {
+    async delete(signerId: string, accountId?: string): Promise<void> {
         const id = this.accountId(accountId);
         const sid = this.requireId(signerId, 'Signer ID');
         return this.callVoid('Failed to delete signer', () =>
@@ -89,11 +89,10 @@ export class SignerResource extends BaseResource {
             const lower = email.toLowerCase();
             return data.find((s) => (s.email ?? '').toLowerCase() === lower) ?? null;
         } catch (err) {
-            this.logger.warn('Error searching for signer by email', {
-                email,
-                error: err instanceof Error ? err.message : String(err),
-            });
-            return null;
+            if (err instanceof ApiError && err.statusCode === 404) {
+                return null;
+            }
+            throw err;
         }
     }
 
@@ -104,7 +103,7 @@ export class SignerResource extends BaseResource {
     }
 }
 
-function normalizeSignerPayload(
+function normaliseSignerPayload(
     payload: (ICreateSignerPayload | IUpdateSignerPayload) & { phone?: string },
 ): Record<string, unknown> {
     const normalised: Record<string, unknown> = {
@@ -118,9 +117,4 @@ function normalizeSignerPayload(
     }
 
     return cleanParams(normalised);
-}
-
-function looksLikeDuplicateSignerError(err: unknown): boolean {
-    const message = err instanceof Error ? err.message.toLowerCase() : String(err).toLowerCase();
-    return message.includes('already exists') || message.includes('já existe');
 }

@@ -82,7 +82,10 @@ function normaliseSignerRef(
 
 export class AssignmentResource extends BaseResource {
     /** Create a signing assignment for a document. */
-    create(documentId: string, payload: ICreateAssignmentPayload): Promise<ICreateAssignmentResponse> {
+    async create(
+        documentId: string,
+        payload: ICreateAssignmentPayload,
+    ): Promise<ICreateAssignmentResponse> {
         const docId = this.requireId(documentId, 'Document ID');
         const signers = extractSignerRefs(payload);
         const body = buildAssignmentPayload(payload);
@@ -96,7 +99,10 @@ export class AssignmentResource extends BaseResource {
     }
 
     /** Estimate the cost (in credits) of creating the assignment. */
-    estimateCost(documentId: string, payload: ICreateAssignmentPayload): Promise<Record<string, unknown>> {
+    async estimateCost(
+        documentId: string,
+        payload: ICreateAssignmentPayload,
+    ): Promise<Record<string, unknown>> {
         const docId = this.requireId(documentId, 'Document ID');
         return this.call('Failed to estimate assignment cost', () =>
             this.http.post(
@@ -107,7 +113,11 @@ export class AssignmentResource extends BaseResource {
     }
 
     /** Update the expiration date of an existing assignment. */
-    resetExpiration(documentId: string, assignmentId: string, expiresAt: string): Promise<IAssignment> {
+    async resetExpiration(
+        documentId: string,
+        assignmentId: string,
+        expiresAt: string,
+    ): Promise<IAssignment> {
         const docId = this.requireId(documentId, 'Document ID');
         const asgId = this.requireId(assignmentId, 'Assignment ID');
         return this.call('Failed to update assignment expiration', () =>
@@ -119,7 +129,7 @@ export class AssignmentResource extends BaseResource {
     }
 
     /** Resend the signing notification to a single signer. */
-    resendNotification(
+    async resendNotification(
         documentId: string,
         assignmentId: string,
         signerId: string,
@@ -133,7 +143,7 @@ export class AssignmentResource extends BaseResource {
     }
 
     /** Estimate the cost of resending a signer notification. */
-    estimateResendCost(
+    async estimateResendCost(
         documentId: string,
         assignmentId: string,
         signerId: string,
@@ -152,7 +162,7 @@ export class AssignmentResource extends BaseResource {
      * Cancel a signature request. This endpoint is not listed in the public
      * Swagger but is exposed by the platform.
      */
-    cancel(documentId: string, reason: string, accountId?: string): Promise<unknown> {
+    async cancel(documentId: string, reason: string, accountId?: string): Promise<unknown> {
         const docId = this.requireId(documentId, 'Document ID');
         const accId = this.accountId(accountId);
         this.logger.info('Cancelling signature request', { documentId: docId, reason });

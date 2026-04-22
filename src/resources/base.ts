@@ -1,5 +1,5 @@
 import type { AxiosInstance, AxiosResponse, AxiosResponseHeaders } from 'axios';
-import { ValidationError } from '../errors';
+import { ApiError, ValidationError } from '../errors';
 import type { Logger, PaginatedResult, PaginationMeta } from '../types';
 import { createNoopLogger, handleAssinafyResponse, toSdkError } from '../utils';
 
@@ -48,6 +48,16 @@ export abstract class BaseResource {
             return handleAssinafyResponse<T>(response.data);
         } catch (err) {
             throw toSdkError(err, label);
+        }
+    }
+
+    /** Like {@link call} but returns `null` when the API responds with 404. */
+    protected async callOptional<T>(label: string, request: RequestFn): Promise<T | null> {
+        try {
+            return await this.call<T>(label, request);
+        } catch (err) {
+            if (err instanceof ApiError && err.statusCode === 404) return null;
+            throw err;
         }
     }
 

@@ -2,6 +2,10 @@ src
 *.test.ts
 tsconfig.json
 .eslintrc.json
+bun.lock
 bun.lockb
+package-lock.json
 node_modules
 .DS_Store
+.github
+coverage

@@ -80,7 +80,7 @@ export class DocumentResource extends BaseResource {
     }
 
     /** List workspace documents. Pagination info (if any) is attached in `meta`. */
-    list(params: IListParams = {}, accountId?: string): Promise<IDocumentListResponse> {
+    async list(params: IListParams = {}, accountId?: string): Promise<IDocumentListResponse> {
         const id = this.accountId(accountId);
         return this.callList<IDocumentListItem>('Failed to list documents', () =>
             this.http.get(`/accounts/${id}/documents`, { params: cleanParams(params) }),
@@ -88,13 +88,13 @@ export class DocumentResource extends BaseResource {
     }
 
     /** Get document details. */
-    details(documentId: string): Promise<IDocumentDetailsResponse> {
+    async details(documentId: string): Promise<IDocumentDetailsResponse> {
         const id = this.requireId(documentId, 'Document ID');
         return this.call('Failed to fetch document details', () => this.http.get(`/documents/${id}`));
     }
 
     /** Alias for {@link details}. */
-    get(documentId: string): Promise<IDocumentDetailsResponse> {
+    async get(documentId: string): Promise<IDocumentDetailsResponse> {
         return this.details(documentId);
     }
 
@@ -140,7 +140,7 @@ export class DocumentResource extends BaseResource {
     }
 
     /** Download a document artifact. Defaults to the certificated (signed) PDF. */
-    download(
+    async download(
         documentId: string,
         artifactName: DocumentArtifactName = 'certificated',
     ): Promise<Buffer> {
@@ -153,7 +153,7 @@ export class DocumentResource extends BaseResource {
     }
 
     /** Download the document thumbnail. */
-    thumbnail(documentId: string): Promise<Buffer> {
+    async thumbnail(documentId: string): Promise<Buffer> {
         const id = this.requireId(documentId, 'Document ID');
         return this.callBinary('Failed to download document thumbnail', () =>
             this.http.get<ArrayBuffer>(`/documents/${id}/thumbnail`, { responseType: 'arraybuffer' }),
@@ -161,7 +161,7 @@ export class DocumentResource extends BaseResource {
     }
 
     /** Download a single page as a JPEG. */
-    downloadPage(documentId: string, pageId: string): Promise<Buffer> {
+    async downloadPage(documentId: string, pageId: string): Promise<Buffer> {
         const docId = this.requireId(documentId, 'Document ID');
         const pid = this.requireId(pageId, 'Page ID');
         return this.callBinary('Failed to download page', () =>
@@ -182,7 +182,7 @@ export class DocumentResource extends BaseResource {
     }
 
     /** Delete a document. */
-    delete(documentId: string): Promise<void> {
+    async delete(documentId: string): Promise<void> {
         const id = this.requireId(documentId, 'Document ID');
         return this.callVoid('Failed to delete document', () => this.http.delete(`/documents/${id}`));
     }

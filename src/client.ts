@@ -7,6 +7,14 @@ import type {
     IUploadAndRequestSignaturesSigner,
     Logger,
 } from './types';
+import { ValidationError } from './errors';
+import { createNoopLogger } from './utils';
+import { DocumentResource, type DocumentUploadSource } from './resources/documents';
+import { SignerResource } from './resources/signers';
+import { WorkspaceResource } from './resources/workspaces';
+import { AssignmentResource } from './resources/assignments';
+import { WebhookResource } from './resources/webhooks';
+import { WebhookVerifier } from './support/webhook-verifier';
 
 /** Flexible input accepted by {@link AssinafyClient.fromConfig} (snake_case or camelCase). */
 export interface ClientConfigInput {
@@ -24,14 +32,6 @@ export interface ClientConfigInput {
     timeout?: number;
     logger?: Logger;
 }
-import { ValidationError } from './errors';
-import { createNoopLogger } from './utils';
-import { DocumentResource, type DocumentUploadSource } from './resources/documents';
-import { SignerResource } from './resources/signers';
-import { WorkspaceResource } from './resources/workspaces';
-import { AssignmentResource } from './resources/assignments';
-import { WebhookResource } from './resources/webhooks';
-import { WebhookVerifier } from './support/webhook-verifier';
 
 const DEFAULT_BASE_URL = 'https://api.assinafy.com.br/v1';
 
