@@ -1,0 +1,10 @@
+export { AssinafyClient } from './client';
+export * from './types';
+export * from './errors';
+export { DocumentResource } from './resources/documents';
+export type { DocumentUploadSource, IDocumentUploadOptions } from './resources/documents';
+export { SignerResource } from './resources/signers';
+export { WorkspaceResource } from './resources/workspaces';
+export { AssignmentResource } from './resources/assignments';
+export { WebhookResource } from './resources/webhooks';
+export { WebhookVerifier } from './support/webhook-verifier';

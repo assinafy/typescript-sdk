@@ -1,0 +1,7 @@
+src
+*.test.ts
+tsconfig.json
+.eslintrc.json
+bun.lockb
+node_modules
+.DS_Store

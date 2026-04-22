@@ -1,0 +1,69 @@
+{
+    "name": "assinafy",
+    "version": "1.0.0",
+    "description": "TypeScript SDK for Assinafy API - Digital signature platform",
+    "main": "dist/index.js",
+    "module": "dist/index.mjs",
+    "types": "dist/index.d.ts",
+    "exports": {
+        ".": {
+            "types": "./dist/index.d.ts",
+            "import": "./dist/index.mjs",
+            "require": "./dist/index.js"
+        }
+    },
+    "scripts": {
+        "build": "tsup src/index.ts --format cjs,esm --dts --clean",
+        "test": "bun test",
+        "lint": "eslint src --ext .ts",
+        "lint:fix": "eslint src --ext .ts --fix",
+        "prepublishOnly": "bun run build",
+        "release": "bun run typecheck && bun run lint && bun test && bun run build && npm publish",
+        "typecheck": "tsc --noEmit"
+    },
+    "keywords": [
+        "assinafy",
+        "assinafy-api",
+        "assinatura-eletronica",
+        "assinatura-digital",
+        "assinatura",
+        "digital-signature",
+        "electronic-signature",
+        "signature",
+        "pdf",
+        "webhook",
+        "sdk",
+        "api-client",
+        "typescript",
+        "brazil"
+    ],
+    "author": "Assinafy API Team",
+    "license": "MIT",
+    "engines": {
+        "node": ">=18"
+    },
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/assinafy/node-sdk.git"
+    },
+    "bugs": {
+        "url": "https://github.com/assinafy/node-sdk/issues"
+    },
+    "homepage": "https://github.com/assinafy/node-sdk/#readme",
+    "devDependencies": {
+        "@types/bun": "latest",
+        "@typescript-eslint/eslint-plugin": "^6.0.0",
+        "@typescript-eslint/parser": "^6.0.0",
+        "eslint": "^8.0.0",
+        "tsup": "^8.0.0",
+        "typescript": "^5.0.0"
+    },
+    "dependencies": {
+        "axios": "^1.6.0"
+    },
+    "files": [
+        "dist",
+        "README.md",
+        "LICENSE"
+    ]
+}

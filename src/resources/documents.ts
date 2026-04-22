@@ -1,0 +1,260 @@
+import { promises as fs } from 'node:fs';
+import path from 'node:path';
+import type {
+    DocumentArtifactName,
+    DocumentStatus,
+    IDocumentActivity,
+    IDocumentDetailsResponse,
+    IDocumentListItem,
+    IDocumentListResponse,
+    IDocumentUploadResponse,
+    IListParams,
+    ISigningProgress,
+} from '../types';
+import { ValidationError } from '../errors';
+import { cleanParams } from '../utils';
+import { BaseResource } from './base';
+
+const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
+
+const READY_STATUSES: ReadonlySet<DocumentStatus | string> = new Set([
+    'metadata_ready',
+    'pending_signature',
+    'certificated',
+]);
+
+const FAILED_STATUSES: ReadonlySet<DocumentStatus | string> = new Set([
+    'failed',
+    'rejected_by_signer',
+    'rejected_by_user',
+    'expired',
+]);
+
+/** Input for uploading a document: either an on-disk file or an in-memory buffer. */
+export type DocumentUploadSource =
+    | { filePath: string; fileName?: string }
+    | { buffer: Buffer; fileName: string };
+
+export interface IDocumentUploadOptions {
+    /** Optional metadata sent alongside the file (JSON-encoded). */
+    metadata?: Record<string, unknown>;
+    /** Override the default account ID configured on the client. */
+    accountId?: string;
+}
+
+export class DocumentResource extends BaseResource {
+    /**
+     * Upload a PDF to the workspace.
+     *
+     * @example
+     * ```ts
+     * await client.documents.upload({ filePath: './contract.pdf' });
+     * await client.documents.upload({ buffer, fileName: 'contract.pdf' }, { metadata });
+     * ```
+     */
+    async upload(
+        source: DocumentUploadSource,
+        options: IDocumentUploadOptions = {},
+    ): Promise<IDocumentUploadResponse> {
+        const { buffer, fileName } = await loadSource(source);
+        validateUpload(buffer, fileName);
+
+        const accountId = this.accountId(options.accountId);
+        const form = buildUploadForm(buffer, fileName, options.metadata);
+
+        this.logger.info('Uploading document', { fileName, size: buffer.byteLength });
+
+        const document = await this.call<IDocumentUploadResponse>('Document upload failed', () =>
+            this.http.post(`/accounts/${accountId}/documents`, form, {
+                headers: { 'Content-Type': 'multipart/form-data' },
+            }),
+        );
+
+        if (!document?.id) {
+            throw new ValidationError('Upload succeeded but no document ID was returned', {
+                response: document as unknown as Record<string, unknown>,
+            });
+        }
+        this.logger.info('Document uploaded', { documentId: document.id });
+        return document;
+    }
+
+    /** List workspace documents. Pagination info (if any) is attached in `meta`. */
+    list(params: IListParams = {}, accountId?: string): Promise<IDocumentListResponse> {
+        const id = this.accountId(accountId);
+        return this.callList<IDocumentListItem>('Failed to list documents', () =>
+            this.http.get(`/accounts/${id}/documents`, { params: cleanParams(params) }),
+        );
+    }
+
+    /** Get document details. */
+    details(documentId: string): Promise<IDocumentDetailsResponse> {
+        const id = this.requireId(documentId, 'Document ID');
+        return this.call('Failed to fetch document details', () => this.http.get(`/documents/${id}`));
+    }
+
+    /** Alias for {@link details}. */
+    get(documentId: string): Promise<IDocumentDetailsResponse> {
+        return this.details(documentId);
+    }
+
+    /** Poll document status until ready (or a terminal status / timeout). */
+    async waitUntilReady(
+        documentId: string,
+        options: { maxWaitMs?: number; pollIntervalMs?: number } = {},
+    ): Promise<IDocumentDetailsResponse> {
+        const id = this.requireId(documentId, 'Document ID');
+        const maxWaitMs = options.maxWaitMs ?? 30_000;
+        const pollIntervalMs = options.pollIntervalMs ?? 2_000;
+        const start = Date.now();
+        let attempts = 0;
+
+        this.logger.info('Waiting for document to be ready', { documentId: id, maxWaitMs });
+
+        while (Date.now() - start < maxWaitMs) {
+            attempts++;
+            try {
+                const details = await this.details(id);
+                const status = details.status ?? 'unknown';
+                this.logger.debug('Document status check', { attempts, status });
+
+                if (READY_STATUSES.has(status)) return details;
+                if (FAILED_STATUSES.has(status)) {
+                    throw new ValidationError(`Document processing failed with status: ${status}`, {
+                        status,
+                    });
+                }
+            } catch (err) {
+                if (err instanceof ValidationError) throw err;
+                this.logger.warn('Error checking document status', {
+                    error: err instanceof Error ? err.message : String(err),
+                });
+            }
+            await sleep(pollIntervalMs);
+        }
+
+        throw new ValidationError('Timeout waiting for document to be ready', {
+            documentId: id,
+            attempts,
+        });
+    }
+
+    /** Download a document artifact. Defaults to the certificated (signed) PDF. */
+    download(
+        documentId: string,
+        artifactName: DocumentArtifactName = 'certificated',
+    ): Promise<Buffer> {
+        const id = this.requireId(documentId, 'Document ID');
+        return this.callBinary('Failed to download document', () =>
+            this.http.get<ArrayBuffer>(`/documents/${id}/download/${artifactName}`, {
+                responseType: 'arraybuffer',
+            }),
+        );
+    }
+
+    /** Download the document thumbnail. */
+    thumbnail(documentId: string): Promise<Buffer> {
+        const id = this.requireId(documentId, 'Document ID');
+        return this.callBinary('Failed to download document thumbnail', () =>
+            this.http.get<ArrayBuffer>(`/documents/${id}/thumbnail`, { responseType: 'arraybuffer' }),
+        );
+    }
+
+    /** Download a single page as a JPEG. */
+    downloadPage(documentId: string, pageId: string): Promise<Buffer> {
+        const docId = this.requireId(documentId, 'Document ID');
+        const pid = this.requireId(pageId, 'Page ID');
+        return this.callBinary('Failed to download page', () =>
+            this.http.get<ArrayBuffer>(`/documents/${docId}/pages/${pid}/download`, {
+                responseType: 'arraybuffer',
+            }),
+        );
+    }
+
+    /** Fetch the document activity log. */
+    async activities(documentId: string): Promise<IDocumentActivity[]> {
+        const id = this.requireId(documentId, 'Document ID');
+        const result = await this.call<IDocumentActivity[] | null>(
+            'Failed to fetch document activities',
+            () => this.http.get(`/documents/${id}/activities`),
+        );
+        return result ?? [];
+    }
+
+    /** Delete a document. */
+    delete(documentId: string): Promise<void> {
+        const id = this.requireId(documentId, 'Document ID');
+        return this.callVoid('Failed to delete document', () => this.http.delete(`/documents/${id}`));
+    }
+
+    /** Quick check: has every signer completed their assignment? */
+    async isFullySigned(documentId: string): Promise<boolean> {
+        const details = await this.details(documentId);
+        if (details.status === 'certificated') return true;
+        const summary = details.assignment?.summary;
+        if (summary && typeof summary.signer_count === 'number') {
+            return summary.signer_count > 0 && summary.signer_count === summary.completed_count;
+        }
+        return false;
+    }
+
+    /** Summarise signing progress for UI display. */
+    async getSigningProgress(documentId: string): Promise<ISigningProgress> {
+        const details = await this.details(documentId);
+        const summary = details.assignment?.summary;
+        const total = summary?.signer_count ?? details.assignment?.signers?.length ?? 0;
+        const signed = summary?.completed_count ?? 0;
+        const pending = Math.max(total - signed, 0);
+        const percentage = total > 0 ? Math.round((signed / total) * 10_000) / 100 : 0;
+        return { signed, total, pending, percentage };
+    }
+}
+
+async function loadSource(source: DocumentUploadSource): Promise<{ buffer: Buffer; fileName: string }> {
+    if ('buffer' in source) {
+        if (!source.fileName) {
+            throw new ValidationError('fileName is required when uploading a Buffer');
+        }
+        return { buffer: source.buffer, fileName: source.fileName };
+    }
+    if (!source.filePath) {
+        throw new ValidationError('filePath is required');
+    }
+    const buffer = await fs.readFile(source.filePath);
+    return { buffer, fileName: source.fileName ?? path.basename(source.filePath) };
+}
+
+function validateUpload(buffer: Buffer, fileName: string): void {
+    if (!buffer || buffer.byteLength === 0) {
+        throw new ValidationError('File buffer is empty', { fileName });
+    }
+    if (!fileName.toLowerCase().endsWith('.pdf')) {
+        throw new ValidationError('Only PDF files are supported', { fileName });
+    }
+    if (buffer.byteLength > MAX_UPLOAD_BYTES) {
+        throw new ValidationError('File size exceeds maximum allowed (25MB)', {
+            fileSize: buffer.byteLength,
+            maxSize: MAX_UPLOAD_BYTES,
+        });
+    }
+}
+
+function buildUploadForm(
+    buffer: Buffer,
+    fileName: string,
+    metadata: Record<string, unknown> | undefined,
+): FormData {
+    const form = new FormData();
+    // Blob copy-free view over the Buffer's underlying ArrayBuffer slice.
+    const view = new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+    form.append('file', new Blob([view], { type: 'application/pdf' }), fileName);
+    form.append('name', fileName);
+    if (metadata) {
+        form.append('metadata', JSON.stringify(metadata));
+    }
+    return form;
+}
+
+function sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
