@@ -12,15 +12,22 @@ Covers documents, signers, assignments, webhooks, workspaces, and the high-level
 ## Installation
 
 ```bash
-npm install assinafy
+npm install @assinafy/sdk
 # or
-bun add assinafy
+bun add @assinafy/sdk
+```
+
+The package is published to both [npmjs.com](https://www.npmjs.com/package/@assinafy/sdk) and [GitHub Packages](https://github.com/assinafy/typescript-sdk/packages). To install from GitHub Packages, add to your `.npmrc`:
+
+```
+@assinafy:registry=https://npm.pkg.github.com
+//npm.pkg.github.com/:_authToken=${GITHUB_TOKEN}
 ```
 
 ## Quick start
 
 ```ts
-import { AssinafyClient } from 'assinafy';
+import { AssinafyClient } from '@assinafy/sdk';
 
 const client = new AssinafyClient({
   apiKey: process.env.ASSINAFY_API_KEY!,
@@ -254,7 +261,7 @@ result.signer_ids; // string[]
 The SDK throws typed errors; every method rejects with something that is an instance of `AssinafyError`.
 
 ```ts
-import { ApiError, ValidationError, NetworkError, AssinafyError } from 'assinafy';
+import { ApiError, ValidationError, NetworkError, AssinafyError } from '@assinafy/sdk';
 
 try {
   await client.documents.upload({ filePath: './x.pdf' });

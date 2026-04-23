@@ -2,7 +2,7 @@
   "lockfileVersion": 1,
   "workspaces": {
     "": {
-      "name": "assinafy",
+      "name": "@assinafy/sdk",
       "dependencies": {
         "axios": "^1.6.0",
       },

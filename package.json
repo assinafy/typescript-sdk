@@ -1,6 +1,6 @@
 {
-    "name": "assinafy",
-    "version": "1.1.0",
+    "name": "@assinafy/sdk",
+    "version": "1.1.1",
     "description": "TypeScript SDK for Assinafy API - Digital signature platform",
     "main": "dist/index.js",
     "module": "dist/index.mjs",
@@ -18,7 +18,7 @@
         "lint": "eslint src --ext .ts",
         "lint:fix": "eslint src --ext .ts --fix",
         "prepublishOnly": "bun run build",
-        "release": "bun run typecheck && bun run lint && bun test && bun run build && npm publish",
+        "release": "bun run typecheck && bun run lint && bun test && bun run build && npm publish --access public && npm publish --registry=https://npm.pkg.github.com",
         "typecheck": "tsc --noEmit"
     },
     "keywords": [
