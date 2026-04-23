@@ -77,7 +77,7 @@ export class AssinafyClient {
         const headers: Record<string, string> = {
             'Content-Type': 'application/json',
             Accept: 'application/json',
-            'User-Agent': 'assinafy-node-sdk',
+            'User-Agent': 'assinafy-typescript-sdk',
         };
         if (options.apiKey) {
             headers['X-Api-Key'] = options.apiKey;
