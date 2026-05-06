@@ -2,7 +2,7 @@
 
 TypeScript SDK for the [Assinafy API](https://api.assinafy.com.br/v1/docs) — a Brazilian digital signature platform.
 
-Covers documents, signers, assignments, webhooks, workspaces, and the high-level `uploadAndRequestSignatures` helper.
+Covers documents, signers, assignments, webhooks, workspaces, templates, and the high-level `uploadAndRequestSignatures` helper.
 
 ## Requirements
 
@@ -124,6 +124,7 @@ await client.signers.create({
   full_name: 'John Doe',
   email: 'john@example.com',
   whatsapp_phone_number: '+5548999990000',
+  cpf: '123.456.789-00', // optional Brazilian tax ID — non-digits are stripped automatically
 });
 
 // PHP SDK compatibility aliases are also accepted
@@ -222,6 +223,26 @@ app.post('/webhooks/assinafy', express.raw({ type: 'application/json' }), (req, 
   }
   res.sendStatus(200);
 });
+```
+
+### Templates
+
+```ts
+const { data, meta } = await client.templates.list({ search: 'NDA', per_page: 20 });
+const template = await client.templates.get(templateId);
+
+// Create a document from a template (each signer maps to a template role)
+await client.documents.createFromTemplate(
+  templateId,
+  [{ role_id: template.roles![0].id, id: signerId, verification_method: 'Email', notification_methods: ['Email'] }],
+  { name: 'NDA - John Doe', message: 'Please sign at your earliest convenience.' },
+);
+
+// Estimate the cost before creating
+await client.documents.estimateCostFromTemplate(templateId, [{ role_id: 'role_id', id: signerId }]);
+
+// Verify a signed document by its SHA-1 hash
+await client.documents.verify(signatureHash);
 ```
 
 ### Workspaces

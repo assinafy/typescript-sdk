@@ -14,6 +14,7 @@ import { SignerResource } from './resources/signers';
 import { WorkspaceResource } from './resources/workspaces';
 import { AssignmentResource } from './resources/assignments';
 import { WebhookResource } from './resources/webhooks';
+import { TemplateResource } from './resources/templates';
 import { WebhookVerifier } from './support/webhook-verifier';
 
 /** Flexible input accepted by {@link AssinafyClient.fromConfig} (snake_case or camelCase). */
@@ -60,6 +61,7 @@ export class AssinafyClient {
     public readonly workspaces: WorkspaceResource;
     public readonly assignments: AssignmentResource;
     public readonly webhooks: WebhookResource;
+    public readonly templates: TemplateResource;
     public readonly webhookVerifier: WebhookVerifier;
 
     constructor(options: AssinafyClientOptions) {
@@ -100,6 +102,7 @@ export class AssinafyClient {
             this.logger,
         );
         this.webhooks = new WebhookResource(this.axiosInstance, this.defaultAccountId, this.logger);
+        this.templates = new TemplateResource(this.axiosInstance, this.defaultAccountId, this.logger);
         this.webhookVerifier = new WebhookVerifier(this.webhookSecret);
     }
 
@@ -171,6 +174,9 @@ export class AssinafyClient {
             const phone = signer.whatsapp_phone_number ?? signer.phone;
             if (phone !== undefined) {
                 payload.whatsapp_phone_number = phone;
+            }
+            if (signer.cpf !== undefined) {
+                payload.cpf = signer.cpf;
             }
             if (signer.metadata !== undefined) {
                 payload.metadata = signer.metadata;

@@ -104,13 +104,17 @@ export class SignerResource extends BaseResource {
 }
 
 function normaliseSignerPayload(
-    payload: (ICreateSignerPayload | IUpdateSignerPayload) & { phone?: string },
+    payload: (ICreateSignerPayload | IUpdateSignerPayload) & { phone?: string; cpf?: string },
 ): Record<string, unknown> {
     const normalised: Record<string, unknown> = {
         full_name: payload.full_name,
         email: payload.email,
         whatsapp_phone_number: payload.whatsapp_phone_number ?? payload.phone,
     };
+
+    if (payload.cpf) {
+        normalised['cpf'] = payload.cpf.replace(/\D/g, '');
+    }
 
     if ('metadata' in payload) {
         normalised['metadata'] = payload.metadata;

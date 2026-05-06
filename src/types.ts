@@ -60,6 +60,7 @@ export interface ICreateSignerPayload {
     whatsapp_phone_number?: string;
     /** PHP SDK compatibility alias for `whatsapp_phone_number`. */
     phone?: string;
+    cpf?: string;
     metadata?: Record<string, unknown>;
 }
 
@@ -70,6 +71,7 @@ export interface IUpdateSignerPayload {
     whatsapp_phone_number?: string;
     /** PHP SDK compatibility alias for `whatsapp_phone_number`. */
     phone?: string;
+    cpf?: string;
 }
 
 /** Signer object as returned by the API. */
@@ -78,6 +80,7 @@ export interface ISigner {
     full_name: string;
     email: string;
     whatsapp_phone_number?: string | null;
+    cpf?: string | null;
     has_accepted_terms?: boolean;
     metadata?: Record<string, unknown>;
 }
@@ -386,5 +389,53 @@ export interface IUploadAndRequestSignaturesSigner {
     whatsapp_phone_number?: string;
     /** PHP SDK compatibility alias for `whatsapp_phone_number`. */
     phone?: string;
+    cpf?: string;
     metadata?: Record<string, unknown>;
+}
+
+/** Template role definition. */
+export interface ITemplateRole {
+    id: string;
+    name: string;
+    [key: string]: unknown;
+}
+
+/** Template list item (paginated). */
+export interface ITemplateListItem {
+    id: string;
+    name: string;
+    status: string;
+    account_id?: string;
+    created_at: string;
+    updated_at?: string;
+}
+
+export type ITemplateListResponse = PaginatedResult<ITemplateListItem>;
+
+/** Full template details. */
+export interface ITemplateDetailsResponse {
+    id: string;
+    name: string;
+    status: string;
+    account_id?: string;
+    roles?: ITemplateRole[];
+    created_at: string;
+    updated_at?: string;
+    [key: string]: unknown;
+}
+
+/** Signer assignment for creating a document from a template. */
+export interface ITemplateSigner {
+    role_id: string;
+    id: string;
+    verification_method?: string;
+    notification_methods?: string[];
+}
+
+/** Options for creating a document from a template. */
+export interface ICreateDocumentFromTemplateOptions {
+    name?: string;
+    message?: string;
+    expires_at?: string;
+    editor_fields?: unknown[];
 }

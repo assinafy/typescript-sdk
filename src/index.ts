@@ -7,4 +7,5 @@ export { SignerResource } from './resources/signers';
 export { WorkspaceResource } from './resources/workspaces';
 export { AssignmentResource } from './resources/assignments';
 export { WebhookResource } from './resources/webhooks';
+export { TemplateResource } from './resources/templates';
 export { WebhookVerifier } from './support/webhook-verifier';

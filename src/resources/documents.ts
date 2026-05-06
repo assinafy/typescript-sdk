@@ -3,6 +3,7 @@ import path from 'node:path';
 import type {
     DocumentArtifactName,
     DocumentStatus,
+    ICreateDocumentFromTemplateOptions,
     IDocumentActivity,
     IDocumentDetailsResponse,
     IDocumentListItem,
@@ -10,6 +11,7 @@ import type {
     IDocumentUploadResponse,
     IListParams,
     ISigningProgress,
+    ITemplateSigner,
 } from '../types';
 import { ValidationError } from '../errors';
 import { cleanParams } from '../utils';
@@ -185,6 +187,50 @@ export class DocumentResource extends BaseResource {
     async delete(documentId: string): Promise<void> {
         const id = this.requireId(documentId, 'Document ID');
         return this.callVoid('Failed to delete document', () => this.http.delete(`/documents/${id}`));
+    }
+
+    /**
+     * Create a document from a template.
+     *
+     * @example
+     * ```ts
+     * await client.documents.createFromTemplate('tmpl_id', [
+     *   { role_id: 'role_id', id: 'signer_id', verification_method: 'Email', notification_methods: ['Email'] },
+     * ], { name: 'My Contract' });
+     * ```
+     */
+    async createFromTemplate(
+        templateId: string,
+        signers: ITemplateSigner[],
+        options: ICreateDocumentFromTemplateOptions = {},
+        accountId?: string,
+    ): Promise<IDocumentDetailsResponse> {
+        const tmplId = this.requireId(templateId, 'Template ID');
+        const accId = this.accountId(accountId);
+        const body: Record<string, unknown> = { signers, ...options };
+        this.logger.info('Creating document from template', { templateId: tmplId, accountId: accId });
+        return this.call('Failed to create document from template', () =>
+            this.http.post(`/accounts/${accId}/templates/${tmplId}/documents`, body),
+        );
+    }
+
+    /** Estimate the credit cost of creating a document from a template. */
+    async estimateCostFromTemplate(
+        templateId: string,
+        signers: ITemplateSigner[],
+        accountId?: string,
+    ): Promise<Record<string, unknown>> {
+        const tmplId = this.requireId(templateId, 'Template ID');
+        const accId = this.accountId(accountId);
+        return this.call('Failed to estimate cost from template', () =>
+            this.http.post(`/accounts/${accId}/templates/${tmplId}/documents/estimate-cost`, { signers }),
+        );
+    }
+
+    /** Verify a document by its signature hash. */
+    async verify(hash: string): Promise<Record<string, unknown>> {
+        const h = this.requireId(hash, 'Signature hash');
+        return this.call('Failed to verify document', () => this.http.get(`/documents/${h}/verify`));
     }
 
     /** Quick check: has every signer completed their assignment? */
