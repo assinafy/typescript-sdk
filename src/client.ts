@@ -15,6 +15,9 @@ import { WorkspaceResource } from './resources/workspaces';
 import { AssignmentResource } from './resources/assignments';
 import { WebhookResource } from './resources/webhooks';
 import { TemplateResource } from './resources/templates';
+import { AuthenticationResource } from './resources/authentication';
+import { FieldsResource } from './resources/fields';
+import { SignerDocumentsResource } from './resources/signer-documents';
 import { WebhookVerifier } from './support/webhook-verifier';
 
 /** Flexible input accepted by {@link AssinafyClient.fromConfig} (snake_case or camelCase). */
@@ -62,6 +65,9 @@ export class AssinafyClient {
     public readonly assignments: AssignmentResource;
     public readonly webhooks: WebhookResource;
     public readonly templates: TemplateResource;
+    public readonly auth: AuthenticationResource;
+    public readonly fields: FieldsResource;
+    public readonly signerDocuments: SignerDocumentsResource;
     public readonly webhookVerifier: WebhookVerifier;
 
     constructor(options: AssinafyClientOptions) {
@@ -103,6 +109,13 @@ export class AssinafyClient {
         );
         this.webhooks = new WebhookResource(this.axiosInstance, this.defaultAccountId, this.logger);
         this.templates = new TemplateResource(this.axiosInstance, this.defaultAccountId, this.logger);
+        this.auth = new AuthenticationResource(this.axiosInstance, undefined, this.logger);
+        this.fields = new FieldsResource(this.axiosInstance, this.defaultAccountId, this.logger);
+        this.signerDocuments = new SignerDocumentsResource(
+            this.axiosInstance,
+            this.defaultAccountId,
+            this.logger,
+        );
         this.webhookVerifier = new WebhookVerifier(this.webhookSecret);
     }
 

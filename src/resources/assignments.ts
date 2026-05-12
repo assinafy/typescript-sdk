@@ -3,6 +3,7 @@ import type {
     ICreateAssignmentPayload,
     ICreateAssignmentResponse,
     IResendEmailResponse,
+    IWhatsAppNotification,
     SignerReference,
 } from '../types';
 import { ValidationError } from '../errors';
@@ -155,6 +156,21 @@ export class AssignmentResource extends BaseResource {
             this.http.post(
                 `/documents/${docId}/assignments/${asgId}/signers/${sid}/estimate-resend-cost`,
             ),
+        );
+    }
+
+    /**
+     * `GET /documents/{documentId}/assignments/{assignmentId}/whatsapp-notifications`
+     * — list every WhatsApp notification rendered + sent for an assignment.
+     */
+    async listWhatsAppNotifications(
+        documentId: string,
+        assignmentId: string,
+    ): Promise<IWhatsAppNotification[]> {
+        const docId = this.requireId(documentId, 'Document ID');
+        const asgId = this.requireId(assignmentId, 'Assignment ID');
+        return this.call('Failed to list WhatsApp notifications', () =>
+            this.http.get(`/documents/${docId}/assignments/${asgId}/whatsapp-notifications`),
         );
     }
 

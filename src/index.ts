@@ -1,11 +1,15 @@
 export { AssinafyClient } from './client';
+export type { ClientConfigInput } from './client';
 export * from './types';
 export * from './errors';
 export { DocumentResource } from './resources/documents';
 export type { DocumentUploadSource, IDocumentUploadOptions } from './resources/documents';
 export { SignerResource } from './resources/signers';
 export { WorkspaceResource } from './resources/workspaces';
-export { AssignmentResource } from './resources/assignments';
+export { AssignmentResource, buildAssignmentPayload } from './resources/assignments';
 export { WebhookResource } from './resources/webhooks';
 export { TemplateResource } from './resources/templates';
+export { AuthenticationResource } from './resources/authentication';
+export { FieldsResource } from './resources/fields';
+export { SignerDocumentsResource } from './resources/signer-documents';
 export { WebhookVerifier } from './support/webhook-verifier';

@@ -76,12 +76,17 @@ export interface IUpdateSignerPayload {
 
 /** Signer object as returned by the API. */
 export interface ISigner {
+    resource?: string;
     id: string;
     full_name: string;
     email: string;
     whatsapp_phone_number?: string | null;
     cpf?: string | null;
     has_accepted_terms?: boolean;
+    /** Only returned by `GET /signers/self`. */
+    has_signature?: boolean;
+    /** Only returned by `GET /signers/self`. */
+    has_initial?: boolean;
     metadata?: Record<string, unknown>;
 }
 
@@ -438,4 +443,131 @@ export interface ICreateDocumentFromTemplateOptions {
     message?: string;
     expires_at?: string;
     editor_fields?: unknown[];
+}
+
+/**
+ * Item returned by `GET /documents/statuses`.
+ *
+ * The API uses `code` (the status name); we mirror that field. `description`
+ * is documented in the table but is not currently present in the JSON payload.
+ */
+export interface IDocumentStatusInfo {
+    code: DocumentStatus | string;
+    deletable: boolean;
+    description?: string;
+}
+
+/** Item returned by `GET /public/documents/{id}`. */
+export interface IPublicDocumentInfo {
+    resource?: string;
+    id: string;
+    name: string;
+    page_count?: string | number;
+    created_by?: string;
+    [key: string]: unknown;
+}
+
+/** Channel accepted by the `send-token` endpoint. */
+export type SendTokenChannel = 'email' | 'whatsapp' | string;
+
+/** Authentication: login response (also returned by social login). */
+export interface ILoginResponse {
+    access_token: string;
+    user: {
+        id: string;
+        name: string;
+        email: string;
+        telephone?: string;
+        government_id?: string;
+        is_email_verified?: boolean;
+        has_accepted_terms?: boolean;
+        created_at?: string;
+        to_be_deleted_at?: string | null;
+    };
+    accounts: Array<{
+        id: string;
+        name: string;
+        roles: string[];
+        is_delete_allowed: boolean;
+        created_at: string;
+    }>;
+}
+
+/** Authentication: API key payload returned by `POST /users/api-keys`. */
+export interface IApiKeyResponse {
+    api_key: string;
+}
+
+/** Authentication: masked API key returned by `GET /users/api-keys` (or null when never generated). */
+export type IMaskedApiKeyResponse = { api_key: string } | null;
+
+/** Field definition object. */
+export interface IFieldDefinition {
+    resource?: string;
+    id: string;
+    name: string;
+    type: string;
+    regex?: string | null;
+    is_pre_defined?: boolean;
+    is_active: boolean;
+    is_required?: boolean;
+    is_standard?: boolean;
+    is_read_only?: boolean;
+    is_visible?: boolean;
+}
+
+/** Payload for creating a field definition. */
+export interface ICreateFieldPayload {
+    type: string;
+    name: string;
+    regex?: string;
+    is_required?: boolean;
+    is_active?: boolean;
+}
+
+/** Payload for updating a field definition. */
+export interface IUpdateFieldPayload {
+    type?: string;
+    name?: string;
+    regex?: string | null;
+    is_required?: boolean;
+    is_active?: boolean;
+}
+
+/** Field type description returned by `GET /field-types`. */
+export interface IFieldType {
+    type: string;
+    name: string;
+}
+
+/** Single result returned by `POST /accounts/{id}/fields/{id}/validate`. */
+export interface IFieldValidationResult {
+    type?: string;
+    field_id?: string;
+    success: boolean;
+    error_message: string;
+}
+
+/** Payload entry for `POST /accounts/{id}/fields/validate-multiple`. */
+export interface IFieldValidateMultipleEntry {
+    field_id: string;
+    value: unknown;
+}
+
+/** Item returned by `GET /documents/{id}/assignments/{id}/whatsapp-notifications`. */
+export interface IWhatsAppNotification {
+    sent_at: number;
+    header: string;
+    body: string;
+    buttons: Array<{ text: string; url?: string }>;
+    phone_number: string;
+    signer_id: string;
+}
+
+/** Body entry for the signer-side `POST /documents/{id}/assignments/{id}` sign endpoint. */
+export interface ISignFieldEntry {
+    itemId: string;
+    fieldId: string;
+    pageId: string;
+    value: string;
 }

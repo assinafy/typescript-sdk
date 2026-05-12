@@ -1,8 +1,8 @@
-# Assinafy
+# @assinafy/sdk
 
-TypeScript SDK for the [Assinafy API](https://api.assinafy.com.br/v1/docs) — a Brazilian digital signature platform.
+Production-ready TypeScript SDK for the [Assinafy API](https://api.assinafy.com.br/v1/docs) — a Brazilian digital signature platform.
 
-Covers documents, signers, assignments, webhooks, workspaces, templates, and the high-level `uploadAndRequestSignatures` helper.
+Provides 100% endpoint coverage of the public API: documents, signers, assignments, templates, workspaces, webhooks, field definitions, authentication, public/signer-side flows, and the high-level `uploadAndRequestSignatures` helper.
 
 ## Requirements
 
@@ -66,7 +66,7 @@ new AssinafyClient({ token: 'jwt_xxx', accountId: 'acc_xxx' });
 | `apiKey`        | string   | —                                       | Preferred credential (sent as `X-Api-Key`).   |
 | `token`         | string   | —                                       | Legacy access token (sent as `Bearer`).       |
 | `accountId`     | string   | —                                       | Default workspace/account ID.                  |
-| `baseUrl`       | string   | `https://api.assinafy.com.br/v1`        | Switch to sandbox with `…/sandbox…/v1`.        |
+| `baseUrl`       | string   | `https://api.assinafy.com.br/v1`        | Override base URL.                             |
 | `webhookSecret` | string   | —                                       | Shared secret used by `WebhookVerifier`.       |
 | `timeout`       | number   | `30000`                                 | Request timeout in milliseconds.               |
 | `logger`        | `Logger` | no-op                                   | Optional `{debug,info,warn,error}` logger.     |
@@ -81,13 +81,29 @@ const client = AssinafyClient.create('api-key', 'account-id', { webhookSecret: '
 const client = AssinafyClient.fromConfig({
   api_key: process.env.ASSINAFY_API_KEY!,
   account_id: process.env.ASSINAFY_ACCOUNT_ID!,
-  base_url: 'https://sandbox.assinafy.com.br/v1',
 });
 ```
 
+## Endpoint coverage
+
+Every public endpoint documented in https://api.assinafy.com.br/v1/docs is covered. The table below maps each resource to its API surface.
+
+| Resource              | Endpoints                                                                                                                                                                                                                                          |
+| --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `client.documents`    | list, upload, details, activities, waitUntilReady, download, thumbnail, downloadPage, statuses, delete, verify, createFromTemplate, estimateCostFromTemplate, **getPublic**, **sendToken**, isFullySigned, getSigningProgress                       |
+| `client.signers`      | create, get, list, update, delete, findByEmail                                                                                                                                                                                                     |
+| `client.assignments`  | create, estimateCost, resetExpiration, resendNotification, estimateResendCost, listWhatsAppNotifications, cancel                                                                                                                                   |
+| `client.templates`    | list, get, downloadPage                                                                                                                                                                                                                            |
+| `client.workspaces`   | create, list, get, update, delete                                                                                                                                                                                                                  |
+| `client.webhooks`     | register, get, inactivate, delete, listEventTypes, listDispatches, retryDispatch                                                                                                                                                                   |
+| `client.fields`       | create, list, get, update, delete, validate, validateMultiple, listTypes                                                                                                                                                                           |
+| `client.auth`         | login, socialLogin, createApiKey, getApiKey, deleteApiKey, changePassword, requestPasswordReset, resetPassword                                                                                                                                     |
+| `client.signerDocuments` | getCurrent, list, download, signMultiple, declineMultiple, self, acceptTerms, verifyEmail, confirmData, uploadSignature, downloadSignature, getAssignment, sign, decline                                                                        |
+| `client.webhookVerifier` | verify, extractEvent, getEventType, getEventData                                                                                                                                                                                                |
+
 ## Resources
 
-All resources are available on the client. Most account-scoped methods accept an optional `accountId` that overrides the client default. Workspace `get()`, `update()`, and `delete()` always require an explicit account ID.
+Most account-scoped methods accept an optional `accountId` that overrides the client default. Workspace `get/update/delete` always require an explicit account ID.
 
 ### Documents
 
@@ -105,12 +121,22 @@ const { data, meta } = await client.documents.list({ page: 1, per_page: 20, sort
 await client.documents.details(doc.id);
 await client.documents.activities(doc.id);
 await client.documents.waitUntilReady(doc.id, { maxWaitMs: 30_000 });
-await client.documents.download(doc.id, 'certificated');
+
+await client.documents.download(doc.id, 'certificated');   // 'original' | 'certificated' | 'certificate-page' | 'bundle'
 await client.documents.thumbnail(doc.id);
 await client.documents.downloadPage(doc.id, pageId);
+
+await client.documents.statuses();                          // list every status code + deletable flag
 await client.documents.isFullySigned(doc.id);
 await client.documents.getSigningProgress(doc.id);
 await client.documents.delete(doc.id);
+
+// Verify a signed document by its SHA-1 hash
+await client.documents.verify('FE32EDDADE7CBDDCBB934E7402047450B0E59C02');
+
+// Public endpoints (no auth)
+await client.documents.getPublic(doc.id);
+await client.documents.sendToken(doc.id, 'jane@example.com', 'email');
 ```
 
 Uploads are validated locally: only `.pdf` files up to 25 MB are accepted (the API's current hard limit).
@@ -131,7 +157,7 @@ await client.signers.create({
 await client.signers.create({
   full_name: 'Jane Doe',
   email: 'jane@example.com',
-  phone: '+5548999991111',
+  phone: '+5548999991111', // alias for whatsapp_phone_number
 });
 
 await client.signers.get(signerId);
@@ -143,8 +169,6 @@ const existing = await client.signers.findByEmail('john@example.com');
 ```
 
 `signers.create()` is idempotent by email, matching the PHP SDK behavior: it reuses an existing signer when the same email is already present in the workspace.
-
-`phone` is accepted as an alias for `whatsapp_phone_number` to match the PHP SDK ergonomics.
 
 ### Assignments
 
@@ -158,17 +182,94 @@ await client.assignments.create(documentId, {
   copy_receivers: ['observer-id'],
 });
 
+// Estimate cost (signers may omit `id` when only the channel matters)
 await client.assignments.estimateCost(documentId, { signers: ['signer-1'] });
 await client.assignments.estimateCost(documentId, {
   signers: [{ verification_method: 'Whatsapp' }],
 });
+
 await client.assignments.resetExpiration(documentId, assignmentId, '2025-06-30T00:00:00Z');
 await client.assignments.resendNotification(documentId, assignmentId, signerId);
 await client.assignments.estimateResendCost(documentId, assignmentId, signerId);
+await client.assignments.listWhatsAppNotifications(documentId, assignmentId);
 await client.assignments.cancel(documentId, 'No longer needed');
 ```
 
 For backwards compatibility, the SDK also accepts legacy `signer_ids` and `signerIds` payloads and rewrites them to the current `signers: [{ id }]` format expected by the API.
+
+### Templates
+
+```ts
+const { data, meta } = await client.templates.list({ search: 'NDA', per_page: 20 });
+const template = await client.templates.get(templateId);
+await client.templates.downloadPage(templateId, pageId);
+
+// Create a document from a template (each signer maps to a template role)
+await client.documents.createFromTemplate(
+  templateId,
+  [{ role_id: template.roles![0].id, id: signerId, verification_method: 'Email', notification_methods: ['Email'] }],
+  { name: 'NDA - John Doe', message: 'Please sign at your earliest convenience.' },
+);
+
+// Estimate the cost before creating
+await client.documents.estimateCostFromTemplate(templateId, [{ role_id: 'role_id', id: signerId }]);
+```
+
+### Workspaces
+
+```ts
+await client.workspaces.create({ name: 'My Workspace', primary_color: '#ff0066' });
+await client.workspaces.list();
+await client.workspaces.get(accountId);
+await client.workspaces.update(accountId, { name: 'Renamed' });
+await client.workspaces.delete(accountId);
+```
+
+### Field definitions
+
+Custom field types used by `collect`-method assignments.
+
+```ts
+await client.fields.create({ type: 'text', name: 'Contract Number' });
+await client.fields.list({ include_inactive: true, include_standard: true });
+await client.fields.get(fieldId);
+await client.fields.update(fieldId, { name: 'Updated Name' });
+await client.fields.delete(fieldId);
+
+// Validate a single value (signer-access-code only required for signer-side calls)
+await client.fields.validate(fieldId, '400.676.228-36', { signerAccessCode });
+
+// Validate multiple values at once
+await client.fields.validateMultiple(
+  [
+    { field_id: 'f1', value: '1111111111111' },
+    { field_id: 'f2', value: 'foo@bar.com' },
+  ],
+  { signerAccessCode },
+);
+
+// Catalog of every field type the platform recognises
+await client.fields.listTypes();
+```
+
+### Authentication / API key management
+
+Most server-side integrations should just use `X-Api-Key` directly. Use these endpoints when you need to bootstrap a session for a human user.
+
+```ts
+const { access_token, user, accounts } = await client.auth.login('me@example.com', 'pw');
+await client.auth.socialLogin({ provider: 'google', token: 'google-id-token', has_accepted_terms: true });
+
+// Personal API key
+await client.auth.createApiKey('current-password');
+await client.auth.getApiKey();                     // → { api_key: '****...nBNr' } or null
+await client.auth.deleteApiKey();
+
+// Password lifecycle
+await client.auth.changePassword({ email, password: 'current', new_password: 'next' });
+await client.auth.requestPasswordReset('me@example.com');
+await client.auth.resetPassword({ email, token: 'tk', new_password: 'next' });
+```
 
 ### Webhooks
 
@@ -186,15 +287,13 @@ await client.webhooks.register({
   ],
 });
 
-await client.webhooks.get();     // current subscription or null
+await client.webhooks.get();          // current subscription or null
 await client.webhooks.inactivate();
 await client.webhooks.delete();
 await client.webhooks.listEventTypes();
 await client.webhooks.listDispatches({ delivered: false, page: 1, 'per-page': 20 });
 await client.webhooks.retryDispatch(dispatchId);
 ```
-
-The webhook event catalog in the current docs includes additional event types beyond the legacy four, including `document_uploaded`, `document_metadata_ready`, `document_prepared`, `assignment_created`, `signature_requested`, `signer_created`, and template lifecycle events.
 
 ### Webhook verification
 
@@ -225,34 +324,39 @@ app.post('/webhooks/assinafy', express.raw({ type: 'application/json' }), (req, 
 });
 ```
 
-### Templates
+### Signer-side endpoints
+
+For building custom signer portals. Every call requires the `signer-access-code` URL parameter that Assinafy emails/whatsapps to the signer.
 
 ```ts
-const { data, meta } = await client.templates.list({ search: 'NDA', per_page: 20 });
-const template = await client.templates.get(templateId);
+await client.signerDocuments.self(accessCode);
+await client.signerDocuments.acceptTerms(accessCode);
+await client.signerDocuments.verifyEmail({ signerAccessCode: accessCode, verificationCode: '123456' });
 
-// Create a document from a template (each signer maps to a template role)
-await client.documents.createFromTemplate(
-  templateId,
-  [{ role_id: template.roles![0].id, id: signerId, verification_method: 'Email', notification_methods: ['Email'] }],
-  { name: 'NDA - John Doe', message: 'Please sign at your earliest convenience.' },
-);
+await client.signerDocuments.getCurrent(signerId, accessCode);
+const { data } = await client.signerDocuments.list(signerId, accessCode, { search: 'invoice' });
+await client.signerDocuments.download(signerId, documentId, 'original', accessCode);
 
-// Estimate the cost before creating
-await client.documents.estimateCostFromTemplate(templateId, [{ role_id: 'role_id', id: signerId }]);
+await client.signerDocuments.confirmData(documentId, accessCode, {
+  email: 'me@example.com',
+  whatsapp_phone_number: '+5548999990000',
+  has_accepted_terms: true,
+});
 
-// Verify a signed document by its SHA-1 hash
-await client.documents.verify(signatureHash);
-```
+// Signature image management
+await client.signerDocuments.uploadSignature(accessCode, pngBuffer, { imageType: 'signature' });
+await client.signerDocuments.downloadSignature(accessCode, 'signature');
 
-### Workspaces
+// Sign / decline
+const assignment = await client.signerDocuments.getAssignment(accessCode);
+await client.signerDocuments.sign(documentId, assignmentId, accessCode, [
+  { itemId, fieldId, pageId, value: 'Signed by John' },
+]);
+await client.signerDocuments.decline(documentId, assignmentId, accessCode, 'Not authorized');
 
-```ts
-await client.workspaces.create({ name: 'My Workspace', primary_color: '#ff0066' });
-await client.workspaces.list();
-await client.workspaces.get(accountId);
-await client.workspaces.update(accountId, { name: 'Renamed' });
-await client.workspaces.delete(accountId);
+// Bulk operations
+await client.signerDocuments.signMultiple(['doc-1', 'doc-2'], accessCode);
+await client.signerDocuments.declineMultiple(['doc-1'], 'Unfavorable terms', accessCode);
 ```
 
 ## High-level helper
@@ -263,8 +367,8 @@ Uploads a PDF, waits for processing, reuses or creates signers by email, and kic
 const result = await client.uploadAndRequestSignatures({
   source: { filePath: './contract.pdf' },
   signers: [
-    { name: 'John',  email: 'john@example.com' },
-    { name: 'Jane',  email: 'jane@example.com', whatsapp_phone_number: '+5548999990000' },
+    { name: 'John', email: 'john@example.com' },
+    { name: 'Jane', email: 'jane@example.com', whatsapp_phone_number: '+5548999990000' },
   ],
   message: 'Please sign',
   metadata: { year: 2026 },
@@ -279,7 +383,7 @@ result.signer_ids; // string[]
 
 ## Errors
 
-The SDK throws typed errors; every method rejects with something that is an instance of `AssinafyError`.
+Every method rejects with an `AssinafyError` subclass.
 
 ```ts
 import { ApiError, ValidationError, NetworkError, AssinafyError } from '@assinafy/sdk';
@@ -297,6 +401,16 @@ try {
     console.error('SDK error:', err.message, err.context);
   }
 }
+```
+
+## Live smoke test
+
+A real-network test script under [`scripts/live-smoke.ts`](scripts/live-smoke.ts) exercises the full API. Use it to sanity-check a workspace before shipping.
+
+```bash
+ASSINAFY_API_KEY=… ASSINAFY_ACCOUNT_ID=… bun scripts/live-smoke.ts            # read-only
+ASSINAFY_API_KEY=… ASSINAFY_ACCOUNT_ID=… bun scripts/live-smoke.ts --write    # also creates+deletes a signer
+ASSINAFY_API_KEY=… ASSINAFY_ACCOUNT_ID=… bun scripts/live-smoke.ts --upload   # also uploads+deletes a PDF
 ```
 
 ## Development

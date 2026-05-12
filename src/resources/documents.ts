@@ -8,10 +8,13 @@ import type {
     IDocumentDetailsResponse,
     IDocumentListItem,
     IDocumentListResponse,
+    IDocumentStatusInfo,
     IDocumentUploadResponse,
     IListParams,
+    IPublicDocumentInfo,
     ISigningProgress,
     ITemplateSigner,
+    SendTokenChannel,
 } from '../types';
 import { ValidationError } from '../errors';
 import { cleanParams } from '../utils';
@@ -231,6 +234,44 @@ export class DocumentResource extends BaseResource {
     async verify(hash: string): Promise<Record<string, unknown>> {
         const h = this.requireId(hash, 'Signature hash');
         return this.call('Failed to verify document', () => this.http.get(`/documents/${h}/verify`));
+    }
+
+    /**
+     * `GET /documents/statuses` — list every possible document status with
+     * its description and whether documents in that status can be deleted.
+     */
+    async statuses(): Promise<IDocumentStatusInfo[]> {
+        return this.call('Failed to list document statuses', () =>
+            this.http.get('/documents/statuses'),
+        );
+    }
+
+    /**
+     * `GET /public/documents/{document_id}` — public, unauthenticated lookup of
+     * basic document info (used by the signing portal before the signer
+     * authenticates via the access code).
+     */
+    async getPublic(documentId: string): Promise<IPublicDocumentInfo> {
+        const id = this.requireId(documentId, 'Document ID');
+        return this.call('Failed to fetch public document info', () =>
+            this.http.get(`/public/documents/${id}`),
+        );
+    }
+
+    /**
+     * `PUT /public/documents/{document_id}/send-token` — send the 6-digit
+     * verification token to the signer's email / WhatsApp.
+     */
+    async sendToken(
+        documentId: string,
+        recipient: string,
+        channel: SendTokenChannel = 'email',
+    ): Promise<unknown> {
+        const id = this.requireId(documentId, 'Document ID');
+        if (!recipient) throw new ValidationError('recipient is required');
+        return this.call('Failed to send signing token', () =>
+            this.http.put(`/public/documents/${id}/send-token`, { recipient, channel }),
+        );
     }
 
     /** Quick check: has every signer completed their assignment? */
