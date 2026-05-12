@@ -1,6 +1,6 @@
 # @assinafy/sdk
 
-Production-ready TypeScript SDK for the [Assinafy API](https://api.assinafy.com.br/v1/docs) — a Brazilian digital signature platform.
+TypeScript SDK for the [Assinafy API](https://api.assinafy.com.br/v1/docs) — a Brazilian digital signature platform.
 
 Provides 100% endpoint coverage of the public API: documents, signers, assignments, templates, workspaces, webhooks, field definitions, authentication, public/signer-side flows, and the high-level `uploadAndRequestSignatures` helper.
 
