@@ -93,6 +93,11 @@ async function main(): Promise<void> {
         return `${types.length} field types`;
     });
 
+    await run('tags.list', async () => {
+        const tags = await client.tags.list();
+        return `${tags.length} tags`;
+    });
+
     await run('documents.verify (bogus hash)', async () => {
         const result = await client.documents.verify(
             'FE32EDDADE7CBDDCBB934E7402047450B0E59C02',
@@ -116,10 +121,28 @@ async function main(): Promise<void> {
             const s = await client.signers.create({
                 full_name: 'SDK Smoke Test',
                 email,
+                whatsapp_phone_number: '+5548999990000',
                 cpf: '123.456.789-09',
             });
             signerId = s.id;
             return `created ${s.id}`;
+        });
+
+        let tagId = '';
+        await run('tags.create (write)', async () => {
+            const t = await client.tags.create({ name: `smoke-${Date.now()}`, color: 'ff8800' });
+            tagId = t.id;
+            return `created ${t.id}`;
+        });
+
+        await run('tags.update (write)', async () => {
+            const t = await client.tags.update(tagId, { color: '112233' });
+            return `color=${t.color}`;
+        });
+
+        await run('tags.delete (write)', async () => {
+            await client.tags.delete(tagId, { force: true });
+            return 'deleted';
         });
 
         await run('signers.findByEmail', async () => {

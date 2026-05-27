@@ -53,13 +53,19 @@ export interface AssinafyClientOptions {
     logger?: Logger;
 }
 
-/** Payload for creating a signer. */
+/**
+ * Payload for creating a signer.
+ *
+ * `email` is optional: the API accepts a signer with only a
+ * `whatsapp_phone_number`. At least one of the two must be supplied.
+ */
 export interface ICreateSignerPayload {
     full_name: string;
-    email: string;
+    email?: string;
     whatsapp_phone_number?: string;
     /** PHP SDK compatibility alias for `whatsapp_phone_number`. */
     phone?: string;
+    /** Brazilian tax ID (CPF). Non-digits are stripped before sending. */
     cpf?: string;
     metadata?: Record<string, unknown>;
 }
@@ -71,6 +77,7 @@ export interface IUpdateSignerPayload {
     whatsapp_phone_number?: string;
     /** PHP SDK compatibility alias for `whatsapp_phone_number`. */
     phone?: string;
+    /** Brazilian tax ID (CPF). Non-digits are stripped before sending. */
     cpf?: string;
 }
 
@@ -79,7 +86,7 @@ export interface ISigner {
     resource?: string;
     id: string;
     full_name: string;
-    email: string;
+    email: string | null;
     whatsapp_phone_number?: string | null;
     cpf?: string | null;
     has_accepted_terms?: boolean;
@@ -119,6 +126,14 @@ export type SignerReference =
           signer_id?: string;
           verification_method?: AssignmentVerificationMethod;
           notification_methods?: AssignmentNotificationMethod[];
+          /**
+           * Positive integer controlling signing order. Signers sharing a step
+           * sign in parallel; a step is activated (and its signers notified)
+           * only after every signer in the previous step has signed. If supplied
+           * for one signer it must be supplied for all, forming a contiguous
+           * sequence starting at 1.
+           */
+          step?: number;
       };
 
 /** Payload for creating an assignment. */
@@ -218,12 +233,24 @@ export interface IDocumentListItem {
     status: DocumentStatus;
     account_id?: string;
     template_id?: string | null;
+    /** Tags attached to the document (inline `{ id, name, color }` shape). */
+    tags?: IInlineTag[];
     created_at: string;
     updated_at?: string;
     is_closed?: boolean;
 }
 
 export type IDocumentListResponse = PaginatedResult<IDocumentListItem>;
+
+/** Query parameters accepted by `documents.list`. */
+export interface IDocumentListParams extends IListParams {
+    /** Filter by document status, e.g. `pending_signature`. */
+    status?: DocumentStatus | string;
+    /** Filter by signature method (`virtual` or `collect`). */
+    method?: AssignmentMethod;
+    /** Comma-separated list of tag IDs (AND semantics). */
+    tags?: string;
+}
 
 /** Document upload response. */
 export interface IDocumentUploadResponse {
@@ -239,6 +266,7 @@ export interface IDocumentUploadResponse {
         certificated?: string;
         'certificate-page'?: string;
         bundle?: string;
+        thumbnail?: string;
     };
     pages: Array<{
         id: string;
@@ -247,6 +275,8 @@ export interface IDocumentUploadResponse {
         width: number;
         download_url: string;
     }>;
+    /** Tags attached to the document (inline `{ id, name, color }` shape). */
+    tags?: IInlineTag[];
     created_at: string;
     updated_at: string;
     is_closed: boolean;
@@ -270,12 +300,16 @@ export interface IDocumentDetailsResponse {
         certificated?: string;
         'certificate-page'?: string;
         bundle?: string;
+        thumbnail?: string;
     };
     pages: unknown[];
+    /** Tags attached to the document (inline `{ id, name, color }` shape). */
+    tags?: IInlineTag[];
     created_at: string;
     updated_at: string;
     is_closed: boolean;
     decline_reason?: string;
+    declined_by?: ISigner | null;
     activities?: Array<IDocumentActivity>;
 }
 
@@ -283,7 +317,10 @@ export interface IDocumentActivity {
     id: number;
     event: string;
     message: string;
-    origin: string;
+    /** Event-specific payload snapshot. Object for most events, occasionally `[]`. */
+    payload?: Record<string, unknown> | unknown[];
+    /** Request origin (`ip` / `user-agent`) when available; `null` for system events. */
+    origin: { ip?: string; 'user-agent'?: string } | string | null;
     created_at: string;
 }
 
@@ -390,10 +427,11 @@ export interface IUploadAndRequestSignaturesResult {
 /** Input for a signer in `uploadAndRequestSignatures`. */
 export interface IUploadAndRequestSignaturesSigner {
     name: string;
-    email: string;
+    email?: string;
     whatsapp_phone_number?: string;
     /** PHP SDK compatibility alias for `whatsapp_phone_number`. */
     phone?: string;
+    /** Brazilian tax ID (CPF). Non-digits are stripped before sending. */
     cpf?: string;
     metadata?: Record<string, unknown>;
 }
@@ -407,10 +445,16 @@ export interface ITemplateRole {
 
 /** Template list item (paginated). */
 export interface ITemplateListItem {
+    resource?: string;
     id: string;
     name: string;
+    document_name?: string | null;
+    message?: string | null;
     status: string;
     account_id?: string;
+    roles?: ITemplateRole[];
+    /** Tags attached to the template itself (inline `{ id, name }` shape). */
+    tags?: IInlineTag[];
     created_at: string;
     updated_at?: string;
 }
@@ -419,11 +463,19 @@ export type ITemplateListResponse = PaginatedResult<ITemplateListItem>;
 
 /** Full template details. */
 export interface ITemplateDetailsResponse {
+    resource?: string;
     id: string;
     name: string;
+    document_name?: string | null;
+    message?: string | null;
     status: string;
     account_id?: string;
+    pages?: unknown[];
     roles?: ITemplateRole[];
+    /** Tags attached to the template itself. */
+    tags?: IInlineTag[];
+    /** Tags auto-applied to every document created from this template. */
+    default_document_tags?: IInlineTag[];
     created_at: string;
     updated_at?: string;
     [key: string]: unknown;
@@ -435,6 +487,8 @@ export interface ITemplateSigner {
     id: string;
     verification_method?: string;
     notification_methods?: string[];
+    /** Positive integer controlling signing order (see {@link SignerReference}). */
+    step?: number;
 }
 
 /** Options for creating a document from a template. */
@@ -443,6 +497,11 @@ export interface ICreateDocumentFromTemplateOptions {
     message?: string;
     expires_at?: string;
     editor_fields?: unknown[];
+    /**
+     * Tag names to attach to the new document. Names that don't exist yet are
+     * auto-created; the template's default-document-tags are always merged in.
+     */
+    tags?: string[];
 }
 
 /**
@@ -570,4 +629,38 @@ export interface ISignFieldEntry {
     fieldId: string;
     pageId: string;
     value: string;
+}
+
+/**
+ * Workspace tag object. Tag names are unique per workspace (case-insensitive)
+ * and `color` is an optional 6-char hex string (without the leading `#`).
+ */
+export interface ITag {
+    resource?: string;
+    id: string;
+    name: string;
+    color: string | null;
+    created_at: string;
+    updated_at: string;
+}
+
+/** Inline tag shape embedded inside documents/templates (`{ id, name, color? }`). */
+export interface IInlineTag {
+    id: string;
+    name: string;
+    color?: string | null;
+}
+
+/** Payload for `POST /accounts/{id}/tags`. */
+export interface ICreateTagPayload {
+    name: string;
+    /** 6-char hex color, with or without a leading `#`. Omit/`null` for none. */
+    color?: string | null;
+}
+
+/** Payload for `PUT /accounts/{id}/tags/{id}`. Omit a field to leave it unchanged. */
+export interface IUpdateTagPayload {
+    name?: string;
+    /** Pass `null` to clear the color; omit to leave unchanged. */
+    color?: string | null;
 }

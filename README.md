@@ -2,7 +2,7 @@
 
 TypeScript SDK for the [Assinafy API](https://api.assinafy.com.br/v1/docs) — a Brazilian digital signature platform.
 
-Provides 100% endpoint coverage of the public API: documents, signers, assignments, templates, workspaces, webhooks, field definitions, authentication, public/signer-side flows, and the high-level `uploadAndRequestSignatures` helper.
+Provides 100% endpoint coverage of the public API: documents, signers, assignments, templates, tags, workspaces, webhooks, field definitions, authentication, public/signer-side flows, and the high-level `uploadAndRequestSignatures` helper.
 
 ## Requirements
 
@@ -90,10 +90,11 @@ Every public endpoint documented in https://api.assinafy.com.br/v1/docs is cover
 
 | Resource              | Endpoints                                                                                                                                                                                                                                          |
 | --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `client.documents`    | list, upload, details, activities, waitUntilReady, download, thumbnail, downloadPage, statuses, delete, verify, createFromTemplate, estimateCostFromTemplate, **getPublic**, **sendToken**, isFullySigned, getSigningProgress                       |
+| `client.documents`    | list, upload, details, activities, waitUntilReady, download, thumbnail, downloadPage, statuses, delete, verify, createFromTemplate, estimateCostFromTemplate, **getPublic**, **sendToken**, **listTags**, **replaceTags**, **addTags**, **detachTag**, isFullySigned, getSigningProgress |
 | `client.signers`      | create, get, list, update, delete, findByEmail                                                                                                                                                                                                     |
 | `client.assignments`  | create, estimateCost, resetExpiration, resendNotification, estimateResendCost, listWhatsAppNotifications, cancel                                                                                                                                   |
 | `client.templates`    | list, get, downloadPage                                                                                                                                                                                                                            |
+| `client.tags`         | list, create, update, delete                                                                                                                                                                                                                       |
 | `client.workspaces`   | create, list, get, update, delete                                                                                                                                                                                                                  |
 | `client.webhooks`     | register, get, inactivate, delete, listEventTypes, listDispatches, retryDispatch                                                                                                                                                                   |
 | `client.fields`       | create, list, get, update, delete, validate, validateMultiple, listTypes                                                                                                                                                                           |
@@ -137,6 +138,12 @@ await client.documents.verify('FE32EDDADE7CBDDCBB934E7402047450B0E59C02');
 // Public endpoints (no auth)
 await client.documents.getPublic(doc.id);
 await client.documents.sendToken(doc.id, 'jane@example.com', 'email');
+
+// Tags attached to a document (by tag name; unknown names are auto-created)
+await client.documents.listTags(doc.id);
+await client.documents.replaceTags(doc.id, ['Contracts', '2026-Q1']); // [] detaches all
+await client.documents.addTags(doc.id, ['Urgent']);                   // append, idempotent
+await client.documents.detachTag(doc.id, tagId);                      // remove one
 ```
 
 Uploads are validated locally: only `.pdf` files up to 25 MB are accepted (the API's current hard limit).
@@ -151,6 +158,12 @@ await client.signers.create({
   email: 'john@example.com',
   whatsapp_phone_number: '+5548999990000',
   cpf: '123.456.789-00', // optional Brazilian tax ID — non-digits are stripped automatically
+});
+
+// `email` is optional — a WhatsApp-only signer is valid (at least one is required)
+await client.signers.create({
+  full_name: 'WhatsApp Only',
+  whatsapp_phone_number: '+5548999990000',
 });
 
 // PHP SDK compatibility aliases are also accepted
@@ -168,7 +181,7 @@ await client.signers.delete(signerId);
 const existing = await client.signers.findByEmail('john@example.com');
 ```
 
-`signers.create()` is idempotent by email, matching the PHP SDK behavior: it reuses an existing signer when the same email is already present in the workspace.
+When an `email` is supplied, `signers.create()` is idempotent by email, matching the PHP SDK behavior: it reuses an existing signer when the same email is already present in the workspace. WhatsApp-only signers (no email) are always created fresh.
 
 ### Assignments
 
@@ -182,6 +195,15 @@ await client.assignments.create(documentId, {
   copy_receivers: ['observer-id'],
 });
 
+// Sequential signing: `step` controls signing order (parallel within a step).
+await client.assignments.create(documentId, {
+  method: 'virtual',
+  signers: [
+    { id: 'signer-1', step: 1 },
+    { id: 'signer-2', step: 2 }, // notified only after step 1 finishes
+  ],
+});
+
 // Estimate cost (signers may omit `id` when only the channel matters)
 await client.assignments.estimateCost(documentId, { signers: ['signer-1'] });
 await client.assignments.estimateCost(documentId, {
@@ -189,6 +211,7 @@ await client.assignments.estimateCost(documentId, {
 });
 
 await client.assignments.resetExpiration(documentId, assignmentId, '2025-06-30T00:00:00Z');
+await client.assignments.resetExpiration(documentId, assignmentId, null); // remove expiration
 await client.assignments.resendNotification(documentId, assignmentId, signerId);
 await client.assignments.estimateResendCost(documentId, assignmentId, signerId);
 await client.assignments.listWhatsAppNotifications(documentId, assignmentId);
@@ -214,6 +237,21 @@ await client.documents.createFromTemplate(
 // Estimate the cost before creating
 await client.documents.estimateCostFromTemplate(templateId, [{ role_id: 'role_id', id: signerId }]);
 ```
+
+### Tags
+
+Workspace-scoped labels that can be attached to documents and templates. Tag names are unique per workspace (case-insensitive).
+
+```ts
+await client.tags.list({ search: 'contract' });          // ITag[]
+const tag = await client.tags.create({ name: 'Contracts', color: 'ff8800' });
+await client.tags.update(tag.id, { name: 'Sales Contracts' });
+await client.tags.update(tag.id, { color: null });        // clear the color
+await client.tags.delete(tag.id);                         // 409 if still attached
+await client.tags.delete(tag.id, { force: true });        // detach everywhere, then delete
+```
+
+Attach/detach tags on a specific document via `client.documents.listTags / replaceTags / addTags / detachTag` (see [Documents](#documents)).
 
 ### Workspaces
 

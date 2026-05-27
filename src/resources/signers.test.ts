@@ -39,6 +39,50 @@ describe('SignerResource', () => {
         ).rejects.toThrow(ValidationError);
     });
 
+    test('rejects when neither email nor whatsapp number is provided', async () => {
+        await expect(signerResource.create({ full_name: 'Test' })).rejects.toThrow(ValidationError);
+    });
+
+    test('creates a whatsapp-only signer without an email lookup', async () => {
+        let getCalled = false;
+        let body: unknown;
+        const trackingAxios = {
+            ...mockAxios,
+            get: async () => {
+                getCalled = true;
+                return { status: 200, data: { status: 200, data: [] }, headers: {} };
+            },
+            post: async (_url: string, b: unknown) => {
+                body = b;
+                return { status: 200, data: { status: 200, data: { id: 'wa1' } } };
+            },
+        } as unknown as AxiosInstance;
+        const resource = new SignerResource(trackingAxios, 'acc');
+        const result = await resource.create({
+            full_name: 'WhatsApp Only',
+            whatsapp_phone_number: '+5548999990000',
+        });
+        expect(result.id).toBe('wa1');
+        // No email → no findByEmail dedup lookup.
+        expect(getCalled).toBe(false);
+        expect(body).toEqual({ full_name: 'WhatsApp Only', whatsapp_phone_number: '+5548999990000' });
+    });
+
+    test('strips non-digits from cpf before sending', async () => {
+        let body: unknown;
+        const trackingAxios = {
+            ...mockAxios,
+            get: async () => ({ status: 200, data: { status: 200, data: [] }, headers: {} }),
+            post: async (_url: string, b: unknown) => {
+                body = b;
+                return { status: 200, data: { status: 200, data: { id: '123' } } };
+            },
+        } as unknown as AxiosInstance;
+        const resource = new SignerResource(trackingAxios, 'acc');
+        await resource.create({ full_name: 'John', email: 'john@example.com', cpf: '390.533.447-05' });
+        expect((body as Record<string, unknown>)['cpf']).toBe('39053344705');
+    });
+
     test('uses custom accountId when provided', async () => {
         let capturedUrl = '';
         const trackingAxios = {

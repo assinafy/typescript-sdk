@@ -5,6 +5,50 @@ All notable changes to `@assinafy/sdk` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] - 2026-05-27
+
+Full file-by-file audit against [the live API docs](https://api.assinafy.com.br/v1/docs),
+re-validated end-to-end against the live API. Closes the last coverage gap (Tags)
+and fixes signer-creation and type accuracy.
+
+### Added
+
+- **`TagResource`** (new — `client.tags`): `list` (with `search`), `create`,
+  `update` (rename / recolor, `color: null` clears), and `delete`
+  (`{ force: true }` detaches everywhere first). Covers
+  `GET/POST/PUT/DELETE /accounts/{id}/tags`.
+- **`DocumentResource` tag methods**: `listTags`, `replaceTags`, `addTags`,
+  `detachTag` — the `GET/PUT/POST /accounts/{id}/documents/{id}/tags` and
+  `DELETE /accounts/{id}/documents/{id}/tags/{tag_id}` endpoints.
+- **Sequential signing**: `step` is now accepted on assignment signer objects
+  (`assignments.create` / `estimateCost`) and on template signers
+  (`documents.createFromTemplate`).
+- `documents.createFromTemplate` options now accept `tags` (tag names attached
+  to the created document).
+- New types: `ITag`, `IInlineTag`, `ICreateTagPayload`, `IUpdateTagPayload`, and
+  `IDocumentListParams` (typed `status` / `method` / `tags` filters).
+
+### Changed
+
+- **Signer `email` is now optional.** The API accepts WhatsApp-only signers, so
+  `signers.create` requires *at least one* of `email` / `whatsapp_phone_number`
+  (or the `phone` alias). The idempotent-by-email reuse only runs when an email
+  is supplied; WhatsApp-only signers are always created fresh. `ISigner.email`
+  is now `string | null`.
+- `assignments.resetExpiration` accepts `string | null` — passing `null` clears
+  the expiration (previously the value was silently dropped).
+- Document/template types now expose the `tags` (and template
+  `default_document_tags`) arrays returned by the API; `IDocumentActivity.origin`
+  is typed as the `{ ip, user-agent }` object the API actually returns, with the
+  event `payload` snapshot added.
+
+### Tests
+
+86 unit tests pass (`bun test`). New `tags` and `documents` suites cover Tag CRUD
+and document-tag attach/detach; new signer tests cover WhatsApp-only creation and
+CPF normalisation. All read and write paths re-verified against the live API
+(`scripts/live-smoke.ts --write`).
+
 ## [1.3.0] - 2026-05-12
 
 100% endpoint coverage of [the live API docs](https://api.assinafy.com.br/v1/docs).

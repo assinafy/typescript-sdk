@@ -15,6 +15,7 @@ import { WorkspaceResource } from './resources/workspaces';
 import { AssignmentResource } from './resources/assignments';
 import { WebhookResource } from './resources/webhooks';
 import { TemplateResource } from './resources/templates';
+import { TagResource } from './resources/tags';
 import { AuthenticationResource } from './resources/authentication';
 import { FieldsResource } from './resources/fields';
 import { SignerDocumentsResource } from './resources/signer-documents';
@@ -65,6 +66,7 @@ export class AssinafyClient {
     public readonly assignments: AssignmentResource;
     public readonly webhooks: WebhookResource;
     public readonly templates: TemplateResource;
+    public readonly tags: TagResource;
     public readonly auth: AuthenticationResource;
     public readonly fields: FieldsResource;
     public readonly signerDocuments: SignerDocumentsResource;
@@ -109,6 +111,7 @@ export class AssinafyClient {
         );
         this.webhooks = new WebhookResource(this.axiosInstance, this.defaultAccountId, this.logger);
         this.templates = new TemplateResource(this.axiosInstance, this.defaultAccountId, this.logger);
+        this.tags = new TagResource(this.axiosInstance, this.defaultAccountId, this.logger);
         this.auth = new AuthenticationResource(this.axiosInstance, undefined, this.logger);
         this.fields = new FieldsResource(this.axiosInstance, this.defaultAccountId, this.logger);
         this.signerDocuments = new SignerDocumentsResource(
@@ -180,10 +183,10 @@ export class AssinafyClient {
 
         const signerIds: string[] = [];
         for (const signer of options.signers) {
-            const payload: ICreateSignerPayload = {
-                full_name: signer.name,
-                email: signer.email,
-            };
+            const payload: ICreateSignerPayload = { full_name: signer.name };
+            if (signer.email !== undefined) {
+                payload.email = signer.email;
+            }
             const phone = signer.whatsapp_phone_number ?? signer.phone;
             if (phone !== undefined) {
                 payload.whatsapp_phone_number = phone;

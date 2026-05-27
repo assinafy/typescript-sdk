@@ -13,14 +13,30 @@ import { BaseResource } from './base';
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export class SignerResource extends BaseResource {
-    /** Create a signer in the workspace. */
+    /**
+     * Create a signer in the workspace.
+     *
+     * `email` is optional — the API also accepts whatsapp-only signers — but at
+     * least one of `email` / `whatsapp_phone_number` (or the `phone` alias) is
+     * required. When an `email` is supplied the call is idempotent by email:
+     * an existing signer with that address is reused instead of duplicated.
+     */
     async create(payload: ICreateSignerPayload, accountId?: string): Promise<ICreateSignerResponse> {
-        this.assertEmail(payload.email);
         const id = this.accountId(accountId);
-        const existing = await this.findByEmail(payload.email, id);
-        if (existing) {
-            this.logger.info('Using existing signer', { email: payload.email });
-            return existing;
+        const phone = payload.whatsapp_phone_number ?? payload.phone;
+        if (!payload.email && !phone) {
+            throw new ValidationError(
+                'A signer requires at least an email or a whatsapp_phone_number',
+            );
+        }
+        if (payload.email) this.assertEmail(payload.email);
+
+        if (payload.email) {
+            const existing = await this.findByEmail(payload.email, id);
+            if (existing) {
+                this.logger.info('Using existing signer', { email: payload.email });
+                return existing;
+            }
         }
 
         this.logger.info('Creating signer', { email: payload.email });
@@ -29,7 +45,7 @@ export class SignerResource extends BaseResource {
                 this.http.post(`/accounts/${id}/signers`, normaliseSignerPayload(payload)),
             );
         } catch (err) {
-            if (err instanceof ApiError && err.statusCode === 409) {
+            if (err instanceof ApiError && err.statusCode === 409 && payload.email) {
                 const duplicate = await this.findByEmail(payload.email, id);
                 if (duplicate) {
                     this.logger.info('Signer already exists, using existing signer', {
@@ -104,7 +120,7 @@ export class SignerResource extends BaseResource {
 }
 
 function normaliseSignerPayload(
-    payload: (ICreateSignerPayload | IUpdateSignerPayload) & { phone?: string; cpf?: string },
+    payload: ICreateSignerPayload | IUpdateSignerPayload,
 ): Record<string, unknown> {
     const normalised: Record<string, unknown> = {
         full_name: payload.full_name,
@@ -116,7 +132,7 @@ function normaliseSignerPayload(
         normalised['cpf'] = payload.cpf.replace(/\D/g, '');
     }
 
-    if ('metadata' in payload) {
+    if ('metadata' in payload && payload.metadata !== undefined) {
         normalised['metadata'] = payload.metadata;
     }
 

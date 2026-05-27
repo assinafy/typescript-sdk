@@ -7,12 +7,13 @@ import type {
     IDocumentActivity,
     IDocumentDetailsResponse,
     IDocumentListItem,
+    IDocumentListParams,
     IDocumentListResponse,
     IDocumentStatusInfo,
     IDocumentUploadResponse,
-    IListParams,
     IPublicDocumentInfo,
     ISigningProgress,
+    ITag,
     ITemplateSigner,
     SendTokenChannel,
 } from '../types';
@@ -84,8 +85,11 @@ export class DocumentResource extends BaseResource {
         return document;
     }
 
-    /** List workspace documents. Pagination info (if any) is attached in `meta`. */
-    async list(params: IListParams = {}, accountId?: string): Promise<IDocumentListResponse> {
+    /**
+     * List workspace documents. Pagination info (if any) is attached in `meta`.
+     * Supports `status`, `method`, `tags`, `search`, `sort`, `page`, `per_page`.
+     */
+    async list(params: IDocumentListParams = {}, accountId?: string): Promise<IDocumentListResponse> {
         const id = this.accountId(accountId);
         return this.callList<IDocumentListItem>('Failed to list documents', () =>
             this.http.get(`/accounts/${id}/documents`, { params: cleanParams(params) }),
@@ -190,6 +194,50 @@ export class DocumentResource extends BaseResource {
     async delete(documentId: string): Promise<void> {
         const id = this.requireId(documentId, 'Document ID');
         return this.callVoid('Failed to delete document', () => this.http.delete(`/documents/${id}`));
+    }
+
+    /** List the tags attached to a document. */
+    async listTags(documentId: string, accountId?: string): Promise<ITag[]> {
+        const accId = this.accountId(accountId);
+        const docId = this.requireId(documentId, 'Document ID');
+        return this.call('Failed to list document tags', () =>
+            this.http.get(`/accounts/${accId}/documents/${docId}/tags`),
+        );
+    }
+
+    /**
+     * Replace the document's tag set with `tags` (an array of tag names).
+     * Unknown names are auto-created; an empty array detaches all tags.
+     */
+    async replaceTags(documentId: string, tags: string[], accountId?: string): Promise<ITag[]> {
+        const accId = this.accountId(accountId);
+        const docId = this.requireId(documentId, 'Document ID');
+        if (!Array.isArray(tags)) throw new ValidationError('tags must be an array of tag names');
+        return this.call('Failed to replace document tags', () =>
+            this.http.put(`/accounts/${accId}/documents/${docId}/tags`, { tags }),
+        );
+    }
+
+    /** Attach additional tags (by name) without removing existing ones. Idempotent. */
+    async addTags(documentId: string, tags: string[], accountId?: string): Promise<ITag[]> {
+        const accId = this.accountId(accountId);
+        const docId = this.requireId(documentId, 'Document ID');
+        if (!Array.isArray(tags) || tags.length === 0) {
+            throw new ValidationError('tags must be a non-empty array of tag names');
+        }
+        return this.call('Failed to add document tags', () =>
+            this.http.post(`/accounts/${accId}/documents/${docId}/tags`, { tags }),
+        );
+    }
+
+    /** Detach a single tag from a document (the tag itself is not deleted). */
+    async detachTag(documentId: string, tagId: string, accountId?: string): Promise<void> {
+        const accId = this.accountId(accountId);
+        const docId = this.requireId(documentId, 'Document ID');
+        const tid = this.requireId(tagId, 'Tag ID');
+        return this.callVoid('Failed to detach document tag', () =>
+            this.http.delete(`/accounts/${accId}/documents/${docId}/tags/${tid}`),
+        );
     }
 
     /**

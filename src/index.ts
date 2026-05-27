@@ -9,6 +9,7 @@ export { WorkspaceResource } from './resources/workspaces';
 export { AssignmentResource, buildAssignmentPayload } from './resources/assignments';
 export { WebhookResource } from './resources/webhooks';
 export { TemplateResource } from './resources/templates';
+export { TagResource } from './resources/tags';
 export { AuthenticationResource } from './resources/authentication';
 export { FieldsResource } from './resources/fields';
 export { SignerDocumentsResource } from './resources/signer-documents';

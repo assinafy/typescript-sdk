@@ -47,7 +47,7 @@ function extractSignerRefs(payload: ICreateAssignmentPayload): SignerReference[]
 function normaliseSignerRef(
     ref: SignerReference,
     options: { allowSignersWithoutId?: boolean },
-): { id?: string; verification_method?: string; notification_methods?: string[] } {
+): { id?: string; verification_method?: string; notification_methods?: string[]; step?: number } {
     if (typeof ref === 'string') {
         if (!ref) throw new ValidationError('Signer ID cannot be empty');
         return { id: ref };
@@ -58,12 +58,14 @@ function normaliseSignerRef(
             signer_id?: string;
             verification_method?: string;
             notification_methods?: string[];
+            step?: number;
         };
         const id = input.id ?? input.signer_id;
         const normalised = cleanParams({
             id,
             verification_method: input.verification_method,
             notification_methods: input.notification_methods,
+            step: input.step,
         });
 
         if (typeof id === 'string' && id.length > 0) {
@@ -113,19 +115,22 @@ export class AssignmentResource extends BaseResource {
         );
     }
 
-    /** Update the expiration date of an existing assignment. */
+    /**
+     * Update the expiration date of an existing assignment.
+     * Pass `null` to remove the expiration entirely.
+     */
     async resetExpiration(
         documentId: string,
         assignmentId: string,
-        expiresAt: string,
+        expiresAt: string | null,
     ): Promise<IAssignment> {
         const docId = this.requireId(documentId, 'Document ID');
         const asgId = this.requireId(assignmentId, 'Assignment ID');
+        // `null` is meaningful here ("no expiration"), so don't strip it.
         return this.call('Failed to update assignment expiration', () =>
-            this.http.put(
-                `/documents/${docId}/assignments/${asgId}/reset-expiration`,
-                cleanParams({ expires_at: expiresAt }),
-            ),
+            this.http.put(`/documents/${docId}/assignments/${asgId}/reset-expiration`, {
+                expires_at: expiresAt,
+            }),
         );
     }
 

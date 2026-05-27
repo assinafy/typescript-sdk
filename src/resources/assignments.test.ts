@@ -27,6 +27,19 @@ describe('buildAssignmentPayload', () => {
         expect(body['signers']).toEqual([{ id: 'a' }, { id: 'b' }]);
     });
 
+    test('forwards the sequential-signing step on signer objects', () => {
+        const body = buildAssignmentPayload({
+            signers: [
+                { id: 'a', step: 1 },
+                { id: 'b', verification_method: 'Whatsapp', notification_methods: ['Whatsapp'], step: 2 },
+            ],
+        });
+        expect(body['signers']).toEqual([
+            { id: 'a', step: 1 },
+            { id: 'b', verification_method: 'Whatsapp', notification_methods: ['Whatsapp'], step: 2 },
+        ]);
+    });
+
     test('allows estimation payloads without signer ids when methods are supplied', () => {
         const body = buildAssignmentPayload(
             {
