@@ -1,8 +1,7 @@
-import { promises as fs } from 'node:fs';
-import path from 'node:path';
 import type {
     DocumentArtifactName,
     DocumentStatus,
+    ICostEstimate,
     ICreateDocumentFromTemplateOptions,
     IDocumentActivity,
     IDocumentDetailsResponse,
@@ -20,8 +19,10 @@ import type {
 import { ValidationError } from '../errors';
 import { cleanParams } from '../utils';
 import { BaseResource } from './base';
+import { buildUploadForm, loadSource, validateUpload } from './upload';
+import type { DocumentUploadSource } from './upload';
 
-const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
+export type { DocumentUploadSource } from './upload';
 
 const READY_STATUSES: ReadonlySet<DocumentStatus | string> = new Set([
     'metadata_ready',
@@ -35,11 +36,6 @@ const FAILED_STATUSES: ReadonlySet<DocumentStatus | string> = new Set([
     'rejected_by_user',
     'expired',
 ]);
-
-/** Input for uploading a document: either an on-disk file or an in-memory buffer. */
-export type DocumentUploadSource =
-    | { filePath: string; fileName?: string }
-    | { buffer: Buffer; fileName: string };
 
 export interface IDocumentUploadOptions {
     /** Optional metadata sent alongside the file (JSON-encoded). */
@@ -66,7 +62,9 @@ export class DocumentResource extends BaseResource {
         validateUpload(buffer, fileName);
 
         const accountId = this.accountId(options.accountId);
-        const form = buildUploadForm(buffer, fileName, options.metadata);
+        const formOptions: { metadata?: Record<string, unknown> } = {};
+        if (options.metadata !== undefined) formOptions.metadata = options.metadata;
+        const form = buildUploadForm(buffer, fileName, formOptions);
 
         this.logger.info('Uploading document', { fileName, size: buffer.byteLength });
 
@@ -265,12 +263,17 @@ export class DocumentResource extends BaseResource {
         );
     }
 
-    /** Estimate the credit cost of creating a document from a template. */
+    /**
+     * Estimate the credit cost of creating a document from a template.
+     *
+     * @returns an {@link ICostEstimate}: `total_credits`, balances, and a
+     * per-line `breakdown` of what the operation would consume.
+     */
     async estimateCostFromTemplate(
         templateId: string,
         signers: ITemplateSigner[],
         accountId?: string,
-    ): Promise<Record<string, unknown>> {
+    ): Promise<ICostEstimate> {
         const tmplId = this.requireId(templateId, 'Template ID');
         const accId = this.accountId(accountId);
         return this.call('Failed to estimate cost from template', () =>
@@ -343,51 +346,6 @@ export class DocumentResource extends BaseResource {
         const percentage = total > 0 ? Math.round((signed / total) * 10_000) / 100 : 0;
         return { signed, total, pending, percentage };
     }
-}
-
-async function loadSource(source: DocumentUploadSource): Promise<{ buffer: Buffer; fileName: string }> {
-    if ('buffer' in source) {
-        if (!source.fileName) {
-            throw new ValidationError('fileName is required when uploading a Buffer');
-        }
-        return { buffer: source.buffer, fileName: source.fileName };
-    }
-    if (!source.filePath) {
-        throw new ValidationError('filePath is required');
-    }
-    const buffer = await fs.readFile(source.filePath);
-    return { buffer, fileName: source.fileName ?? path.basename(source.filePath) };
-}
-
-function validateUpload(buffer: Buffer, fileName: string): void {
-    if (!buffer || buffer.byteLength === 0) {
-        throw new ValidationError('File buffer is empty', { fileName });
-    }
-    if (!fileName.toLowerCase().endsWith('.pdf')) {
-        throw new ValidationError('Only PDF files are supported', { fileName });
-    }
-    if (buffer.byteLength > MAX_UPLOAD_BYTES) {
-        throw new ValidationError('File size exceeds maximum allowed (25MB)', {
-            fileSize: buffer.byteLength,
-            maxSize: MAX_UPLOAD_BYTES,
-        });
-    }
-}
-
-function buildUploadForm(
-    buffer: Buffer,
-    fileName: string,
-    metadata: Record<string, unknown> | undefined,
-): FormData {
-    const form = new FormData();
-    // Blob copy-free view over the Buffer's underlying ArrayBuffer slice.
-    const view = new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
-    form.append('file', new Blob([view], { type: 'application/pdf' }), fileName);
-    form.append('name', fileName);
-    if (metadata) {
-        form.append('metadata', JSON.stringify(metadata));
-    }
-    return form;
 }
 
 function sleep(ms: number): Promise<void> {

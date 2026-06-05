@@ -1,7 +1,9 @@
 import type {
     IAssignment,
+    ICostEstimate,
     ICreateAssignmentPayload,
     ICreateAssignmentResponse,
+    IResendCostEstimate,
     IResendEmailResponse,
     IWhatsAppNotification,
     SignerReference,
@@ -101,11 +103,19 @@ export class AssignmentResource extends BaseResource {
         );
     }
 
-    /** Estimate the cost (in credits) of creating the assignment. */
+    /**
+     * Estimate the cost (in credits/documents) of creating the assignment.
+     *
+     * Signer entries may omit `id` and supply only `verification_method` /
+     * `notification_methods` when only the channel mix matters for the estimate.
+     *
+     * @returns an {@link ICostEstimate} with `total_credits`, balances, and a
+     * line-item `breakdown`.
+     */
     async estimateCost(
         documentId: string,
         payload: ICreateAssignmentPayload,
-    ): Promise<Record<string, unknown>> {
+    ): Promise<ICostEstimate> {
         const docId = this.requireId(documentId, 'Document ID');
         return this.call('Failed to estimate assignment cost', () =>
             this.http.post(
@@ -148,12 +158,16 @@ export class AssignmentResource extends BaseResource {
         );
     }
 
-    /** Estimate the cost of resending a signer notification. */
+    /**
+     * Estimate the cost of resending a signer notification.
+     *
+     * @returns an {@link IResendCostEstimate} (`total`, `breakdown`, balances).
+     */
     async estimateResendCost(
         documentId: string,
         assignmentId: string,
         signerId: string,
-    ): Promise<Record<string, unknown>> {
+    ): Promise<IResendCostEstimate> {
         const docId = this.requireId(documentId, 'Document ID');
         const asgId = this.requireId(assignmentId, 'Assignment ID');
         const sid = this.requireId(signerId, 'Signer ID');
@@ -176,22 +190,6 @@ export class AssignmentResource extends BaseResource {
         const asgId = this.requireId(assignmentId, 'Assignment ID');
         return this.call('Failed to list WhatsApp notifications', () =>
             this.http.get(`/documents/${docId}/assignments/${asgId}/whatsapp-notifications`),
-        );
-    }
-
-    /**
-     * Cancel a signature request. This endpoint is not listed in the public
-     * Swagger but is exposed by the platform.
-     */
-    async cancel(documentId: string, reason: string, accountId?: string): Promise<unknown> {
-        const docId = this.requireId(documentId, 'Document ID');
-        const accId = this.accountId(accountId);
-        this.logger.info('Cancelling signature request', { documentId: docId, reason });
-        return this.call('Failed to cancel signature request', () =>
-            this.http.post(
-                `/accounts/${accId}/signature-requests/${docId}/cancel`,
-                { document_id: docId, reason },
-            ),
         );
     }
 }

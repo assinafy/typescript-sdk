@@ -14,6 +14,7 @@ import { AssinafyClient } from '../src';
 
 const apiKey = process.env.ASSINAFY_API_KEY;
 const accountId = process.env.ASSINAFY_ACCOUNT_ID;
+const baseUrl = process.env.ASSINAFY_BASE_URL; // e.g. https://sandbox.assinafy.com.br/v1
 if (!apiKey || !accountId) {
     throw new Error('Set ASSINAFY_API_KEY and ASSINAFY_ACCOUNT_ID.');
 }
@@ -21,7 +22,7 @@ if (!apiKey || !accountId) {
 const writeMode = process.argv.includes('--write');
 const uploadMode = process.argv.includes('--upload');
 
-const client = new AssinafyClient({ apiKey, accountId });
+const client = new AssinafyClient(baseUrl ? { apiKey, accountId, baseUrl } : { apiKey, accountId });
 
 const results: Array<{ section: string; ok: boolean; note: string }> = [];
 
@@ -202,6 +203,36 @@ async function main(): Promise<void> {
 
         await run('documents.delete', async () => {
             await client.documents.delete(documentId);
+            return 'deleted';
+        });
+
+        // Template lifecycle (create → get → update → downloadPage → delete)
+        let templateId = '';
+        await run('templates.create', async () => {
+            const t = await client.templates.create(
+                { buffer: buf, fileName: path.basename(pdfPath) },
+                { name: `smoke-tmpl-${Date.now()}` },
+            );
+            templateId = t.id;
+            return `created ${t.id} status=${t.status}`;
+        });
+
+        await run('templates.get (poll until Ready)', async () => {
+            let t = await client.templates.get(templateId);
+            for (let i = 0; i < 15 && t.status !== 'Ready'; i++) {
+                await new Promise((r) => setTimeout(r, 2_000));
+                t = await client.templates.get(templateId);
+            }
+            return `status=${t.status} pages=${t.pages?.length ?? 0}`;
+        });
+
+        await run('templates.update', async () => {
+            const t = await client.templates.update(templateId, { name: 'smoke-tmpl-renamed' });
+            return `name=${t.name}`;
+        });
+
+        await run('templates.delete', async () => {
+            await client.templates.delete(templateId);
             return 'deleted';
         });
     }

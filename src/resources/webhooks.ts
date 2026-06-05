@@ -11,7 +11,11 @@ import { ValidationError } from '../errors';
 import { cleanParams } from '../utils';
 import { BaseResource } from './base';
 
-const DEFAULT_EVENTS: WebhookEventType[] = [
+/**
+ * Default webhook events applied by {@link WebhookResource.register} when the
+ * caller omits `events` (or passes an empty array).
+ */
+export const DEFAULT_WEBHOOK_EVENTS: WebhookEventType[] = [
     'document_ready',
     'document_prepared',
     'signer_signed_document',
@@ -20,7 +24,21 @@ const DEFAULT_EVENTS: WebhookEventType[] = [
 ];
 
 export class WebhookResource extends BaseResource {
-    /** Register (or replace) the webhook subscription for the workspace. */
+    /**
+     * Register (or replace) the workspace's single webhook subscription
+     * (`PUT /accounts/{id}/webhooks/subscriptions`). There is exactly one
+     * subscription per workspace, keyed by URL.
+     *
+     * When `events` is omitted or empty, {@link DEFAULT_WEBHOOK_EVENTS} is used
+     * (`document_ready`, `document_prepared`, `signer_signed_document`,
+     * `signer_rejected_document`, `document_processing_failed`).
+     *
+     * @example
+     * ```ts
+     * await client.webhooks.register({ url: 'https://example.com/hook', email: 'ops@example.com' });
+     * // → { url, email, events: [...], is_active: true, updated_at: '2026-…' }
+     * ```
+     */
     async register(
         payload: IWebhookRegisterPayload,
         accountId?: string,
@@ -32,7 +50,10 @@ export class WebhookResource extends BaseResource {
         const body = {
             url: payload.url,
             email: payload.email,
-            events: payload.events && payload.events.length > 0 ? payload.events : DEFAULT_EVENTS,
+            events:
+                payload.events && payload.events.length > 0
+                    ? payload.events
+                    : DEFAULT_WEBHOOK_EVENTS,
             is_active: payload.is_active ?? true,
         };
 

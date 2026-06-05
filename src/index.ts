@@ -7,7 +7,7 @@ export type { DocumentUploadSource, IDocumentUploadOptions } from './resources/d
 export { SignerResource } from './resources/signers';
 export { WorkspaceResource } from './resources/workspaces';
 export { AssignmentResource, buildAssignmentPayload } from './resources/assignments';
-export { WebhookResource } from './resources/webhooks';
+export { WebhookResource, DEFAULT_WEBHOOK_EVENTS } from './resources/webhooks';
 export { TemplateResource } from './resources/templates';
 export { TagResource } from './resources/tags';
 export { AuthenticationResource } from './resources/authentication';

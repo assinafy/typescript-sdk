@@ -183,7 +183,12 @@ export class SignerDocumentsResource extends BaseResource {
         );
     }
 
-    /** `GET /sign?signer-access-code=…` — fetch the assignment as the signer sees it. */
+    /**
+     * `GET /sign?signer-access-code=…` — fetch the assignment as the signer sees it.
+     *
+     * @param hasAcceptedTerms maps to the `has_accepted_terms` query param
+     *   (server default `false`); pass `true` once the signer has accepted terms.
+     */
     async getAssignment(signerAccessCode: string, hasAcceptedTerms?: boolean): Promise<unknown> {
         const code = this.requireId(signerAccessCode, 'signer-access-code');
         return this.call('Failed to fetch signer assignment', () =>
@@ -218,8 +223,8 @@ export class SignerDocumentsResource extends BaseResource {
 
     /**
      * `PUT /documents/{documentId}/assignments/{assignmentId}/reject?signer-access-code=…`
-     * — signer-side decline. (Distinct from `assignments.cancel`, which is the
-     * workspace-side cancellation flow.)
+     * — signer-side decline. (The workspace-side equivalent is to delete the
+     * document via `documents.delete`; there is no workspace "cancel" endpoint.)
      */
     async decline(
         documentId: string,

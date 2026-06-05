@@ -1,6 +1,7 @@
 import { describe, test, expect } from 'bun:test';
+import axios from 'axios';
 import { AssinafyClient } from './client';
-import { ValidationError } from './errors';
+import { ApiError, ValidationError } from './errors';
 
 describe('AssinafyClient', () => {
     test('throws when no credentials are provided', () => {
@@ -55,5 +56,51 @@ describe('AssinafyClient', () => {
             baseUrl: 'https://sandbox.assinafy.com.br/v1/',
         });
         expect(client.getAxiosInstance().defaults.baseURL).toBe('https://sandbox.assinafy.com.br/v1');
+    });
+
+    test('retries an HTTP 429 then succeeds (honoring Retry-After)', async () => {
+        const client = new AssinafyClient({ apiKey: 'k', accountId: 'acc', maxRetries: 2 });
+        const ax = client.getAxiosInstance();
+        let calls = 0;
+        ax.defaults.adapter = async (config) => {
+            calls++;
+            if (calls === 1) {
+                throw new axios.AxiosError('Too Many Requests', 'ERR_BAD_RESPONSE', config, {}, {
+                    status: 429,
+                    statusText: 'Too Many Requests',
+                    headers: { 'retry-after': '0' },
+                    data: {},
+                    config,
+                });
+            }
+            return {
+                data: { status: 200, data: [{ id: 'd1' }] },
+                status: 200,
+                statusText: 'OK',
+                headers: {},
+                config,
+            };
+        };
+        const result = await client.documents.list();
+        expect(calls).toBe(2);
+        expect(result.data).toEqual([{ id: 'd1' }] as never);
+    });
+
+    test('gives up after maxRetries 429s and surfaces an ApiError', async () => {
+        const client = new AssinafyClient({ apiKey: 'k', accountId: 'acc', maxRetries: 1 });
+        const ax = client.getAxiosInstance();
+        let calls = 0;
+        ax.defaults.adapter = async (config) => {
+            calls++;
+            throw new axios.AxiosError('Too Many Requests', 'ERR_BAD_RESPONSE', config, {}, {
+                status: 429,
+                statusText: 'Too Many Requests',
+                headers: { 'retry-after': '0' },
+                data: { message: 'rate limited' },
+                config,
+            });
+        };
+        await expect(client.documents.list()).rejects.toBeInstanceOf(ApiError);
+        expect(calls).toBe(2); // initial + 1 retry
     });
 });

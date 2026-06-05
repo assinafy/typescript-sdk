@@ -1,4 +1,4 @@
-import axios, { type AxiosInstance } from 'axios';
+import axios, { type AxiosInstance, type InternalAxiosRequestConfig } from 'axios';
 import type {
     AssinafyClientOptions,
     ICreateAssignmentPayload,
@@ -9,6 +9,7 @@ import type {
 } from './types';
 import { ValidationError } from './errors';
 import { createNoopLogger } from './utils';
+import { nextRetryDelayMs } from './support/retry';
 import { DocumentResource, type DocumentUploadSource } from './resources/documents';
 import { SignerResource } from './resources/signers';
 import { WorkspaceResource } from './resources/workspaces';
@@ -35,6 +36,7 @@ export interface ClientConfigInput {
     webhook_secret?: string;
     webhookSecret?: string;
     timeout?: number;
+    maxRetries?: number;
     logger?: Logger;
 }
 
@@ -101,6 +103,11 @@ export class AssinafyClient {
             headers,
         });
 
+        const maxRetries = options.maxRetries ?? 2;
+        if (maxRetries > 0) {
+            installRateLimitRetry(this.axiosInstance, maxRetries, this.logger);
+        }
+
         this.documents = new DocumentResource(this.axiosInstance, this.defaultAccountId, this.logger);
         this.signers = new SignerResource(this.axiosInstance, this.defaultAccountId, this.logger);
         this.workspaces = new WorkspaceResource(this.axiosInstance, undefined, this.logger);
@@ -145,6 +152,7 @@ export class AssinafyClient {
         if (baseUrl !== undefined) opts.baseUrl = baseUrl;
         if (webhookSecret !== undefined) opts.webhookSecret = webhookSecret;
         if (config.timeout !== undefined) opts.timeout = config.timeout;
+        if (config.maxRetries !== undefined) opts.maxRetries = config.maxRetries;
         if (config.logger !== undefined) opts.logger = config.logger;
         return new AssinafyClient(opts);
     }
@@ -224,4 +232,35 @@ export class AssinafyClient {
 
 function normaliseBaseUrl(raw: string): string {
     return raw.endsWith('/') ? raw.slice(0, -1) : raw;
+}
+
+type RetryableConfig = InternalAxiosRequestConfig & { _retryCount?: number };
+
+/**
+ * Retry HTTP 429 (Too Many Requests) responses a bounded number of times,
+ * waiting for the server-provided `Retry-After` / `X-Rate-Limit-Reset` delay.
+ * Only 429 is retried — it means the request was rejected before processing, so
+ * replaying it is safe even for non-idempotent verbs.
+ */
+function installRateLimitRetry(http: AxiosInstance, maxRetries: number, logger: Logger): void {
+    http.interceptors.response.use(
+        (response) => response,
+        async (error: unknown) => {
+            if (!axios.isAxiosError(error) || error.response?.status !== 429 || !error.config) {
+                throw error;
+            }
+            const config = error.config as RetryableConfig;
+            const attempt = (config._retryCount ?? 0) + 1;
+            if (attempt > maxRetries) throw error;
+            config._retryCount = attempt;
+
+            const delayMs = nextRetryDelayMs(
+                error.response.headers as Record<string, unknown>,
+                attempt,
+            );
+            logger.warn('Rate limited (429); retrying after delay', { attempt, maxRetries, delayMs });
+            await new Promise((resolve) => setTimeout(resolve, delayMs));
+            return http(config);
+        },
+    );
 }

@@ -6,7 +6,7 @@ Provides 100% endpoint coverage of the public API: documents, signers, assignmen
 
 ## Requirements
 
-- Node.js 18+ for the built-in `FormData` / `Blob` APIs used by uploads
+- Node.js 20+ (current LTS) for the built-in `FormData` / `Blob` APIs used by uploads
 - or Bun 1.0+
 
 ## Installation
@@ -66,10 +66,18 @@ new AssinafyClient({ token: 'jwt_xxx', accountId: 'acc_xxx' });
 | `apiKey`        | string   | —                                       | Preferred credential (sent as `X-Api-Key`).   |
 | `token`         | string   | —                                       | Legacy access token (sent as `Bearer`).       |
 | `accountId`     | string   | —                                       | Default workspace/account ID.                  |
-| `baseUrl`       | string   | `https://api.assinafy.com.br/v1`        | Override base URL.                             |
+| `baseUrl`       | string   | `https://api.assinafy.com.br/v1`        | Override base URL (e.g. the sandbox).          |
 | `webhookSecret` | string   | —                                       | Shared secret used by `WebhookVerifier`.       |
 | `timeout`       | number   | `30000`                                 | Request timeout in milliseconds.               |
+| `maxRetries`    | number   | `2`                                     | Auto-retries on HTTP 429, honoring `Retry-After`. `0` disables. |
 | `logger`        | `Logger` | no-op                                   | Optional `{debug,info,warn,error}` logger.     |
+
+### Rate limiting
+
+The API allows ~120 requests/minute and returns `X-Rate-Limit-*` headers. On an
+HTTP `429`, the client automatically retries up to `maxRetries` times, waiting
+for the server-provided `Retry-After` (or `X-Rate-Limit-Reset`) delay before
+each attempt. Only `429` is retried, so non-idempotent calls are safe.
 
 ### Factories
 
@@ -92,8 +100,8 @@ Every public endpoint documented in https://api.assinafy.com.br/v1/docs is cover
 | --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `client.documents`    | list, upload, details, activities, waitUntilReady, download, thumbnail, downloadPage, statuses, delete, verify, createFromTemplate, estimateCostFromTemplate, **getPublic**, **sendToken**, **listTags**, **replaceTags**, **addTags**, **detachTag**, isFullySigned, getSigningProgress |
 | `client.signers`      | create, get, list, update, delete, findByEmail                                                                                                                                                                                                     |
-| `client.assignments`  | create, estimateCost, resetExpiration, resendNotification, estimateResendCost, listWhatsAppNotifications, cancel                                                                                                                                   |
-| `client.templates`    | list, get, downloadPage                                                                                                                                                                                                                            |
+| `client.assignments`  | create, estimateCost, resetExpiration, resendNotification, estimateResendCost, listWhatsAppNotifications                                                                                                                                            |
+| `client.templates`    | **create**, list, get, **update**, **delete**, downloadPage                                                                                                                                                                                        |
 | `client.tags`         | list, create, update, delete                                                                                                                                                                                                                       |
 | `client.workspaces`   | create, list, get, update, delete                                                                                                                                                                                                                  |
 | `client.webhooks`     | register, get, inactivate, delete, listEventTypes, listDispatches, retryDispatch                                                                                                                                                                   |
@@ -114,10 +122,19 @@ const doc = await client.documents.upload(
   { filePath: './contract.pdf' },
   { metadata: { type: 'service' } },
 );
+// → {
+//   resource: 'document', id: '1031…', account_id: '102d…', template_id: null,
+//   name: 'contract.pdf', status: 'uploaded',
+//   artifacts: { original: 'https://…/download/original' },
+//   signing_url: 'https://app…/sign/1031…',
+//   pages: [],                 // populated once status reaches `metadata_ready`
+//   tags: [], is_closed: false, created_at: '2026-…', updated_at: '2026-…'
+// }
 
 // …or from a Buffer already in memory
 await client.documents.upload({ buffer, fileName: 'contract.pdf' });
 
+// List → { data: IDocumentListItem[], meta?: { current_page, per_page, total, last_page } }
 const { data, meta } = await client.documents.list({ page: 1, per_page: 20, sort: '-created_at' });
 await client.documents.details(doc.id);
 await client.documents.activities(doc.id);
@@ -159,6 +176,9 @@ await client.signers.create({
   whatsapp_phone_number: '+5548999990000',
   cpf: '123.456.789-00', // optional Brazilian tax ID — non-digits are stripped automatically
 });
+// → { id: '19e6…', full_name: 'John Doe', email: 'john@example.com',
+//     whatsapp_phone_number: '+5548999990000', has_accepted_terms: false }
+// (note: `cpf` is accepted on input but never echoed back by the API)
 
 // `email` is optional — a WhatsApp-only signer is valid (at least one is required)
 await client.signers.create({
@@ -204,39 +224,79 @@ await client.assignments.create(documentId, {
   ],
 });
 
-// Estimate cost (signers may omit `id` when only the channel matters)
+// Estimate cost (signers may omit `id` when only the channel matters) → ICostEstimate
 await client.assignments.estimateCost(documentId, { signers: ['signer-1'] });
 await client.assignments.estimateCost(documentId, {
   signers: [{ verification_method: 'Whatsapp' }],
 });
+// → {
+//   documents: 1, credits: 0, needs_extra_document: false, extra_document_cost: 0,
+//   total_credits: 0, breakdown: [], document_balance: 67, credit_balance: 0,
+//   has_sufficient_resources: true, blocking_reason: null, message: null
+// }
 
 await client.assignments.resetExpiration(documentId, assignmentId, '2025-06-30T00:00:00Z');
 await client.assignments.resetExpiration(documentId, assignmentId, null); // remove expiration
+
 await client.assignments.resendNotification(documentId, assignmentId, signerId);
+// → { is_sent: true, document_id: '…', signer_id: '…' }
+
 await client.assignments.estimateResendCost(documentId, assignmentId, signerId);
-await client.assignments.listWhatsAppNotifications(documentId, assignmentId);
-await client.assignments.cancel(documentId, 'No longer needed');
+// → { total: 0, breakdown: [{ code: 'NotificationEmailResend', name: '…', cost: 0 }],
+//     credit_balance: 0, has_sufficient_credits: true }
+
+await client.assignments.listWhatsAppNotifications(documentId, assignmentId); // → IWhatsAppNotification[]
 ```
 
+The `create` response is an `IAssignment`: `{ id, method, signers: [...], items: [...], signing_urls: [{ signer_id, url }], … }`.
+
 For backwards compatibility, the SDK also accepts legacy `signer_ids` and `signerIds` payloads and rewrites them to the current `signers: [{ id }]` format expected by the API.
+
+**Cancelling a signature request.** Assinafy has no workspace-side "cancel" endpoint. To stop a pending request either delete the document (when its status is deletable) or have the signer decline:
+
+```ts
+await client.documents.delete(documentId);                                  // workspace-side
+await client.signerDocuments.decline(documentId, assignmentId, accessCode, 'No longer needed'); // signer-side
+```
 
 ### Templates
 
 ```ts
-const { data, meta } = await client.templates.list({ search: 'NDA', per_page: 20 });
-const template = await client.templates.get(templateId);
-await client.templates.downloadPage(templateId, pageId);
+// Create a template by uploading a PDF (multipart). The template starts in
+// `Uploaded` status and becomes `Ready` once its pages are processed.
+const created = await client.templates.create(
+  { filePath: './nda.pdf' },          // or { buffer, fileName: 'nda.pdf' }
+  { name: 'NDA template' },
+);
+// →
+// {
+//   resource: 'template', id: '1032...', name: 'nda.pdf',
+//   document_name: 'nda.pdf', message: null, status: 'Uploaded',
+//   roles: [{ id: '1032...', name: 'TemplateEditor', assignment_type: 'Editor' }],
+//   pages: [], tags: [], created_at: '2026-…', updated_at: '2026-…'
+// }
 
-// Create a document from a template (each signer maps to a template role)
+const { data, meta } = await client.templates.list({ search: 'NDA', per_page: 20 });
+const template = await client.templates.get(created.id);   // includes pages[] + default_document_tags
+await client.templates.update(created.id, { name: 'NDA v2', message: 'Please sign' });
+await client.templates.downloadPage(created.id, template.pages![0].id); // → Buffer (JPEG)
+await client.templates.delete(created.id);
+
+// Create a *document* from a template (each signer maps to a template role)
 await client.documents.createFromTemplate(
   templateId,
   [{ role_id: template.roles![0].id, id: signerId, verification_method: 'Email', notification_methods: ['Email'] }],
   { name: 'NDA - John Doe', message: 'Please sign at your earliest convenience.' },
 );
 
-// Estimate the cost before creating
+// Estimate the cost before creating → ICostEstimate
 await client.documents.estimateCostFromTemplate(templateId, [{ role_id: 'role_id', id: signerId }]);
+// → { documents: 1, total_credits: 0, document_balance: 67, credit_balance: 0,
+//     has_sufficient_resources: true, blocking_reason: null, breakdown: [], … }
 ```
+
+Template creation only uploads the PDF and provisions the default editor role —
+configure roles/fields in the Assinafy editor (or the web UI) afterwards.
 
 ### Tags
 
@@ -448,8 +508,11 @@ A real-network test script under [`scripts/live-smoke.ts`](scripts/live-smoke.ts
 ```bash
 ASSINAFY_API_KEY=… ASSINAFY_ACCOUNT_ID=… bun scripts/live-smoke.ts            # read-only
 ASSINAFY_API_KEY=… ASSINAFY_ACCOUNT_ID=… bun scripts/live-smoke.ts --write    # also creates+deletes a signer
-ASSINAFY_API_KEY=… ASSINAFY_ACCOUNT_ID=… bun scripts/live-smoke.ts --upload   # also uploads+deletes a PDF
+ASSINAFY_API_KEY=… ASSINAFY_ACCOUNT_ID=… bun scripts/live-smoke.ts --upload   # also uploads a PDF + a template, then deletes both
 ```
+
+Set `ASSINAFY_BASE_URL=https://sandbox.assinafy.com.br/v1` to run it against the
+sandbox instead of production.
 
 ## Development
 

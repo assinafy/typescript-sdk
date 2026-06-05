@@ -49,6 +49,11 @@ export interface AssinafyClientOptions {
     webhookSecret?: string;
     /** Request timeout in milliseconds. Defaults to 30_000. */
     timeout?: number;
+    /**
+     * Max automatic retries on HTTP 429 (rate limit), honoring `Retry-After`.
+     * Defaults to `2`. Set to `0` to disable retrying.
+     */
+    maxRetries?: number;
     /** Optional logger. Defaults to a no-op logger. */
     logger?: Logger;
 }
@@ -88,6 +93,10 @@ export interface ISigner {
     full_name: string;
     email: string | null;
     whatsapp_phone_number?: string | null;
+    /**
+     * Accepted on create/update payloads but **never echoed back** on any signer
+     * response — present here only so response objects stay assignable from inputs.
+     */
     cpf?: string | null;
     has_accepted_terms?: boolean;
     /** Only returned by `GET /signers/self`. */
@@ -159,23 +168,53 @@ export interface ICreateAssignmentPayload {
     entries?: unknown[];
 }
 
+/** A signer as embedded inside an assignment (richer than the bare {@link ISigner}). */
+export interface IAssignmentSigner extends ISigner {
+    completed: boolean;
+    notification_history: unknown[];
+    verification_method: AssignmentVerificationMethod;
+    notification_methods: AssignmentNotificationMethod[];
+    /** 1-based signing order. See {@link SignerReference.step}. */
+    step: number;
+    notified: boolean;
+}
+
+/** A placed field/item within an assignment (one row per signer × field). */
+export interface IAssignmentItem {
+    id: string;
+    page: {
+        id: string;
+        number: number;
+        height: number;
+        width: number;
+        download_url: string;
+    } | null;
+    signer: ISigner;
+    field: IFieldDefinition;
+    value: string | null;
+    completed?: boolean;
+    [key: string]: unknown;
+}
+
 /** Assignment object as returned by the API. */
 export interface IAssignment {
+    resource?: string;
     id: string;
     sender_email?: string;
     method: AssignmentMethod;
-    expires_at?: string;
+    expires_at?: string | null;
     expiration?: string;
     message?: string;
-    signers: ISigner[];
+    signers: IAssignmentSigner[];
     copy_receivers?: string[];
-    items?: unknown[];
+    items?: IAssignmentItem[];
     summary?: {
         signer_count: number;
         completed_count: number;
-        signers: unknown[];
+        signers: Array<ISigner & { completed?: boolean }>;
     };
-    signing_urls?: Record<string, string>;
+    /** Per-signer signing URLs. Array of `{ signer_id, url }` (not a map). */
+    signing_urls?: Array<{ signer_id: string; url: string }>;
 }
 
 export type ICreateAssignmentResponse = IAssignment;
@@ -184,6 +223,39 @@ export interface IResendEmailResponse {
     is_sent?: boolean;
     document_id?: string;
     signer_id?: string;
+}
+
+/**
+ * Credit/document cost estimate returned by `assignments.estimateCost` and
+ * `documents.estimateCostFromTemplate`.
+ */
+export interface ICostEstimate {
+    documents: number;
+    credits: number;
+    needs_extra_document: boolean;
+    extra_document_cost: number;
+    total_credits: number;
+    breakdown: Array<{
+        code: string;
+        name: string;
+        cost: number;
+        quantity?: number;
+        unit_cost?: number;
+    }>;
+    document_balance: number;
+    credit_balance: number;
+    has_sufficient_resources: boolean;
+    /** `null` when the operation can proceed; otherwise a reason code. */
+    blocking_reason: string | null;
+    message: string | null;
+}
+
+/** Cost estimate returned by `assignments.estimateResendCost`. */
+export interface IResendCostEstimate {
+    total: number;
+    breakdown: Array<{ code: string; name: string; cost: number }>;
+    credit_balance: number;
+    has_sufficient_credits: boolean;
 }
 
 /** Webhook payload envelope. */
@@ -233,6 +305,14 @@ export interface IDocumentListItem {
     status: DocumentStatus;
     account_id?: string;
     template_id?: string | null;
+    /** Artifact download URLs keyed by name (`original`, `thumbnail`, …). */
+    artifacts?: IDocumentUploadResponse['artifacts'];
+    /** Public signing-portal URL for the document. */
+    signing_url?: string;
+    pages?: IDocumentUploadResponse['pages'];
+    assignment?: IAssignment | null;
+    decline_reason?: string | null;
+    declined_by?: ISigner | null;
     /** Tags attached to the document (inline `{ id, name, color }` shape). */
     tags?: IInlineTag[];
     created_at: string;
@@ -260,7 +340,8 @@ export interface IDocumentUploadResponse {
     template_id: string | null;
     name: string;
     status: DocumentStatus;
-    assignment: unknown;
+    /** Absent on a fresh upload; an {@link IAssignment} (or `null`) once one exists. */
+    assignment?: IAssignment | null;
     artifacts: {
         original: string;
         certificated?: string;
@@ -268,6 +349,7 @@ export interface IDocumentUploadResponse {
         bundle?: string;
         thumbnail?: string;
     };
+    /** Empty (`[]`) on fresh upload (status `uploaded`); populated once `metadata_ready`. */
     pages: Array<{
         id: string;
         number: number;
@@ -289,6 +371,7 @@ export interface IDocumentDetailsResponse {
     resource?: string;
     id: string;
     account_id: string;
+    template_id?: string | null;
     name: string;
     status: DocumentStatus;
     assignment: IAssignment | null;
@@ -308,7 +391,7 @@ export interface IDocumentDetailsResponse {
     created_at: string;
     updated_at: string;
     is_closed: boolean;
-    decline_reason?: string;
+    decline_reason?: string | null;
     declined_by?: ISigner | null;
     activities?: Array<IDocumentActivity>;
 }
@@ -358,8 +441,8 @@ export interface IUpdateWorkspacePayload {
 export interface IWorkspaceResponse {
     id: string;
     name: string;
-    primary_color?: string;
-    secondary_color?: string;
+    primary_color?: string | null;
+    secondary_color?: string | null;
     created_at: string;
 }
 
@@ -381,13 +464,16 @@ export interface IWebhookRegisterPayload {
     is_active?: boolean;
 }
 
+/**
+ * Webhook subscription as returned by the API. There is exactly one
+ * subscription per workspace, keyed by URL — the API returns
+ * `{ events, is_active, url, email, updated_at }` (no `id` / `created_at`).
+ */
 export interface IWebhookSubscription {
-    id?: string;
     url: string;
     email: string;
     events: string[];
     is_active: boolean;
-    created_at?: string;
     updated_at?: string;
 }
 
@@ -440,7 +526,18 @@ export interface IUploadAndRequestSignaturesSigner {
 export interface ITemplateRole {
     id: string;
     name: string;
+    /** Role kind, e.g. `Editor` or `Signer`. */
+    assignment_type?: string;
+    created_at?: string;
+    updated_at?: string;
     [key: string]: unknown;
+}
+
+/** Payload for `PUT /accounts/{id}/templates/{template_id}`. Omit a field to leave it unchanged. */
+export interface IUpdateTemplatePayload {
+    name?: string;
+    /** Default invitation message applied to documents created from the template. */
+    message?: string;
 }
 
 /** Template list item (paginated). */

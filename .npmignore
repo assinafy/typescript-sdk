@@ -1,6 +1,7 @@
 src
 *.test.ts
 tsconfig.json
+eslint.config.mjs
 .eslintrc.json
 bun.lock
 bun.lockb
@@ -8,4 +9,6 @@ package-lock.json
 node_modules
 .DS_Store
 .github
+scripts
 coverage
+/tmp

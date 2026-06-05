@@ -79,4 +79,64 @@ describe('DocumentResource', () => {
     test('download validates the document id', async () => {
         await expect(docs.download('')).rejects.toThrow(ValidationError);
     });
+
+    test('list items expose the live fields (artifacts, signing_url, assignment, …)', async () => {
+        const item = {
+            id: 'd1',
+            name: 'doc.pdf',
+            status: 'metadata_ready',
+            account_id: 'acc',
+            template_id: null,
+            artifacts: { original: 'https://api/d1/download/original', thumbnail: 'https://api/d1/thumbnail' },
+            signing_url: 'https://app/sign/d1',
+            pages: [{ id: 'p1', number: 1, height: 417, width: 417, download_url: 'https://api/d1/pages/p1/download' }],
+            assignment: null,
+            decline_reason: null,
+            declined_by: null,
+            tags: [],
+            created_at: '2026-06-05T19:52:27Z',
+            updated_at: '2026-06-05T19:52:30Z',
+            is_closed: false,
+        };
+        const ax = {
+            ...mockAxios,
+            get: async () => ({ status: 200, data: { status: 200, data: [item] }, headers: {} }),
+        } as unknown as AxiosInstance;
+        const { data } = await new DocumentResource(ax, 'acc').list();
+        expect(data[0]?.artifacts?.original).toContain('/download/original');
+        expect(data[0]?.signing_url).toBe('https://app/sign/d1');
+        expect(data[0]?.assignment).toBeNull();
+        expect(data[0]?.pages?.[0]?.download_url).toContain('/pages/');
+    });
+
+    test('upload tolerates an absent assignment and empty pages', async () => {
+        const uploaded = {
+            resource: 'document',
+            id: 'd1',
+            account_id: 'acc',
+            template_id: null,
+            name: 'doc.pdf',
+            status: 'uploaded',
+            artifacts: { original: 'https://api/d1/download/original' },
+            signing_url: 'https://app/sign/d1',
+            tags: [],
+            pages: [],
+            created_at: '2026-06-05T20:50:33Z',
+            updated_at: '2026-06-05T20:50:34Z',
+            is_closed: false,
+            decline_reason: null,
+            declined_by: null,
+        };
+        const ax = {
+            ...mockAxios,
+            post: async () => ({ status: 200, data: { status: 200, data: uploaded } }),
+        } as unknown as AxiosInstance;
+        const doc = await new DocumentResource(ax, 'acc').upload({
+            buffer: Buffer.from('%PDF-1.4 minimal'),
+            fileName: 'doc.pdf',
+        });
+        expect(doc.id).toBe('d1');
+        expect(doc.assignment).toBeUndefined();
+        expect(doc.pages).toEqual([]);
+    });
 });
