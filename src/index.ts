@@ -4,6 +4,8 @@ export * from './types';
 export * from './errors';
 export { DocumentResource } from './resources/documents';
 export type { DocumentUploadSource, IDocumentUploadOptions } from './resources/documents';
+/** The API's hard 25 MB upload limit — check a file against it before uploading. */
+export { MAX_UPLOAD_BYTES } from './resources/upload';
 export { SignerResource } from './resources/signers';
 export { WorkspaceResource } from './resources/workspaces';
 export { AssignmentResource, buildAssignmentPayload } from './resources/assignments';

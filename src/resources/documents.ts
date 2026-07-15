@@ -7,6 +7,7 @@ import type {
     IDocumentDetailsResponse,
     IDocumentListItem,
     IDocumentListParams,
+    IDocumentSearchParams,
     IDocumentListResponse,
     IDocumentStatusInfo,
     IDocumentUploadResponse,
@@ -16,10 +17,9 @@ import type {
     ITemplateSigner,
     SendTokenChannel,
 } from '../types';
-import { ValidationError } from '../errors';
+import { ApiError, ValidationError } from '../errors';
 import { cleanParams } from '../utils';
 import { BaseResource } from './base';
-import { buildUploadForm, loadSource, validateUpload } from './upload';
 import type { DocumentUploadSource } from './upload';
 
 export type { DocumentUploadSource } from './upload';
@@ -37,7 +37,16 @@ const FAILED_STATUSES: ReadonlySet<DocumentStatus | string> = new Set([
     'expired',
 ]);
 
+/** Options accepted by {@link DocumentResource.upload}. */
 export interface IDocumentUploadOptions {
+    /**
+     * Display name for the document. Defaults to the uploaded file's own name.
+     *
+     * `.pdf` is appended when absent, so `'Service agreement'` is stored as
+     * `'Service agreement.pdf'`. Accents are transliterated by the API
+     * (`'Contrato de Serviço'` → `'Contrato de Servico.pdf'`).
+     */
+    name?: string;
     /** Optional metadata sent alongside the file (JSON-encoded). */
     metadata?: Record<string, unknown>;
     /** Override the default account ID configured on the client. */
@@ -46,39 +55,60 @@ export interface IDocumentUploadOptions {
 
 export class DocumentResource extends BaseResource {
     /**
-     * Upload a PDF to the workspace.
+     * Upload a PDF to the workspace (`POST /accounts/{accountId}/documents`).
+     *
+     * The document is created in `metadata_processing` status and becomes
+     * usable once it reaches `metadata_ready`; use
+     * {@link DocumentResource.waitUntilReady} to await that transition. Note
+     * that {@link DocumentResource.rename} and {@link DocumentResource.delete}
+     * return `400` while the document is still processing.
+     *
+     * @param source - The PDF to upload, as a file path or an in-memory buffer.
+     * @param options - Display name, metadata, and account override.
+     * @returns The created document. Response shape:
+     * ```jsonc
+     * {
+     *   "resource": "document",
+     *   "id": "c3d4e5f6a7b8c9d0e1f2a3b4c5d6",
+     *   "name": "Service agreement.pdf",
+     *   "status": "metadata_processing",
+     *   "created_at": "2026-07-15T16:15:33Z",
+     *   "updated_at": "2026-07-15T16:15:33Z"
+     * }
+     * ```
+     * @throws {ValidationError} If the file is empty, not a `.pdf`, exceeds
+     * 25 MB, or the API returns no document ID.
+     * @throws {ApiError} If the API rejects the upload.
      *
      * @example
      * ```ts
      * await client.documents.upload({ filePath: './contract.pdf' });
-     * await client.documents.upload({ buffer, fileName: 'contract.pdf' }, { metadata });
+     * await client.documents.upload(
+     *   { buffer, fileName: 'contract.pdf' },
+     *   { name: 'Service agreement', metadata: { orderId: 'A-1' } },
+     * );
+     * // → name is stored as 'Service agreement.pdf'
      * ```
      */
     async upload(
         source: DocumentUploadSource,
         options: IDocumentUploadOptions = {},
     ): Promise<IDocumentUploadResponse> {
-        const { buffer, fileName } = await loadSource(source);
-        validateUpload(buffer, fileName);
-
         const accountId = this.accountId(options.accountId);
-        const formOptions: { metadata?: Record<string, unknown> } = {};
+        const formOptions: { name?: string; metadata?: Record<string, unknown> } = {};
+        if (options.name !== undefined) formOptions.name = options.name;
         if (options.metadata !== undefined) formOptions.metadata = options.metadata;
-        const form = buildUploadForm(buffer, fileName, formOptions);
 
-        this.logger.info('Uploading document', { fileName, size: buffer.byteLength });
-
-        const document = await this.call<IDocumentUploadResponse>('Document upload failed', () =>
-            this.http.post(`/accounts/${accountId}/documents`, form, {
-                headers: { 'Content-Type': 'multipart/form-data' },
-            }),
+        const document = await this.uploadPdf<IDocumentUploadResponse>(
+            `/accounts/${accountId}/documents`,
+            source,
+            formOptions,
+            {
+                errorLabel: 'Document upload failed',
+                missingId: 'Upload succeeded but no document ID was returned',
+            },
         );
 
-        if (!document?.id) {
-            throw new ValidationError('Upload succeeded but no document ID was returned', {
-                response: document as unknown as Record<string, unknown>,
-            });
-        }
         this.logger.info('Document uploaded', { documentId: document.id });
         return document;
     }
@@ -91,6 +121,93 @@ export class DocumentResource extends BaseResource {
         const id = this.accountId(accountId);
         return this.callList<IDocumentListItem>('Failed to list documents', () =>
             this.http.get(`/accounts/${id}/documents`, { params: cleanParams(params) }),
+        );
+    }
+
+    /**
+     * Search workspace documents
+     * (`GET /accounts/{accountId}/documents/search`).
+     *
+     * A lighter-weight alternative to {@link DocumentResource.list}: it returns
+     * a compact representation with no expanded `assignment` or `pages`, so
+     * prefer it for name lookups and pickers.
+     *
+     * @param params - `search`, `status`, `page`, `per-page`.
+     * @param accountId - Override the client's default account ID.
+     * @returns Matching documents, with pagination in `meta`. Each item:
+     * ```jsonc
+     * {
+     *   "id": "c3d4e5f6a7b8c9d0e1f2a3b4c5d6",
+     *   "account_id": "d4e5f6a7b8c9d0e1f2a3b4c5d6e7",
+     *   "template_id": null,
+     *   "name": "Service agreement.pdf",
+     *   "status": "pending_signature",
+     *   "artifacts": { "original": "https://…" },
+     *   "is_closed": false,
+     *   "signing_url": "https://…",
+     *   "decline_reason": null,
+     *   "declined_by": null,
+     *   "tags": [],
+     *   "created_at": "2026-07-15T16:15:33Z",
+     *   "updated_at": "2026-07-15T16:15:40Z"
+     * }
+     * ```
+     * @throws {ValidationError} If no account ID is available.
+     * @throws {ApiError} If the API rejects the request.
+     *
+     * @example
+     * ```ts
+     * const { data, meta } = await client.documents.search({
+     *   search: 'agreement',
+     *   status: 'pending_signature',
+     *   'per-page': 20,
+     * });
+     * ```
+     */
+    async search(
+        params: IDocumentSearchParams = {},
+        accountId?: string,
+    ): Promise<IDocumentListResponse> {
+        const id = this.accountId(accountId);
+        return this.callList<IDocumentListItem>('Failed to search documents', () =>
+            this.http.get(`/accounts/${id}/documents/search`, { params: cleanParams(params) }),
+        );
+    }
+
+    /**
+     * Rename a document (`PATCH /documents/{documentId}`).
+     *
+     * Only valid while the document is still renameable: the API returns `400`
+     * ("Document cannot be renamed after the signature process has started")
+     * both once signing has begun **and** while the document is still in
+     * `metadata_processing` immediately after upload. Await
+     * {@link DocumentResource.waitUntilReady} before renaming a fresh upload.
+     *
+     * To set a name at upload time instead, pass `name` to
+     * {@link DocumentResource.upload} — that avoids the extra round-trip and
+     * the processing race entirely.
+     *
+     * @param documentId - The document to rename.
+     * @param name - The new display name (max 255 chars), e.g.
+     * `'Service agreement.pdf'`.
+     * @returns The updated document.
+     * @throws {ValidationError} If `documentId` or `name` is missing.
+     * @throws {ApiError} `400` if the document is processing or already in
+     * signing; `404` if it does not exist.
+     *
+     * @example
+     * ```ts
+     * const doc = await client.documents.upload({ filePath: './c.pdf' });
+     * await client.documents.waitUntilReady(doc.id);   // else 400
+     * await client.documents.rename(doc.id, 'Service agreement.pdf');
+     * ```
+     */
+    async rename(documentId: string, name: string): Promise<IDocumentDetailsResponse> {
+        const id = this.requireId(documentId, 'Document ID');
+        const newName = this.requireId(name, 'Name');
+        this.logger.info('Renaming document', { documentId: id });
+        return this.call('Failed to rename document', () =>
+            this.http.patch(`/documents/${id}`, { name: newName }),
         );
     }
 
@@ -133,6 +250,14 @@ export class DocumentResource extends BaseResource {
                 }
             } catch (err) {
                 if (err instanceof ValidationError) throw err;
+                // Only transient failures are worth another poll. A 4xx (bad key,
+                // wrong account, deleted document) will never resolve by waiting,
+                // so surface it now instead of masking it as a timeout — 429 is
+                // the exception, since the retry interceptor handles it and the
+                // limit is per-minute.
+                if (err instanceof ApiError && err.statusCode < 500 && err.statusCode !== 429) {
+                    throw err;
+                }
                 this.logger.warn('Error checking document status', {
                     error: err instanceof Error ? err.message : String(err),
                 });

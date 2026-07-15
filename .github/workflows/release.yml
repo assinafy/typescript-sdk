@@ -8,6 +8,12 @@ on:
 permissions:
   contents: read
 
+# Never run two publishes at once, and never cancel one midway: a half-done
+# publish can leave npm and GitHub Packages out of sync.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   publish-npm:
     name: Publish to npmjs.com
@@ -16,19 +22,37 @@ jobs:
       contents: read
       id-token: write # npm provenance (OIDC)
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
-          node-version: 22
+          node-version: 24
           registry-url: https://registry.npmjs.org
+
+      # workflow_dispatch publishes whatever ref it is invoked on, so verify the
+      # manifest version matches the release tag before shipping it.
+      - name: Verify package version matches the release tag
+        if: github.event_name == 'release'
+        run: |
+          pkg="$(node -p "require('./package.json').version")"
+          tag="${GITHUB_REF_NAME#v}"
+          if [ "$pkg" != "$tag" ]; then
+            echo "::error::package.json version ($pkg) does not match release tag ($tag)"
+            exit 1
+          fi
+          echo "Publishing version $pkg"
+
       - run: bun install --frozen-lockfile
       - run: bun run typecheck
       - run: bun run lint
       - run: bun test
       - run: bun run build
+
+      # Gate the publish on the same package checks CI runs.
+      - run: bun run lint:pkg
+
       - run: npm publish --access public --provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
@@ -36,17 +60,20 @@ jobs:
   publish-gh:
     name: Publish to GitHub Packages
     runs-on: ubuntu-latest
+    # Gate on npm succeeding so GitHub Packages can never ship a build npm
+    # rejected.
+    needs: publish-npm
     permissions:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
-          node-version: 22
+          node-version: 24
           registry-url: https://npm.pkg.github.com
       - run: bun install --frozen-lockfile
       - run: bun run build

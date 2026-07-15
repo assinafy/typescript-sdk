@@ -40,7 +40,7 @@ export function toSdkError(error: unknown, fallbackMessage: string): AssinafyErr
         return new AssinafyError(`${fallbackMessage}: ${error.message}`, {}, { cause: error });
     }
 
-    return new AssinafyError(fallbackMessage, { cause: error });
+    return new AssinafyError(fallbackMessage, {}, { cause: error });
 }
 
 /** No-op logger used when the caller does not supply one. */

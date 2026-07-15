@@ -42,6 +42,47 @@ export class SignerDocumentsResource extends BaseResource {
         );
     }
 
+    /**
+     * Search the documents awaiting a given signer
+     * (`GET /signers/{signer_id}/documents/search?signer-access-code=…`).
+     *
+     * The signer-side counterpart of {@link DocumentResource.search}, scoped to
+     * one signer and authorised by their access code rather than the API key.
+     * Like {@link SignerDocumentsResource.list}, it requires
+     * `signer-access-code`; the published spec omits that parameter, but the
+     * endpoint is not usable without it.
+     *
+     * @param signerId - The signer whose documents are searched.
+     * @param signerAccessCode - The signer's access code, from their signing link.
+     * @param search - Free-text term matched against the document name.
+     * @returns Matching documents for that signer, in the compact
+     * {@link IDocumentListItem} shape, with pagination in `meta`.
+     * @throws {ValidationError} If `signerId` or `signerAccessCode` is missing.
+     * @throws {ApiError} If the access code is invalid or expired.
+     *
+     * @example
+     * ```ts
+     * const { data } = await client.signerDocuments.search(
+     *   signerId,
+     *   accessCode,
+     *   'agreement',
+     * );
+     * ```
+     */
+    async search(
+        signerId: string,
+        signerAccessCode: string,
+        search?: string,
+    ): Promise<IDocumentListResponse> {
+        const sid = this.requireId(signerId, 'Signer ID');
+        const code = this.requireId(signerAccessCode, 'signer-access-code');
+        return this.callList<IDocumentListItem>('Failed to search signer documents', () =>
+            this.http.get(`/signers/${sid}/documents/search`, {
+                params: cleanParams({ 'signer-access-code': code, search }),
+            }),
+        );
+    }
+
     /** `GET /signers/{signer_id}/documents/{document_id}/download/{artifact}?signer-access-code=…` */
     async download(
         signerId: string,

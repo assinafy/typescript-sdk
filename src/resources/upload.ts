@@ -44,9 +44,31 @@ export function validateUpload(buffer: Buffer, fileName: string): void {
 }
 
 /**
+ * Normalise a display name into a filename the upload endpoints accept.
+ *
+ * `POST /accounts/{id}/templates` rejects a `file` part whose filename has no
+ * `.pdf` extension (`415 Unsupported file extension`), so the extension is
+ * appended when missing. `.pdf` is also the API's own naming convention — its
+ * rename example is `"Service agreement.pdf"`.
+ */
+function toUploadFileName(name: string): string {
+    return name.toLowerCase().endsWith('.pdf') ? name : `${name}.pdf`;
+}
+
+/**
  * Build the `multipart/form-data` body shared by document and template uploads:
- * a `file` part (the PDF) plus a `name` field, and an optional JSON `metadata`
- * field. `name` defaults to `fileName` when not supplied.
+ * a `file` part (the PDF) plus an optional JSON `metadata` field.
+ *
+ * The resource's display `name` is taken from the **filename of the `file`
+ * part** — the API derives it from there and ignores any separate `name` field
+ * in the body. `options.name` therefore rides on the part's filename, falling
+ * back to `fileName` (the source file's own name) when not supplied.
+ *
+ * Two API-side behaviours worth knowing, both verified against the sandbox:
+ * - The stored name always ends in `.pdf`; `'NDA template'` is stored as
+ *   `'NDA template.pdf'`.
+ * - Accents are transliterated: `'Contrato de Serviço.pdf'` is stored as
+ *   `'Contrato de Servico.pdf'`.
  */
 export function buildUploadForm(
     buffer: Buffer,
@@ -56,8 +78,8 @@ export function buildUploadForm(
     const form = new FormData();
     // Blob copy-free view over the Buffer's underlying ArrayBuffer slice.
     const view = new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
-    form.append('file', new Blob([view], { type: 'application/pdf' }), fileName);
-    form.append('name', options.name ?? fileName);
+    const partName = options.name === undefined ? fileName : toUploadFileName(options.name);
+    form.append('file', new Blob([view], { type: 'application/pdf' }), partName);
     if (options.metadata) {
         form.append('metadata', JSON.stringify(options.metadata));
     }

@@ -72,16 +72,14 @@ export class WebhookResource extends BaseResource {
         );
     }
 
-    /** Delete the current webhook subscription. */
-    async delete(accountId?: string): Promise<void> {
-        const id = this.accountId(accountId);
-        this.logger.info('Deleting webhook subscription');
-        return this.callVoid('Failed to delete webhook subscription', () =>
-            this.http.delete(`/accounts/${id}/webhooks/subscriptions`),
-        );
-    }
-
-    /** Inactivate the current webhook subscription without deleting it. */
+    /**
+     * Inactivate the current webhook subscription.
+     *
+     * This is the only supported way to stop deliveries — the API has no
+     * subscription-delete route. The subscription is retained (with its `url`
+     * and `events`) and simply stops firing; re-enable it by calling
+     * {@link WebhookResource.register} again with `is_active: true`.
+     */
     async inactivate(accountId?: string): Promise<IWebhookSubscription> {
         const id = this.accountId(accountId);
         this.logger.info('Inactivating webhook subscription');

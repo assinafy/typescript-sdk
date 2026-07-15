@@ -207,3 +207,41 @@ describe('AssignmentResource', () => {
         expect(asg.signing_urls?.[0]).toEqual({ signer_id: 's1', url: 'https://app/sign/abc' });
     });
 });
+
+describe('AssignmentResource.list', () => {
+    const okList = { status: 200, data: { status: 200, data: [] }, headers: {} };
+
+    test('sends the account as an `accountId` query param (not account_id)', async () => {
+        let url = '';
+        let params: Record<string, unknown> = {};
+        const ax = {
+            get: async (u: string, cfg: { params: Record<string, unknown> }) => {
+                url = u;
+                params = cfg.params;
+                return okList;
+            },
+        } as unknown as AxiosInstance;
+        await new AssignmentResource(ax, 'acc').list({ 'per-page': 20 });
+        expect(url).toBe('/assignments');
+        // The API 400s on account_id / X-Account-Id; only camelCase accountId works.
+        expect(params).toEqual({ accountId: 'acc', 'per-page': 20 });
+        expect(params['account_id']).toBeUndefined();
+    });
+
+    test('honours an explicit accountId override', async () => {
+        let params: Record<string, unknown> = {};
+        const ax = {
+            get: async (_u: string, cfg: { params: Record<string, unknown> }) => {
+                params = cfg.params;
+                return okList;
+            },
+        } as unknown as AxiosInstance;
+        await new AssignmentResource(ax, 'acc').list({}, 'other-acc');
+        expect(params['accountId']).toBe('other-acc');
+    });
+
+    test('throws ValidationError when no account ID is available', async () => {
+        const ax = { get: async () => okList } as unknown as AxiosInstance;
+        await expect(new AssignmentResource(ax).list()).rejects.toThrow(ValidationError);
+    });
+});

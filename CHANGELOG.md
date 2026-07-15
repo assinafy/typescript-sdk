@@ -5,6 +5,92 @@ All notable changes to `@assinafy/sdk` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0] - 2026-07-15
+
+### Removed (breaking)
+
+- **`webhooks.delete()`** — `DELETE /accounts/{id}/webhooks/subscriptions`
+  returns `404`; the endpoint does not exist. Use **`webhooks.inactivate()`**
+  (`PUT /accounts/{id}/webhooks/inactivate`) to stop deliveries; the
+  subscription is retained and re-enabled by calling `webhooks.register()` again
+  with `is_active: true`. The method never functioned, so no working runtime
+  behaviour changes.
+
+### Fixed
+
+- **`waitUntilReady` reported auth and not-found failures as a timeout.** The
+  poll loop swallowed every `ApiError`, so an invalid API key, a wrong account,
+  or a deleted document burned the full `maxWaitMs` and then threw
+  `ValidationError('Timeout waiting for document to be ready')`. Because
+  `uploadAndRequestSignatures` awaits it by default, a bad key hung the SDK's
+  flagship helper for 30 s and then misreported the cause. A 4xx now surfaces
+  immediately; 5xx and 429 still retry as before.
+- **`toSdkError` dropped `cause` when a non-`Error` value was thrown.** The
+  cause was passed into the `context` parameter instead of `options`, so
+  `error.cause` was `undefined` exactly where the original throw was least
+  identifiable. It now populates `cause` and leaves `context` empty.
+- **`templates.create(source, { name })` silently ignored `name`.** The API
+  derives a template's display name from the filename of the uploaded `file`
+  part, not from a `name` field, so every template was named after the uploaded
+  file regardless of the option. `name` is now applied.
+  - `.pdf` is appended when absent: `'NDA template'` → `'NDA template.pdf'`.
+  - Accents are transliterated by the API: `'Contrato de Serviço'` is stored as
+    `'Contrato de Servico.pdf'`.
+  - Callers who passed `name` and relied on the previous filename-derived result
+    will now get the name they asked for.
+
+### Added
+
+- **`documents.upload(source, { name })`** — uploaded documents could not
+  previously be named. Same semantics as `templates.create`.
+- **`documents.search(params, accountId?)`** — `GET /accounts/{id}/documents/search`.
+  A lighter-weight `list`: same item shape, without the expanded
+  `assignment`/`pages`. Supports `search`, `status`, `page`, `per-page`.
+- **`documents.rename(documentId, name)`** — `PATCH /documents/{id}`. Returns
+  `400` while the document is still in `metadata_processing`, so await
+  `waitUntilReady()` first on a fresh upload; passing `name` to `upload()`
+  avoids both the round-trip and the wait.
+- **`assignments.list(params, accountId?)`** — `GET /assignments`, paginated via
+  `page` / `per-page`.
+- **`signerDocuments.search(signerId, accessCode, search?)`** —
+  `GET /signers/{id}/documents/search`, the signer-side counterpart of
+  `documents.search`.
+- **`IPage`** — a real type for document/template `pages[]`:
+  `{ id, number, height, width, download_url?, fields? }`.
+- **`MAX_UPLOAD_BYTES`** is now exported, so callers can check a file against the
+  API's 25 MB limit before uploading.
+- **`AnyString`** — used to keep editor autocomplete on fields like
+  `AssignmentVerificationMethod` and `SendTokenChannel`. `'Email' | 'Whatsapp' |
+  string` collapses to plain `string` and loses the suggestions; these now read
+  `'Email' | 'Whatsapp' | AnyString`. Any string is still accepted, so values the
+  API adds later keep type-checking.
+
+### Changed (breaking)
+
+- **Node.js 22+ is now required** (`engines: >=22`, was `>=20`). Node 20 reached
+  end-of-life in April 2026. The SDK is tested on Node 22 and 24 against the
+  built CJS and ESM artifacts.
+- **`exports` now declares per-condition `types`**, so ESM consumers resolve
+  `dist/index.d.mts` instead of the CJS-flavoured `dist/index.d.ts`.
+
+### Internal
+
+- Compiled against ES2022 with `noUncheckedIndexedAccess`, `isolatedModules` and
+  `verbatimModuleSyntax` enabled (each produced zero errors). ES2022 also lets
+  the error classes pass `cause` through the native `Error` constructor instead
+  of assigning it behind a cast.
+- `documents.upload` and `templates.create` were byte-for-byte the same
+  load → validate → build-form → POST → assert-id sequence over different paths;
+  both now share `BaseResource.uploadPdf`.
+
+### Heads-up for upgraders (type-level — no runtime break)
+
+- **`ITemplateDetailsResponse.pages` and `IDocumentDetailsResponse.pages` are
+  now `IPage[]`** (were `unknown[]`). This fixes the documented
+  `template.pages![0].id` pattern, which previously failed to compile with
+  `TS2571: Object is of type 'unknown'`. Code that cast `pages` to a local shape
+  can drop the cast.
+
 ## [1.5.0] - 2026-06-05
 
 Full production-readiness audit against [the live API docs](https://api.assinafy.com.br/v1/docs),

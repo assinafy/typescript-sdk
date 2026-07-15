@@ -16,15 +16,86 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Fast inner loop: typecheck, lint and unit tests under Bun.
   test:
+    name: Test (bun)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
+      - name: Cache bun install cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: bun-${{ runner.os }}-
       - run: bun install --frozen-lockfile
       - run: bun test
       - run: bun run typecheck
       - run: bun run lint
       - run: bun run build
+
+  # The package ships to Node consumers, but `src` is typechecked against
+  # bun-types — so Bun alone can never prove the published artifact imports
+  # cleanly on Node. This job does, on every supported major.
+  node-compat:
+    name: Node ${{ matrix.node }} compat
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Keep in sync with `engines.node` in package.json.
+        # 22 = maintenance LTS, 24 = active LTS. Node 20 went EOL April 2026.
+        node: [22, 24]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ matrix.node }}
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: bun install --frozen-lockfile
+      - run: bun run build
+
+      # Import the *built* artifact the way real consumers do. A Bun-only API
+      # leaking into src would compile fine and only fail here.
+      - name: Smoke-test the CommonJS build
+        run: |
+          node -e "
+            const sdk = require('./dist/index.js');
+            const missing = ['AssinafyClient', 'WebhookVerifier', 'ApiError', 'ValidationError']
+              .filter((n) => typeof sdk[n] !== 'function');
+            if (missing.length) throw new Error('CJS build missing exports: ' + missing.join(', '));
+            new sdk.AssinafyClient({ apiKey: 'k', accountId: 'a' });
+            console.log('CJS build OK on Node ' + process.version);
+          "
+
+      - name: Smoke-test the ESM build
+        run: |
+          node --input-type=module -e "
+            import { AssinafyClient, WebhookVerifier } from './dist/index.mjs';
+            if (typeof AssinafyClient !== 'function' || typeof WebhookVerifier !== 'function') {
+              throw new Error('ESM build is missing expected exports');
+            }
+            new AssinafyClient({ apiKey: 'k', accountId: 'a' });
+            console.log('ESM build OK on Node ' + process.version);
+          "
+
+  # Validate what actually gets published: exports map, types resolution and
+  # CJS/ESM interop across consumer moduleResolution modes.
+  package:
+    name: Package validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: bun install --frozen-lockfile
+      - run: bun run build
+      # publint + attw, pinned via devDependencies rather than @latest so a
+      # tool release cannot break the build unannounced.
+      - run: bun run lint:pkg

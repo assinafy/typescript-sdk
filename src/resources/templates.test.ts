@@ -34,7 +34,7 @@ function mockHttp(): {
 }
 
 describe('TemplateResource', () => {
-    test('create POSTs multipart with file + name to the templates endpoint', async () => {
+    test('create POSTs multipart to the templates endpoint, carrying name as the file part filename', async () => {
         const { http, calls } = mockHttp();
         const templates = new TemplateResource(http, 'acc');
         const result = await templates.create(
@@ -46,8 +46,13 @@ describe('TemplateResource', () => {
         expect(calls[0]?.url).toBe('/accounts/acc/templates');
         const form = calls[0]?.body as FormData;
         expect(form).toBeInstanceOf(FormData);
-        expect(form.get('name')).toBe('My Template');
-        expect(form.get('file')).toBeInstanceOf(Blob);
+        // The API derives the display name from the file part's filename and
+        // ignores a separate `name` field, so `name` must ride on the filename.
+        // The templates endpoint 415s on a filename with no `.pdf` extension,
+        // so the extension is appended when absent.
+        expect(form.get('file')).toBeInstanceOf(File);
+        expect((form.get('file') as File).name).toBe('My Template.pdf');
+        expect(form.get('name')).toBeNull();
         expect((calls[0]?.config as { headers: Record<string, string> }).headers['Content-Type']).toBe(
             'multipart/form-data',
         );
@@ -56,11 +61,32 @@ describe('TemplateResource', () => {
         expect(result.status).toBe('Uploaded');
     });
 
-    test('create defaults the form name to the file name when omitted', async () => {
+    test('create falls back to the real file name when no name is given', async () => {
         const { http, calls } = mockHttp();
         const templates = new TemplateResource(http, 'acc');
         await templates.create({ buffer: Buffer.from('%PDF-1.4'), fileName: 'contract.pdf' });
-        expect((calls[0]?.body as FormData).get('name')).toBe('contract.pdf');
+        const file = (calls[0]?.body as FormData).get('file') as File;
+        expect(file.name).toBe('contract.pdf');
+    });
+
+    test('create does not double-append .pdf to a name that already has it', async () => {
+        const { http, calls } = mockHttp();
+        const templates = new TemplateResource(http, 'acc');
+        await templates.create(
+            { buffer: Buffer.from('%PDF-1.4'), fileName: 'src.pdf' },
+            { name: 'Already Named.pdf' },
+        );
+        expect(((calls[0]?.body as FormData).get('file') as File).name).toBe('Already Named.pdf');
+    });
+
+    test('create appends .pdf case-insensitively', async () => {
+        const { http, calls } = mockHttp();
+        const templates = new TemplateResource(http, 'acc');
+        await templates.create(
+            { buffer: Buffer.from('%PDF-1.4'), fileName: 'src.pdf' },
+            { name: 'Upper.PDF' },
+        );
+        expect(((calls[0]?.body as FormData).get('file') as File).name).toBe('Upper.PDF');
     });
 
     test('create rejects non-PDF uploads before any request', async () => {

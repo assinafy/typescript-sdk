@@ -78,3 +78,32 @@ describe('SignerDocumentsResource', () => {
         await expect(r.decline('d', 'a', 'code', '')).rejects.toThrow(ValidationError);
     });
 });
+
+describe('SignerDocumentsResource.search', () => {
+    test('GETs the signer search endpoint with the access code and term', async () => {
+        const { http, calls } = mockHttp();
+        await new SignerDocumentsResource(http).search('signer-1', 'code-abc', 'nda');
+        expect(calls[0]?.method).toBe('GET');
+        expect(calls[0]?.url).toBe('/signers/signer-1/documents/search');
+        expect((calls[0]?.config as { params: unknown }).params).toEqual({
+            'signer-access-code': 'code-abc',
+            search: 'nda',
+        });
+    });
+
+    test('omits `search` when no term is given', async () => {
+        const { http, calls } = mockHttp();
+        await new SignerDocumentsResource(http).search('signer-1', 'code-abc');
+        expect((calls[0]?.config as { params: unknown }).params).toEqual({
+            'signer-access-code': 'code-abc',
+        });
+    });
+
+    test('requires signerId and access code before any request', async () => {
+        const { http, calls } = mockHttp();
+        const res = new SignerDocumentsResource(http);
+        await expect(res.search('', 'code')).rejects.toThrow(ValidationError);
+        await expect(res.search('signer-1', '')).rejects.toThrow(ValidationError);
+        expect(calls.length).toBe(0);
+    });
+});

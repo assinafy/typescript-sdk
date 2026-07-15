@@ -2,6 +2,11 @@ import type { AxiosInstance, AxiosResponse, AxiosResponseHeaders } from 'axios';
 import { ApiError, ValidationError } from '../errors';
 import type { Logger, PaginatedResult, PaginationMeta } from '../types';
 import { createNoopLogger, handleAssinafyResponse, toSdkError } from '../utils';
+import { buildUploadForm, loadSource, validateUpload } from './upload';
+import type { DocumentUploadSource } from './upload';
+
+/** Content-Type required by the document and template upload endpoints. */
+const MULTIPART_CONTENT_TYPE = 'multipart/form-data';
 
 /**
  * Shared plumbing for every Assinafy resource:
@@ -84,6 +89,43 @@ export abstract class BaseResource {
         } catch (err) {
             throw toSdkError(err, label);
         }
+    }
+
+    /**
+     * Upload a PDF as `multipart/form-data` and assert the API echoed an id.
+     *
+     * Shared by `documents.upload` and `templates.create`, which are the same
+     * sequence over different paths: load → validate → build form → POST →
+     * assert an id came back. Callers keep their own success logging.
+     *
+     * @param path - Account-scoped endpoint to POST to.
+     * @param source - The PDF, as a file path or in-memory buffer.
+     * @param formOptions - `name` (display name) and optional `metadata`.
+     * @param labels - `errorLabel` for the request failure, `missingId` for a
+     * `2xx` that returned no id.
+     */
+    protected async uploadPdf<T extends { id?: string }>(
+        path: string,
+        source: DocumentUploadSource,
+        formOptions: { name?: string; metadata?: Record<string, unknown> },
+        labels: { errorLabel: string; missingId: string },
+    ): Promise<T> {
+        const { buffer, fileName } = await loadSource(source);
+        validateUpload(buffer, fileName);
+
+        this.logger.info('Uploading PDF', { path, fileName, size: buffer.byteLength });
+
+        const form = buildUploadForm(buffer, fileName, formOptions);
+        const result = await this.call<T>(labels.errorLabel, () =>
+            this.http.post(path, form, { headers: { 'Content-Type': MULTIPART_CONTENT_TYPE } }),
+        );
+
+        if (!result?.id) {
+            throw new ValidationError(labels.missingId, {
+                response: result as Record<string, unknown>,
+            });
+        }
+        return result;
     }
 
     /** Execute a paginated list call and attach meta from `X-Pagination-*` headers. */

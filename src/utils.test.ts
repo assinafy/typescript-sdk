@@ -43,6 +43,15 @@ describe('toSdkError', () => {
         const result = toSdkError(fake, 'upload');
         expect(result).toBeInstanceOf(NetworkError);
     });
+
+    test('preserves the original value as `cause` when a non-Error is thrown', () => {
+        // Regression: this path previously passed `{ cause }` into the *context*
+        // parameter, so `error.cause` was silently dropped for non-Error throws.
+        const result = toSdkError('boom-string', 'Failed to do thing');
+        expect(result.cause).toBe('boom-string');
+        expect(result.context).toEqual({});
+        expect(result.message).toBe('Failed to do thing');
+    });
 });
 
 describe('cleanParams', () => {

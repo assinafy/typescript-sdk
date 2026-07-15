@@ -1,5 +1,7 @@
 import type {
     IAssignment,
+    IAssignmentListParams,
+    IAssignmentListResponse,
     ICostEstimate,
     ICreateAssignmentPayload,
     ICreateAssignmentResponse,
@@ -86,6 +88,61 @@ function normaliseSignerRef(
 }
 
 export class AssignmentResource extends BaseResource {
+    /**
+     * List assignments across the workspace (`GET /assignments`).
+     *
+     * The account is passed as an `accountId` **query parameter** — the API
+     * responds `400` ("Um contexto de conta é necessário e não foi fornecido")
+     * without it. Note the camelCase spelling: `account_id` and an
+     * `X-Account-Id` header are both rejected.
+     *
+     * @param params - `page`, `per-page`.
+     * @param accountId - Override the client's default account ID.
+     * @returns Assignments, with pagination in `meta`. Each item:
+     * ```jsonc
+     * {
+     *   "id": "a1b2c3d4e5f6a7b8c9d0e1f2a3b4",
+     *   "sender_email": "sender@example.com",
+     *   "method": "virtual",
+     *   "expires_at": null,
+     *   "message": "Please sign this contract",
+     *   "signers": [
+     *     {
+     *       "id": "b2c3d4e5f6a7b8c9d0e1f2a3b4c5",
+     *       "full_name": "Ana Souza",
+     *       "email": "signer@example.com",
+     *       "whatsapp_phone_number": null,
+     *       "has_accepted_terms": false,
+     *       "completed": false,
+     *       "notification_history": [],
+     *       "verification_method": "Email",
+     *       "notification_methods": ["Email"],
+     *       "step": 1,
+     *       "notified": true
+     *     }
+     *   ]
+     * }
+     * ```
+     * @throws {ValidationError} If no account ID is available.
+     * @throws {ApiError} If the API rejects the request.
+     *
+     * @example
+     * ```ts
+     * const { data, meta } = await client.assignments.list({ 'per-page': 20 });
+     * ```
+     */
+    async list(
+        params: IAssignmentListParams = {},
+        accountId?: string,
+    ): Promise<IAssignmentListResponse> {
+        const id = this.accountId(accountId);
+        return this.callList<IAssignment>('Failed to list assignments', () =>
+            this.http.get('/assignments', {
+                params: { accountId: id, ...cleanParams(params) },
+            }),
+        );
+    }
+
     /** Create a signing assignment for a document. */
     async create(
         documentId: string,

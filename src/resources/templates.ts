@@ -5,10 +5,8 @@ import type {
     ITemplateListItem,
     IUpdateTemplatePayload,
 } from '../types';
-import { ValidationError } from '../errors';
 import { cleanParams } from '../utils';
 import { BaseResource } from './base';
-import { buildUploadForm, loadSource, validateUpload } from './upload';
 import type { DocumentUploadSource } from './upload';
 
 export class TemplateResource extends BaseResource {
@@ -34,27 +32,20 @@ export class TemplateResource extends BaseResource {
         source: DocumentUploadSource,
         options: { name?: string; accountId?: string } = {},
     ): Promise<ITemplateDetailsResponse> {
-        const { buffer, fileName } = await loadSource(source);
-        validateUpload(buffer, fileName);
-
         const id = this.accountId(options.accountId);
         const formOptions: { name?: string } = {};
         if (options.name !== undefined) formOptions.name = options.name;
-        const form = buildUploadForm(buffer, fileName, formOptions);
 
-        this.logger.info('Creating template', { fileName, size: buffer.byteLength });
-
-        const template = await this.call<ITemplateDetailsResponse>('Failed to create template', () =>
-            this.http.post(`/accounts/${id}/templates`, form, {
-                headers: { 'Content-Type': 'multipart/form-data' },
-            }),
+        const template = await this.uploadPdf<ITemplateDetailsResponse>(
+            `/accounts/${id}/templates`,
+            source,
+            formOptions,
+            {
+                errorLabel: 'Failed to create template',
+                missingId: 'Template upload succeeded but no template ID was returned',
+            },
         );
 
-        if (!template?.id) {
-            throw new ValidationError('Template upload succeeded but no template ID was returned', {
-                response: template as unknown as Record<string, unknown>,
-            });
-        }
         this.logger.info('Template created', { templateId: template.id });
         return template;
     }

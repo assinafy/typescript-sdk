@@ -2,11 +2,15 @@
 
 TypeScript SDK for the [Assinafy API](https://api.assinafy.com.br/v1/docs) — a Brazilian digital signature platform.
 
-Provides 100% endpoint coverage of the public API: documents, signers, assignments, templates, tags, workspaces, webhooks, field definitions, authentication, public/signer-side flows, and the high-level `uploadAndRequestSignatures` helper.
+Covers the server-side surface of the API: documents, signers, assignments, templates, tags, workspaces, webhooks, field definitions, authentication, public/signer-side flows, and the high-level `uploadAndRequestSignatures` helper.
+
+Deliberately not wrapped: the browser-redirect OAuth endpoints (`/auth/authenticate`, `/auth/link-social-login`, `/login-callback`), which a server-side SDK cannot meaningfully drive, and the account `theme`/`logo` branding routes.
 
 ## Requirements
 
-- Node.js 20+ (current LTS) for the built-in `FormData` / `Blob` APIs used by uploads
+- Node.js 22+ for the built-in `FormData` / `Blob` APIs used by uploads. Tested
+  on 22 (maintenance LTS) and 24 (active LTS); Node 20 reached end-of-life in
+  April 2026 and is no longer supported.
 - or Bun 1.0+
 
 ## Installation
@@ -98,16 +102,16 @@ Every public endpoint documented in https://api.assinafy.com.br/v1/docs is cover
 
 | Resource              | Endpoints                                                                                                                                                                                                                                          |
 | --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `client.documents`    | list, upload, details, activities, waitUntilReady, download, thumbnail, downloadPage, statuses, delete, verify, createFromTemplate, estimateCostFromTemplate, **getPublic**, **sendToken**, **listTags**, **replaceTags**, **addTags**, **detachTag**, isFullySigned, getSigningProgress |
+| `client.documents`    | list, **search**, upload, details, get, **rename**, activities, waitUntilReady, download, thumbnail, downloadPage, statuses, delete, verify, createFromTemplate, estimateCostFromTemplate, getPublic, sendToken, listTags, replaceTags, addTags, detachTag, isFullySigned, getSigningProgress |
 | `client.signers`      | create, get, list, update, delete, findByEmail                                                                                                                                                                                                     |
-| `client.assignments`  | create, estimateCost, resetExpiration, resendNotification, estimateResendCost, listWhatsAppNotifications                                                                                                                                            |
+| `client.assignments`  | **list**, create, estimateCost, resetExpiration, resendNotification, estimateResendCost, listWhatsAppNotifications                                                                                                                                  |
 | `client.templates`    | **create**, list, get, **update**, **delete**, downloadPage                                                                                                                                                                                        |
 | `client.tags`         | list, create, update, delete                                                                                                                                                                                                                       |
 | `client.workspaces`   | create, list, get, update, delete                                                                                                                                                                                                                  |
-| `client.webhooks`     | register, get, inactivate, delete, listEventTypes, listDispatches, retryDispatch                                                                                                                                                                   |
+| `client.webhooks`     | register, get, inactivate, listEventTypes, listDispatches, retryDispatch                                                                                                                                                                           |
 | `client.fields`       | create, list, get, update, delete, validate, validateMultiple, listTypes                                                                                                                                                                           |
 | `client.auth`         | login, socialLogin, createApiKey, getApiKey, deleteApiKey, changePassword, requestPasswordReset, resetPassword                                                                                                                                     |
-| `client.signerDocuments` | getCurrent, list, download, signMultiple, declineMultiple, self, acceptTerms, verifyEmail, confirmData, uploadSignature, downloadSignature, getAssignment, sign, decline                                                                        |
+| `client.signerDocuments` | getCurrent, list, **search**, download, signMultiple, declineMultiple, self, acceptTerms, verifyEmail, confirmData, uploadSignature, downloadSignature, getAssignment, sign, decline                                                            |
 | `client.webhookVerifier` | verify, extractEvent, getEventType, getEventData                                                                                                                                                                                                |
 
 ## Resources
@@ -120,8 +124,12 @@ Most account-scoped methods accept an optional `accountId` that overrides the cl
 // Upload from a file path (recommended)
 const doc = await client.documents.upload(
   { filePath: './contract.pdf' },
-  { metadata: { type: 'service' } },
+  { name: 'Service agreement', metadata: { type: 'service' } },
 );
+// `name` is optional and defaults to the file's own name. The API derives the
+// display name from the uploaded filename and appends `.pdf` when absent, so
+// the document above is stored as 'Service agreement.pdf'. Accents are
+// transliterated by the API ('Contrato de Serviço' → 'Contrato de Servico.pdf').
 // → {
 //   resource: 'document', id: '1031…', account_id: '102d…', template_id: null,
 //   name: 'contract.pdf', status: 'uploaded',
@@ -136,9 +144,19 @@ await client.documents.upload({ buffer, fileName: 'contract.pdf' });
 
 // List → { data: IDocumentListItem[], meta?: { current_page, per_page, total, last_page } }
 const { data, meta } = await client.documents.list({ page: 1, per_page: 20, sort: '-created_at' });
+
+// Search is the lightweight alternative to list: same item shape, but the API
+// skips the expanded `assignment`/`pages`. Prefer it for name lookups.
+const hits = await client.documents.search({ search: 'agreement', status: 'pending_signature', 'per-page': 20 });
+
 await client.documents.details(doc.id);
 await client.documents.activities(doc.id);
 await client.documents.waitUntilReady(doc.id, { maxWaitMs: 30_000 });
+
+// Rename. The API rejects this with 400 while the document is still in
+// `metadata_processing`, so await waitUntilReady() first on a fresh upload.
+// (Passing `name` to upload() avoids both the round-trip and the race.)
+await client.documents.rename(doc.id, 'Signed service agreement.pdf');
 
 await client.documents.download(doc.id, 'certificated');   // 'original' | 'certificated' | 'certificate-page' | 'bundle'
 await client.documents.thumbnail(doc.id);
@@ -206,6 +224,10 @@ When an `email` is supplied, `signers.create()` is idempotent by email, matching
 ### Assignments
 
 ```ts
+// List every assignment in the workspace.
+// → { data: IAssignment[], meta?: { current_page, per_page, total, last_page } }
+const { data, meta } = await client.assignments.list({ page: 1, 'per-page': 20 });
+
 // Signers may be ids or objects — the SDK normalises to the API shape.
 await client.assignments.create(documentId, {
   method: 'virtual',
@@ -386,8 +408,7 @@ await client.webhooks.register({
 });
 
 await client.webhooks.get();          // current subscription or null
-await client.webhooks.inactivate();
-await client.webhooks.delete();
+await client.webhooks.inactivate();   // stop deliveries (no delete route exists)
 await client.webhooks.listEventTypes();
 await client.webhooks.listDispatches({ delivered: false, page: 1, 'per-page': 20 });
 await client.webhooks.retryDispatch(dispatchId);
@@ -433,6 +454,8 @@ await client.signerDocuments.verifyEmail({ signerAccessCode: accessCode, verific
 
 await client.signerDocuments.getCurrent(signerId, accessCode);
 const { data } = await client.signerDocuments.list(signerId, accessCode, { search: 'invoice' });
+// Signer-side counterpart of documents.search(), authorised by the access code.
+const found = await client.signerDocuments.search(signerId, accessCode, 'invoice');
 await client.signerDocuments.download(signerId, documentId, 'original', accessCode);
 
 await client.signerDocuments.confirmData(documentId, accessCode, {

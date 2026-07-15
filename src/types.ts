@@ -15,14 +15,29 @@ export type DocumentStatus =
 /** Artifact names available for document download. */
 export type DocumentArtifactName = 'original' | 'certificated' | 'certificate-page' | 'bundle';
 
+/**
+ * Any string, while keeping editor autocomplete for the literals it is unioned
+ * with.
+ *
+ * `'Email' | 'Whatsapp' | string` collapses to plain `string`, so the literals
+ * vanish from autocomplete. `'Email' | 'Whatsapp' | AnyString` keeps them
+ * suggested while staying assignable from any string, so a value the API adds
+ * later still type-checks.
+ *
+ * This deliberately does **not** reject unknown strings — these fields mirror
+ * server-controlled vocabularies, so forward-compatibility is worth more than
+ * rejecting a typo at compile time.
+ */
+export type AnyString = string & {};
+
 /** Assignment methods supported by the API. */
 export type AssignmentMethod = 'virtual' | 'collect';
 
 /** Verification methods accepted by assignment signer entries. */
-export type AssignmentVerificationMethod = 'Email' | 'Whatsapp' | string;
+export type AssignmentVerificationMethod = 'Email' | 'Whatsapp' | AnyString;
 
 /** Notification methods accepted by assignment signer entries. */
-export type AssignmentNotificationMethod = 'Email' | 'Whatsapp' | string;
+export type AssignmentNotificationMethod = 'Email' | 'Whatsapp' | AnyString;
 
 /** Minimal logger contract (compatible with console, pino, winston, etc.). */
 export interface Logger {
@@ -325,12 +340,35 @@ export type IDocumentListResponse = PaginatedResult<IDocumentListItem>;
 /** Query parameters accepted by `documents.list`. */
 export interface IDocumentListParams extends IListParams {
     /** Filter by document status, e.g. `pending_signature`. */
-    status?: DocumentStatus | string;
+    status?: DocumentStatus | AnyString;
     /** Filter by signature method (`virtual` or `collect`). */
     method?: AssignmentMethod;
     /** Comma-separated list of tag IDs (AND semantics). */
     tags?: string;
 }
+
+/** Query parameters accepted by `documents.search`. */
+export interface IDocumentSearchParams extends IListParams {
+    /** Free-text term matched against the document name. */
+    search?: string;
+    /** Filter by document status, e.g. `pending_signature`. */
+    status?: DocumentStatus | AnyString;
+    /** Page number (1-based). */
+    page?: number;
+    /** Results per page. */
+    'per-page'?: number;
+}
+
+/** Query parameters accepted by `assignments.list`. */
+export interface IAssignmentListParams extends IListParams {
+    /** Page number (1-based). */
+    page?: number;
+    /** Results per page. */
+    'per-page'?: number;
+}
+
+/** Paginated result of `assignments.list`. */
+export type IAssignmentListResponse = PaginatedResult<IAssignment>;
 
 /** Document upload response. */
 export interface IDocumentUploadResponse {
@@ -385,7 +423,8 @@ export interface IDocumentDetailsResponse {
         bundle?: string;
         thumbnail?: string;
     };
-    pages: unknown[];
+    /** Rendered pages. Empty until the document reaches `metadata_ready`. */
+    pages: IPage[];
     /** Tags attached to the document (inline `{ id, name, color }` shape). */
     tags?: IInlineTag[];
     created_at: string;
@@ -478,13 +517,13 @@ export interface IWebhookSubscription {
 }
 
 export interface IWebhookEventTypeInfo {
-    id: WebhookEventType | string;
+    id: WebhookEventType | AnyString;
     description: string;
 }
 
 export interface IWebhookDispatch {
     id: string;
-    event: WebhookEventType | string;
+    event: WebhookEventType | AnyString;
     activity_id: number;
     endpoint: string | null;
     payload: IWebhookPayload | Record<string, unknown> | null;
@@ -497,7 +536,7 @@ export interface IWebhookDispatch {
 }
 
 export interface IWebhookDispatchListParams extends IListParams {
-    event?: WebhookEventType | string;
+    event?: WebhookEventType | AnyString;
     delivered?: boolean | 'true' | 'false';
     from?: number;
     to?: number;
@@ -559,6 +598,39 @@ export interface ITemplateListItem {
 export type ITemplateListResponse = PaginatedResult<ITemplateListItem>;
 
 /** Full template details. */
+/**
+ * A rendered page of a document or template.
+ *
+ * `download_url` is an absolute, API-key-authenticated URL for the page's JPEG
+ * rendering — the same bytes returned by `templates.downloadPage()` /
+ * `documents.downloadPage()`.
+ *
+ * @example
+ * ```jsonc
+ * {
+ *   "id": "e5f6a7b8c9d0e1f2a3b4c5d6e7f8",
+ *   "number": 1,
+ *   "height": 1651,
+ *   "width": 1275,
+ *   "download_url": "https://api.assinafy.com.br/v1/accounts/…/pages/…/download",
+ *   "fields": []
+ * }
+ * ```
+ */
+export interface IPage {
+    id: string;
+    /** 1-based page number. */
+    number: number;
+    /** Rendered height in pixels (150 DPI). */
+    height: number;
+    /** Rendered width in pixels (150 DPI). */
+    width: number;
+    /** Absolute URL of the page's JPEG rendering. */
+    download_url?: string;
+    /** Fields positioned on this page. Present on templates; absent on documents. */
+    fields?: unknown[];
+}
+
 export interface ITemplateDetailsResponse {
     resource?: string;
     id: string;
@@ -567,7 +639,8 @@ export interface ITemplateDetailsResponse {
     message?: string | null;
     status: string;
     account_id?: string;
-    pages?: unknown[];
+    /** Empty until the template finishes processing (`status: 'Ready'`). */
+    pages?: IPage[];
     roles?: ITemplateRole[];
     /** Tags attached to the template itself. */
     tags?: IInlineTag[];
@@ -608,7 +681,7 @@ export interface ICreateDocumentFromTemplateOptions {
  * is documented in the table but is not currently present in the JSON payload.
  */
 export interface IDocumentStatusInfo {
-    code: DocumentStatus | string;
+    code: DocumentStatus | AnyString;
     deletable: boolean;
     description?: string;
 }
@@ -624,7 +697,7 @@ export interface IPublicDocumentInfo {
 }
 
 /** Channel accepted by the `send-token` endpoint. */
-export type SendTokenChannel = 'email' | 'whatsapp' | string;
+export type SendTokenChannel = 'email' | 'whatsapp' | AnyString;
 
 /** Authentication: login response (also returned by social login). */
 export interface ILoginResponse {
