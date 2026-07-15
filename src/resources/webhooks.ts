@@ -8,7 +8,7 @@ import type {
     WebhookEventType,
 } from '../types';
 import { ValidationError } from '../errors';
-import { cleanParams } from '../utils';
+import { cleanListParams } from '../utils';
 import { BaseResource } from './base';
 
 /**
@@ -103,7 +103,7 @@ export class WebhookResource extends BaseResource {
         const id = this.accountId(accountId);
         return this.callList<IWebhookDispatch>('Failed to list webhook dispatches', () =>
             this.http.get(`/accounts/${id}/webhooks`, {
-                params: cleanParams(params as unknown as Record<string, unknown>),
+                params: cleanListParams(params as unknown as Record<string, unknown>),
             }),
         );
     }

@@ -76,8 +76,19 @@ export function buildUploadForm(
     options: { name?: string; metadata?: Record<string, unknown> } = {},
 ): FormData {
     const form = new FormData();
-    // Blob copy-free view over the Buffer's underlying ArrayBuffer slice.
-    const view = new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+    // Copy-free view over the Buffer's own slice of its underlying ArrayBuffer.
+    // Node pools small Buffers, so byteOffset/byteLength are required to avoid
+    // sending a neighbouring allocation's bytes.
+    //
+    // The cast narrows `ArrayBufferLike` to `ArrayBuffer`: a Buffer from
+    // fs.readFile or Buffer.from is never SharedArrayBuffer-backed, but the
+    // declared type admits it and `BlobPart` does not. Slicing instead would
+    // satisfy the checker by copying the whole file — up to 25 MB per upload.
+    const view = new Uint8Array(
+        buffer.buffer as ArrayBuffer,
+        buffer.byteOffset,
+        buffer.byteLength,
+    );
     const partName = options.name === undefined ? fileName : toUploadFileName(options.name);
     form.append('file', new Blob([view], { type: 'application/pdf' }), partName);
     if (options.metadata) {

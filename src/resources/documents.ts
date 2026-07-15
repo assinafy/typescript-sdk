@@ -12,13 +12,14 @@ import type {
     IDocumentStatusInfo,
     IDocumentUploadResponse,
     IPublicDocumentInfo,
+    IRenameDocumentResponse,
     ISigningProgress,
     ITag,
     ITemplateSigner,
     SendTokenChannel,
 } from '../types';
 import { ApiError, ValidationError } from '../errors';
-import { cleanParams } from '../utils';
+import { cleanListParams } from '../utils';
 import { BaseResource } from './base';
 import type { DocumentUploadSource } from './upload';
 
@@ -115,12 +116,12 @@ export class DocumentResource extends BaseResource {
 
     /**
      * List workspace documents. Pagination info (if any) is attached in `meta`.
-     * Supports `status`, `method`, `tags`, `search`, `sort`, `page`, `per_page`.
+     * Supports `status`, `method`, `tags`, `search`, `sort`, `page`, `per-page`.
      */
     async list(params: IDocumentListParams = {}, accountId?: string): Promise<IDocumentListResponse> {
         const id = this.accountId(accountId);
         return this.callList<IDocumentListItem>('Failed to list documents', () =>
-            this.http.get(`/accounts/${id}/documents`, { params: cleanParams(params) }),
+            this.http.get(`/accounts/${id}/documents`, { params: cleanListParams(params) }),
         );
     }
 
@@ -170,7 +171,7 @@ export class DocumentResource extends BaseResource {
     ): Promise<IDocumentListResponse> {
         const id = this.accountId(accountId);
         return this.callList<IDocumentListItem>('Failed to search documents', () =>
-            this.http.get(`/accounts/${id}/documents/search`, { params: cleanParams(params) }),
+            this.http.get(`/accounts/${id}/documents/search`, { params: cleanListParams(params) }),
         );
     }
 
@@ -190,7 +191,9 @@ export class DocumentResource extends BaseResource {
      * @param documentId - The document to rename.
      * @param name - The new display name (max 255 chars), e.g.
      * `'Service agreement.pdf'`.
-     * @returns The updated document.
+     * @returns The updated document — **without** `pages` or `assignment`,
+     * which this endpoint does not return (unlike
+     * {@link DocumentResource.details}). Call `details()` if you need them.
      * @throws {ValidationError} If `documentId` or `name` is missing.
      * @throws {ApiError} `400` if the document is processing or already in
      * signing; `404` if it does not exist.
@@ -202,7 +205,7 @@ export class DocumentResource extends BaseResource {
      * await client.documents.rename(doc.id, 'Service agreement.pdf');
      * ```
      */
-    async rename(documentId: string, name: string): Promise<IDocumentDetailsResponse> {
+    async rename(documentId: string, name: string): Promise<IRenameDocumentResponse> {
         const id = this.requireId(documentId, 'Document ID');
         const newName = this.requireId(name, 'Name');
         this.logger.info('Renaming document', { documentId: id });

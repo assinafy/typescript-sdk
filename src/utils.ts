@@ -20,6 +20,38 @@ export function handleAssinafyResponse<T>(response: unknown): T {
 }
 
 /**
+ * Decode an error body that arrived as binary.
+ *
+ * Artifact downloads are issued with `responseType: 'arraybuffer'`, which axios
+ * applies to error responses too — so a JSON error body comes back as a Buffer
+ * (Node) or ArrayBuffer. Left undecoded, {@link ApiError.fromResponse} finds no
+ * `message` field and reports the generic "API request failed", discarding what
+ * the server actually said (e.g. "Artefato não está disponível.").
+ *
+ * Returns the parsed JSON when the body is JSON, the raw string when it is not,
+ * and the value untouched when it was never binary.
+ */
+function decodeBinaryErrorBody(data: unknown): unknown {
+    let text: string;
+    if (typeof Buffer !== 'undefined' && Buffer.isBuffer(data)) {
+        text = data.toString('utf8');
+    } else if (data instanceof ArrayBuffer) {
+        text = Buffer.from(data).toString('utf8');
+    } else if (ArrayBuffer.isView(data)) {
+        text = Buffer.from(data.buffer, data.byteOffset, data.byteLength).toString('utf8');
+    } else {
+        return data;
+    }
+
+    try {
+        return JSON.parse(text);
+    } catch {
+        // Not JSON (an HTML error page, say) — keep the text so it is not lost.
+        return text.length > 0 ? { message: text } : null;
+    }
+}
+
+/**
  * Convert an unknown thrown value into a typed SDK error.
  * Axios errors become {@link ApiError} / {@link NetworkError}; SDK errors pass through.
  */
@@ -31,7 +63,8 @@ export function toSdkError(error: unknown, fallbackMessage: string): AssinafyErr
     if (axios.isAxiosError(error)) {
         const status = error.response?.status;
         if (status) {
-            return ApiError.fromResponse(status, error.response?.data ?? null);
+            const body = decodeBinaryErrorBody(error.response?.data ?? null);
+            return ApiError.fromResponse(status, body ?? null);
         }
         return new NetworkError(`${fallbackMessage}: ${error.message}`, { cause: error });
     }
@@ -60,6 +93,27 @@ export function cleanParams(params: Record<string, unknown>): Record<string, unk
         if (value !== undefined && value !== null) {
             out[key] = value;
         }
+    }
+    return out;
+}
+
+/**
+ * Clean query params for a paginated list call, normalising `per_page` to the
+ * `per-page` spelling the API actually reads.
+ *
+ * The API honours **only** `per-page`. `per_page` is not rejected — it is
+ * silently ignored and the response falls back to the default page size of 20
+ * (verified: `?per-page=2` returns 2 items with `x-pagination-per-page: 2`,
+ * while `?per_page=2` returns 20). Accepting both spellings keeps the
+ * snake_case form working for callers rather than failing them quietly.
+ *
+ * An explicit `per-page` always wins over `per_page`.
+ */
+export function cleanListParams(params: Record<string, unknown>): Record<string, unknown> {
+    const out = cleanParams(params);
+    if (out['per_page'] !== undefined) {
+        out['per-page'] ??= out['per_page'];
+        delete out['per_page'];
     }
     return out;
 }

@@ -7,7 +7,7 @@ import type {
     IListParams,
 } from '../types';
 import { ApiError, ValidationError } from '../errors';
-import { cleanParams } from '../utils';
+import { cleanListParams, cleanParams } from '../utils';
 import { BaseResource } from './base';
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -45,7 +45,17 @@ export class SignerResource extends BaseResource {
                 this.http.post(`/accounts/${id}/signers`, normaliseSignerPayload(payload)),
             );
         } catch (err) {
-            if (err instanceof ApiError && err.statusCode === 409 && payload.email) {
+            // Recover from the lost-race case: another caller created the same
+            // signer between the findByEmail above and this POST.
+            //
+            // This API answers a duplicate email with **400** ("Um signatário com
+            // este e-mail já existe."), not the 409 the status name would suggest,
+            // so 400 must be caught too — a 409-only guard never fires here. The
+            // lookup is what makes this safe: an unrelated 400 (malformed email,
+            // say) finds nothing and rethrows below.
+            const isDuplicateStatus =
+                err instanceof ApiError && (err.statusCode === 409 || err.statusCode === 400);
+            if (isDuplicateStatus && payload.email) {
                 const duplicate = await this.findByEmail(payload.email, id);
                 if (duplicate) {
                     this.logger.info('Signer already exists, using existing signer', {
@@ -67,11 +77,11 @@ export class SignerResource extends BaseResource {
         );
     }
 
-    /** List signers for the workspace (supports `page`, `per_page`, `search`, `sort`). */
+    /** List signers for the workspace (supports `page`, `per-page`, `search`, `sort`). */
     async list(params: IListParams = {}, accountId?: string): Promise<ISignerListResponse> {
         const id = this.accountId(accountId);
         return this.callList<ISigner>('Failed to list signers', () =>
-            this.http.get(`/accounts/${id}/signers`, { params: cleanParams(params) }),
+            this.http.get(`/accounts/${id}/signers`, { params: cleanListParams(params) }),
         );
     }
 
@@ -97,11 +107,28 @@ export class SignerResource extends BaseResource {
         );
     }
 
-    /** Find a signer by email via the API's `search` parameter. Returns `null` if none match. */
+    /**
+     * Find a signer by exact email, using the API's `search` filter to narrow
+     * the page first. Returns `null` if none match.
+     *
+     * `search` is a substring match across signer fields, so the result is
+     * re-filtered here for an exact, case-insensitive email match.
+     *
+     * Page size is pinned to the API's maximum of 50: larger values are
+     * silently clamped to 50 by the server, so asking for more is misleading.
+     * An exact address realistically matches one signer, but a search term that
+     * matched more than 50 could in principle miss one — the API exposes no
+     * exact-email filter to rule that out.
+     *
+     * @param email - Exact email address to look for.
+     * @param accountId - Override the client's default account ID.
+     * @returns The matching {@link ISigner}, or `null`.
+     * @throws {ValidationError} If `email` is not a valid address.
+     */
     async findByEmail(email: string, accountId?: string): Promise<ISigner | null> {
         this.assertEmail(email);
         try {
-            const { data } = await this.list({ search: email, per_page: 100 }, accountId);
+            const { data } = await this.list({ search: email, 'per-page': 50 }, accountId);
             const lower = email.toLowerCase();
             return data.find((s) => (s.email ?? '').toLowerCase() === lower) ?? null;
         } catch (err) {

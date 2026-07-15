@@ -18,6 +18,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`per_page` was silently ignored on every list call.** The API reads only
+  `per-page`; `per_page` is accepted and discarded, so the response fell back to
+  20 items (verified: `?per-page=2` → 2 items, `?per_page=2` → 20). Every list
+  method's documentation advertised `per_page`, so paging appeared to work while
+  quietly returning the wrong page size. Both spellings are now honoured —
+  `per_page` is normalised to `per-page`, and an explicit `per-page` wins.
+  - `signers.findByEmail` asked for `per_page: 100` and therefore received 20.
+    It now requests the API's **maximum page size of 50** (larger values are
+    silently clamped to 50 by the server).
+- **Failed artifact downloads reported "API request failed".** Downloads are
+  issued with `responseType: 'arraybuffer'`, which axios also applies to error
+  responses, so JSON error bodies arrived as a Buffer and the real message was
+  discarded. `download`, `thumbnail`, `downloadPage`, `templates.downloadPage`
+  and the signer-side downloads now surface what the server actually said (e.g.
+  "Artefato não está disponível." when requesting `certificated` before signing).
+- **`signers.create` could not recover from a duplicate-email race.** It caught
+  `409`, but this API answers a duplicate email with **400**, so the recovery
+  path never ran. It now handles both and still rethrows unrelated 4xx.
 - **`waitUntilReady` reported auth and not-found failures as a timeout.** The
   poll loop swallowed every `ApiError`, so an invalid API key, a wrong account,
   or a deleted document burned the full `maxWaitMs` and then threw
@@ -79,6 +97,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `verbatimModuleSyntax` enabled (each produced zero errors). ES2022 also lets
   the error classes pass `cause` through the native `Error` constructor instead
   of assigning it behind a cast.
+- `src` is now typechecked against `@types/node` rather than `bun-types`. The
+  package ships to Node but was type-checked against Bun's globals, so a
+  Bun-only API would have compiled cleanly and failed at runtime for consumers.
 - `documents.upload` and `templates.create` were byte-for-byte the same
   load → validate → build-form → POST → assert-id sequence over different paths;
   both now share `BaseResource.uploadPdf`.
@@ -90,6 +111,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `template.pages![0].id` pattern, which previously failed to compile with
   `TS2571: Object is of type 'unknown'`. Code that cast `pages` to a local shape
   can drop the cast.
+- **`IWebhookDispatch.created_at` / `updated_at` are now `string`** (were
+  `number`). The API sends ISO-8601 (`'2026-07-15T20:04:36Z'`), so arithmetic on
+  these was always operating on a string.
+- **`ITemplateListItem` gained `pages` and lost `resource` / `account_id`.** The
+  list endpoint does return `pages` — so `template.pages` no longer fails to
+  compile — and never returned the other two. `ITemplateDetailsResponse.account_id`
+  was likewise a phantom and is gone.
+- **`documents.rename` now returns `IRenameDocumentResponse`**
+  (`Omit<IDocumentDetailsResponse, 'pages' | 'assignment'>`). The endpoint does
+  not return either field, so the old type promised a required `pages` array
+  that was `undefined` at runtime.
+- **`ICreateAssignmentPayload.copy_receivers` is documented as unreliable.** On
+  the sandbox plan the API accepts it and persists nothing — verified `[]` from
+  `create`, `list` and `details().assignment`, for both emails and signer IDs.
+  Kept (it may be plan-gated) but do not assume a CC was delivered.
 
 ## [1.5.0] - 2026-06-05
 

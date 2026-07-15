@@ -1,6 +1,6 @@
 import type { ICreateTagPayload, ITag, IUpdateTagPayload } from '../types';
 import { ValidationError } from '../errors';
-import { cleanParams } from '../utils';
+import { cleanListParams, cleanParams } from '../utils';
 import { BaseResource } from './base';
 
 /**
@@ -21,7 +21,7 @@ export class TagResource extends BaseResource {
         const id = this.accountId(accountId);
         return this.call('Failed to list tags', () =>
             this.http.get(`/accounts/${id}/tags`, {
-                params: cleanParams(params as Record<string, unknown>),
+                params: cleanListParams(params as Record<string, unknown>),
             }),
         );
     }

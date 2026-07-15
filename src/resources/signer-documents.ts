@@ -7,7 +7,7 @@ import type {
     ISignFieldEntry,
 } from '../types';
 import { ValidationError } from '../errors';
-import { cleanParams } from '../utils';
+import { cleanListParams, cleanParams } from '../utils';
 import { BaseResource } from './base';
 
 /**
@@ -37,7 +37,7 @@ export class SignerDocumentsResource extends BaseResource {
         const code = this.requireId(signerAccessCode, 'signer-access-code');
         return this.callList<IDocumentListItem>('Failed to list signer documents', () =>
             this.http.get(`/signers/${sid}/documents`, {
-                params: { 'signer-access-code': code, ...cleanParams(params) },
+                params: { 'signer-access-code': code, ...cleanListParams(params) },
             }),
         );
     }

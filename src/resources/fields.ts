@@ -7,7 +7,7 @@ import type {
     IUpdateFieldPayload,
 } from '../types';
 import { ValidationError } from '../errors';
-import { cleanParams } from '../utils';
+import { cleanListParams } from '../utils';
 import { BaseResource } from './base';
 
 /**
@@ -47,7 +47,7 @@ export class FieldsResource extends BaseResource {
         const id = this.accountId(accountId);
         return this.call('Failed to list field definitions', () =>
             this.http.get(`/accounts/${id}/fields`, {
-                params: cleanParams(params as Record<string, unknown>),
+                params: cleanListParams(params as Record<string, unknown>),
             }),
         );
     }

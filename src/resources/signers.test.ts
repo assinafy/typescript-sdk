@@ -1,6 +1,6 @@
 import { describe, test, expect, beforeEach } from 'bun:test';
 import { SignerResource } from './signers';
-import { ValidationError } from '../errors';
+import { ApiError, ValidationError } from '../errors';
 import type { AxiosInstance } from 'axios';
 
 describe('SignerResource', () => {
@@ -224,5 +224,86 @@ describe('SignerResource', () => {
             email: 'john@example.com',
             whatsapp_phone_number: '+5548999990000',
         });
+    });
+});
+
+describe('SignerResource.create duplicate-email race recovery', () => {
+    const list = (data: unknown[]) => ({ status: 200, data: { status: 200, data }, headers: {} });
+    const existing = { id: 'signer-existing', full_name: 'Ana Souza', email: 'ana@example.com' };
+
+    /**
+     * findByEmail returns nothing (so create is attempted), then the POST fails —
+     * simulating another caller winning the race in between.
+     */
+    function raceHarness(postError: ApiError) {
+        let lookups = 0;
+        const http = {
+            get: async () => {
+                lookups++;
+                // First lookup: not found. Second (post-failure): found.
+                return lookups === 1 ? list([]) : list([existing]);
+            },
+            post: async () => {
+                throw postError;
+            },
+        } as unknown as AxiosInstance;
+        return { http, lookups: () => lookups };
+    }
+
+    test('recovers from the 400 this API returns for a duplicate email', async () => {
+        // Regression: the guard previously matched only 409, but the live API
+        // answers a duplicate email with 400 — so recovery never fired.
+        const h = raceHarness(new ApiError('Um signatário com este e-mail já existe.', 400, null));
+        const result = await new SignerResource(h.http, 'acc').create({
+            full_name: 'Ana Souza',
+            email: 'ana@example.com',
+        });
+        expect(result.id).toBe('signer-existing');
+        expect(h.lookups()).toBe(2);
+    });
+
+    test('still recovers from a 409, should the API ever use it', async () => {
+        const h = raceHarness(new ApiError('Conflict', 409, null));
+        const result = await new SignerResource(h.http, 'acc').create({
+            full_name: 'Ana Souza',
+            email: 'ana@example.com',
+        });
+        expect(result.id).toBe('signer-existing');
+    });
+
+    test('rethrows an unrelated 400 instead of swallowing it', async () => {
+        // A malformed-payload 400 must not be masked: the lookup finds nothing,
+        // so the original error surfaces.
+        let lookups = 0;
+        const http = {
+            get: async () => {
+                lookups++;
+                return list([]);
+            },
+            post: async () => {
+                throw new ApiError('O atributo "full_name" é obrigatório.', 400, null);
+            },
+        } as unknown as AxiosInstance;
+        await expect(
+            new SignerResource(http, 'acc').create({ full_name: 'X', email: 'x@example.com' }),
+        ).rejects.toThrow(ApiError);
+        expect(lookups).toBe(2);
+    });
+
+    test('rethrows a 500 without attempting recovery', async () => {
+        let lookups = 0;
+        const http = {
+            get: async () => {
+                lookups++;
+                return list([]);
+            },
+            post: async () => {
+                throw new ApiError('Server error', 500, null);
+            },
+        } as unknown as AxiosInstance;
+        await expect(
+            new SignerResource(http, 'acc').create({ full_name: 'X', email: 'x@example.com' }),
+        ).rejects.toThrow(ApiError);
+        expect(lookups).toBe(1); // no second lookup — 500 is not a duplicate signal
     });
 });

@@ -178,6 +178,20 @@ export interface ICreateAssignmentPayload {
     signerIds?: string[];
     message?: string;
     expires_at?: string;
+    /**
+     * Recipients CC'd on the signature request.
+     *
+     * ⚠️ Observed to be **silently dropped** on the sandbox plan: values sent
+     * here came back as `[]` from `assignments.create`, `assignments.list` and
+     * `documents.details().assignment` alike, for both email addresses and
+     * signer IDs. The field is accepted (no error) but nothing is persisted.
+     *
+     * It is retained because this was verified on a single sandbox account and
+     * may be plan-gated — the WhatsApp channel on the same account is rejected
+     * with an explicit plan error, so silent no-ops for un-provisioned features
+     * are plausible. **Do not rely on it without verifying against your own
+     * account**, and do not treat a CC as delivered.
+     */
     copy_receivers?: string[];
     /** Field placement entries used when `method` is `collect`. */
     entries?: unknown[];
@@ -346,6 +360,19 @@ export interface IDocumentListParams extends IListParams {
     /** Comma-separated list of tag IDs (AND semantics). */
     tags?: string;
 }
+
+/**
+ * Response of `documents.rename` (`PATCH /documents/{documentId}`).
+ *
+ * The rename endpoint returns the document **without** `pages` or
+ * `assignment` — verified against the live API, which echoes only
+ * `resource`, `id`, `account_id`, `template_id`, `name`, `status`,
+ * `artifacts`, `signing_url`, `is_closed`, `decline_reason`, `declined_by`,
+ * `tags`, `created_at` and `updated_at`. Typing it as a full
+ * {@link IDocumentDetailsResponse} would promise a required `pages` array that
+ * is absent at runtime, so `result.pages.length` would throw.
+ */
+export type IRenameDocumentResponse = Omit<IDocumentDetailsResponse, 'pages' | 'assignment'>;
 
 /** Query parameters accepted by `documents.search`. */
 export interface IDocumentSearchParams extends IListParams {
@@ -531,8 +558,10 @@ export interface IWebhookDispatch {
     http_status: number | null;
     response_body: string | null;
     error: string | null;
-    created_at: number;
-    updated_at?: number;
+    /** ISO-8601 UTC timestamp, e.g. `'2026-07-15T20:04:36Z'`. */
+    created_at: string;
+    /** ISO-8601 UTC timestamp, e.g. `'2026-07-15T20:04:36Z'`. */
+    updated_at?: string;
 }
 
 export interface IWebhookDispatchListParams extends IListParams {
@@ -581,13 +610,19 @@ export interface IUpdateTemplatePayload {
 
 /** Template list item (paginated). */
 export interface ITemplateListItem {
-    resource?: string;
     id: string;
     name: string;
     document_name?: string | null;
     message?: string | null;
     status: string;
-    account_id?: string;
+    /**
+     * Rendered pages, each with a `download_url`. Empty until the template
+     * finishes processing (`status: 'Ready'`).
+     *
+     * The list endpoint does return `pages` — contrary to what
+     * `templates.get`'s documentation implies.
+     */
+    pages?: IPage[];
     roles?: ITemplateRole[];
     /** Tags attached to the template itself (inline `{ id, name }` shape). */
     tags?: IInlineTag[];
@@ -638,7 +673,6 @@ export interface ITemplateDetailsResponse {
     document_name?: string | null;
     message?: string | null;
     status: string;
-    account_id?: string;
     /** Empty until the template finishes processing (`status: 'Ready'`). */
     pages?: IPage[];
     roles?: ITemplateRole[];

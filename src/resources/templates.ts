@@ -5,7 +5,7 @@ import type {
     ITemplateListItem,
     IUpdateTemplatePayload,
 } from '../types';
-import { cleanParams } from '../utils';
+import { cleanListParams, cleanParams } from '../utils';
 import { BaseResource } from './base';
 import type { DocumentUploadSource } from './upload';
 
@@ -54,15 +54,18 @@ export class TemplateResource extends BaseResource {
     async list(params: IListParams = {}, accountId?: string): Promise<ITemplateListResponse> {
         const id = this.accountId(accountId);
         return this.callList<ITemplateListItem>('Failed to list templates', () =>
-            this.http.get(`/accounts/${id}/templates`, { params: cleanParams(params) }),
+            this.http.get(`/accounts/${id}/templates`, { params: cleanListParams(params) }),
         );
     }
 
     /**
      * Get a template by ID (`GET /accounts/{id}/templates/{template_id}`).
      *
-     * Unlike the list endpoint, the single-template response includes `pages`
-     * (with per-page `download_url`) and `default_document_tags`.
+     * Returns the same shape as {@link TemplateResource.list} plus
+     * `default_document_tags` (the tags auto-applied to every document created
+     * from this template) and `resource`. Both endpoints return `pages` with
+     * per-page `download_url`, so fetching a template again purely to read its
+     * pages is unnecessary.
      */
     async get(templateId: string, accountId?: string): Promise<ITemplateDetailsResponse> {
         const id = this.accountId(accountId);

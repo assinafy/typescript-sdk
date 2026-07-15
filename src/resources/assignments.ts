@@ -11,7 +11,7 @@ import type {
     SignerReference,
 } from '../types';
 import { ValidationError } from '../errors';
-import { cleanParams } from '../utils';
+import { cleanListParams, cleanParams } from '../utils';
 import { BaseResource } from './base';
 
 /**
@@ -138,7 +138,7 @@ export class AssignmentResource extends BaseResource {
         const id = this.accountId(accountId);
         return this.callList<IAssignment>('Failed to list assignments', () =>
             this.http.get('/assignments', {
-                params: { accountId: id, ...cleanParams(params) },
+                params: { accountId: id, ...cleanListParams(params) },
             }),
         );
     }
