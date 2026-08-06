@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.1.1] - 2026-08-06
+
+Maintenance only. The published `dist/` is byte-identical to 2.1.0; no runtime,
+type, or API surface changed.
+
+### Changed
+
+- Dependabot no longer proposes `typescript` 7.x. TypeScript 7 is the native
+  rewrite: the `typescript` entrypoint exports only `{version,
+  versionMajorMinor}` and the compiler API moved to `typescript/unstable/*`
+  with a different shape. That breaks `tsup --dts` (bundled `rollup-plugin-dts`
+  reads `ts.sys.useCaseSensitiveFileNames` at module load) and falls outside
+  `typescript-eslint`'s `>=4.8.4 <6.1.0` peer range. The ignore is documented
+  in `.github/dependabot.yml` and should be removed once both support TS 7.
+
 ## [2.1.0] - 2026-08-06
 
 ### Added
@@ -442,7 +457,8 @@ fields (`cpf`, `whatsapp_phone_number`) with the PHP SDK and n8n node.
 - High-level `uploadAndRequestSignatures` helper on `AssinafyClient`.
 - `PaginatedResult<T>` with parsed `X-Pagination-*` header meta.
 
-[Unreleased]: https://github.com/assinafy/typescript-sdk/compare/v2.1.0...HEAD
+[Unreleased]: https://github.com/assinafy/typescript-sdk/compare/v2.1.1...HEAD
+[2.1.1]: https://github.com/assinafy/typescript-sdk/compare/v2.1.0...v2.1.1
 [2.1.0]: https://github.com/assinafy/typescript-sdk/compare/v2.0.0...v2.1.0
 [2.0.0]: https://github.com/assinafy/typescript-sdk/releases/tag/v2.0.0
 [1.5.0]: https://github.com/assinafy/typescript-sdk/releases/tag/v1.5.0

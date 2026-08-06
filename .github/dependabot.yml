@@ -18,3 +18,13 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    ignore:
+      # TypeScript 7 is the native (Go) rewrite. Its package exports only
+      # `{version, versionMajorMinor}` from `typescript` — the JS compiler API
+      # (`ts.sys`, `ts.createProgram`, …) moved to `typescript/unstable/*` with a
+      # different shape. Nothing in this toolchain reads that yet:
+      #   - tsup --dts → rollup-plugin-dts crashes on `ts.sys.useCaseSensitiveFileNames`
+      #   - typescript-eslint peer range is >=4.8.4 <6.1.0
+      # Drop this ignore once both support the TS 7 API, then bump deliberately.
+      - dependency-name: typescript
+        versions: ['>=7']
