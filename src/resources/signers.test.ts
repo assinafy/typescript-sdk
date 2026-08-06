@@ -22,6 +22,29 @@ describe('SignerResource', () => {
         await expect(signerResource.update('', { full_name: 'Test' })).rejects.toThrow(ValidationError);
     });
 
+    test('validates partial updates before making a request', async () => {
+        let called = false;
+        const http = {
+            put: async () => {
+                called = true;
+                return { status: 200, data: { status: 200, data: { id: 'signer-1' } } };
+            },
+        } as unknown as AxiosInstance;
+        const resource = new SignerResource(http, 'acc');
+
+        await expect(resource.update('signer-1', {})).rejects.toThrow(ValidationError);
+        await expect(resource.update('signer-1', { full_name: '   ' })).rejects.toThrow(
+            ValidationError,
+        );
+        await expect(resource.update('signer-1', { email: 'invalid' })).rejects.toThrow(
+            ValidationError,
+        );
+        await expect(
+            resource.update('signer-1', { whatsapp_phone_number: ' ' }),
+        ).rejects.toThrow(ValidationError);
+        expect(called).toBe(false);
+    });
+
     test('throws when deleting without signer ID', async () => {
         await expect(signerResource.delete('')).rejects.toThrow(ValidationError);
     });
@@ -39,8 +62,16 @@ describe('SignerResource', () => {
         ).rejects.toThrow(ValidationError);
     });
 
-    test('rejects when neither email nor whatsapp number is provided', async () => {
-        await expect(signerResource.create({ full_name: 'Test' })).rejects.toThrow(ValidationError);
+    test('rejects a missing signer name before requesting', async () => {
+        await expect(
+            signerResource.create({ full_name: '   ', email: 'test@example.com' }),
+        ).rejects.toThrow(ValidationError);
+    });
+
+    test('creates the official name-only signer payload', async () => {
+        await expect(signerResource.create({ full_name: 'Test' })).resolves.toMatchObject({
+            id: expect.any(String),
+        });
     });
 
     test('creates a whatsapp-only signer without an email lookup', async () => {
@@ -176,6 +207,48 @@ describe('SignerResource', () => {
         expect(result?.id).toBe('1');
     });
 
+    test('findByEmail returns null when the list request 404s', async () => {
+        // The 404 → null recovery branch: a 404 ApiError from list() is treated
+        // as "no such signer", not surfaced as an error.
+        const trackingAxios = {
+            ...mockAxios,
+            get: async () => {
+                throw new ApiError('Not found', 404, null);
+            },
+        } as unknown as AxiosInstance;
+        const resource = new SignerResource(trackingAxios, 'acc');
+        const result = await resource.findByEmail('nobody@example.com');
+        expect(result).toBeNull();
+    });
+
+    test('get fetches a signer by id and returns it', async () => {
+        let capturedUrl = '';
+        const signer = {
+            resource: 'signer',
+            id: 'sig-1',
+            full_name: 'Ana Souza',
+            email: 'ana@example.com',
+            whatsapp_phone_number: null,
+            has_accepted_terms: false,
+        };
+        const trackingAxios = {
+            ...mockAxios,
+            get: async (url: string) => {
+                capturedUrl = url;
+                return { status: 200, data: { status: 200, data: signer } };
+            },
+        } as unknown as AxiosInstance;
+        const resource = new SignerResource(trackingAxios, 'acc');
+        const result = await resource.get('sig-1');
+        expect(capturedUrl).toBe('/accounts/acc/signers/sig-1');
+        expect(result).toEqual(signer);
+    });
+
+    test('get throws when signer ID is missing', async () => {
+        const resource = new SignerResource(mockAxios, 'acc');
+        await expect(resource.get('')).rejects.toThrow(ValidationError);
+    });
+
     test('create reuses an existing signer by email before posting', async () => {
         let postCalled = false;
         const trackingAxios = {
@@ -305,5 +378,124 @@ describe('SignerResource.create duplicate-email race recovery', () => {
             new SignerResource(http, 'acc').create({ full_name: 'X', email: 'x@example.com' }),
         ).rejects.toThrow(ApiError);
         expect(lookups).toBe(1); // no second lookup — 500 is not a duplicate signal
+    });
+});
+
+describe('SignerResource public request contracts', () => {
+    test('update PUTs the normalised payload and returns the updated signer', async () => {
+        let request: { url: string; body: unknown } | undefined;
+        const updated = {
+            id: 'signer-1',
+            full_name: 'Updated Name',
+            email: 'signer@example.com',
+            whatsapp_phone_number: '+5548999990000',
+        };
+        const http = {
+            put: async (url: string, body: unknown) => {
+                request = { url, body };
+                return { status: 200, data: { status: 200, data: updated } };
+            },
+        } as unknown as AxiosInstance;
+
+        const result = await new SignerResource(http, 'acc').update('signer-1', {
+            full_name: 'Updated Name',
+            phone: '+5548999990000',
+            cpf: '390.533.447-05',
+        });
+
+        expect(request).toEqual({
+            url: '/accounts/acc/signers/signer-1',
+            body: {
+                full_name: 'Updated Name',
+                whatsapp_phone_number: '+5548999990000',
+                cpf: '39053344705',
+            },
+        });
+        expect(result).toEqual(updated as never);
+    });
+
+    test('delete calls the account-scoped signer endpoint and resolves void', async () => {
+        let url = '';
+        const http = {
+            delete: async (requestUrl: string) => {
+                url = requestUrl;
+                return { status: 204 };
+            },
+        } as unknown as AxiosInstance;
+
+        const result: void = await new SignerResource(http, 'acc').delete('signer-1');
+        expect(url).toBe('/accounts/acc/signers/signer-1');
+        expect(result).toBeUndefined();
+    });
+
+    test('encodes account and signer IDs as independent path segments', async () => {
+        let url = '';
+        const http = {
+            get: async (requestUrl: string) => {
+                url = requestUrl;
+                return {
+                    status: 200,
+                    data: {
+                        status: 200,
+                        data: { id: 'signer/1', full_name: 'Test', email: null },
+                    },
+                };
+            },
+        } as unknown as AxiosInstance;
+
+        await new SignerResource(http, 'account/root').get('signer/1');
+        expect(url).toBe('/accounts/account%2Froot/signers/signer%2F1');
+    });
+
+    test('findByEmail propagates list failures other than 404', async () => {
+        const error = new ApiError('Server unavailable', 503, null);
+        let calls = 0;
+        const http = {
+            get: async () => {
+                calls++;
+                throw error;
+            },
+        } as unknown as AxiosInstance;
+
+        await expect(
+            new SignerResource(http, 'acc').findByEmail('signer@example.com'),
+        ).rejects.toBe(error);
+        expect(calls).toBe(1);
+    });
+
+    test('findByEmail rejects malformed addresses before listing', async () => {
+        let called = false;
+        const http = {
+            get: async () => {
+                called = true;
+                return { status: 200, data: { status: 200, data: [] }, headers: {} };
+            },
+        } as unknown as AxiosInstance;
+
+        await expect(new SignerResource(http, 'acc').findByEmail('invalid')).rejects.toThrow(
+            ValidationError,
+        );
+        expect(called).toBe(false);
+    });
+
+    test('create preserves caller metadata in the wire payload', async () => {
+        let body: unknown;
+        const http = {
+            post: async (_url: string, requestBody: unknown) => {
+                body = requestBody;
+                return { status: 200, data: { status: 200, data: { id: 'signer-1' } } };
+            },
+        } as unknown as AxiosInstance;
+
+        await new SignerResource(http, 'acc').create({
+            full_name: 'Metadata Signer',
+            whatsapp_phone_number: '+5548999990000',
+            metadata: { customer_id: 'customer-1' },
+        });
+        expect(body).toEqual({
+            full_name: 'Metadata Signer',
+            whatsapp_phone_number: '+5548999990000',
+            metadata: { customer_id: 'customer-1' },
+        });
     });
 });

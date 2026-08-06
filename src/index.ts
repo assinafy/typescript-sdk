@@ -8,6 +8,7 @@ export type { DocumentUploadSource, IDocumentUploadOptions } from './resources/d
 export { MAX_UPLOAD_BYTES } from './resources/upload';
 export { SignerResource } from './resources/signers';
 export { WorkspaceResource } from './resources/workspaces';
+export type { AccountLogoUploadSource } from './resources/workspaces';
 export { AssignmentResource, buildAssignmentPayload } from './resources/assignments';
 export { WebhookResource, DEFAULT_WEBHOOK_EVENTS } from './resources/webhooks';
 export { TemplateResource } from './resources/templates';
@@ -15,4 +16,5 @@ export { TagResource } from './resources/tags';
 export { AuthenticationResource } from './resources/authentication';
 export { FieldsResource } from './resources/fields';
 export { SignerDocumentsResource } from './resources/signer-documents';
+export { UserResource } from './resources/users';
 export { WebhookVerifier } from './support/webhook-verifier';

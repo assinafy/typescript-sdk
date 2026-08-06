@@ -15,6 +15,7 @@ function mockHttp(): {
             if (url.includes('/download')) {
                 return { status: 200, data: Buffer.from('jpeg').buffer };
             }
+            if (url === '/accounts/acc/templates') return ok([]);
             return ok({ id: 'tmpl-1', name: 'T', status: 'Ready' });
         },
         post: async (url: string, body: unknown, config?: unknown) => {
@@ -127,6 +128,30 @@ describe('TemplateResource', () => {
         expect(calls[0]?.url).toBe('/accounts/acc/templates/tmpl-1');
         expect(calls[0]?.body).toEqual({ name: 'Renamed' });
         expect(result.name).toBe('Renamed');
+    });
+
+    test('update PUTs both name and message to the template endpoint', async () => {
+        const { http, calls } = mockHttp();
+        const templates = new TemplateResource(http, 'acc');
+        await templates.update('tmpl-1', { name: 'NDA v2', message: 'Please sign' });
+        expect(calls[0]?.method).toBe('PUT');
+        expect(calls[0]?.url).toBe('/accounts/acc/templates/tmpl-1');
+        expect(calls[0]?.body).toEqual({ name: 'NDA v2', message: 'Please sign' });
+    });
+
+    test('update validates the template id', async () => {
+        const { http } = mockHttp();
+        const templates = new TemplateResource(http, 'acc');
+        await expect(templates.update('', { name: 'x' })).rejects.toThrow(ValidationError);
+    });
+
+    test('get requests the single-template endpoint with the account path', async () => {
+        const { http, calls } = mockHttp();
+        const templates = new TemplateResource(http, 'acc');
+        const result = await templates.get('103ad2171db7979468c3e97eb067');
+        expect(calls[0]?.method).toBe('GET');
+        expect(calls[0]?.url).toBe('/accounts/acc/templates/103ad2171db7979468c3e97eb067');
+        expect(result.status).toBe('Ready');
     });
 
     test('delete DELETEs the template and returns void', async () => {

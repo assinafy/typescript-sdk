@@ -19,6 +19,7 @@
         "verbatimModuleSyntax": true,
         "allowUnusedLabels": false,
         "allowUnreachableCode": false,
+        "ignoreDeprecations": "6.0",
         "esModuleInterop": true,
         "skipLibCheck": true,
         "forceConsistentCasingInFileNames": true,

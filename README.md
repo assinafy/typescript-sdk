@@ -2,16 +2,22 @@
 
 TypeScript SDK for the [Assinafy API](https://api.assinafy.com.br/v1/docs) — a Brazilian digital signature platform.
 
-Covers the server-side surface of the API: documents, signers, assignments, templates, tags, workspaces, webhooks, field definitions, authentication, public/signer-side flows, and the high-level `uploadAndRequestSignatures` helper.
+Covers all 89 operations in the current official OpenAPI document: accounts,
+authentication, users, documents, assignments, signers, signer-side flows,
+templates, tags, fields, webhooks, branding, statistics, and the high-level
+`uploadAndRequestSignatures` workflow. Five additional template-management
+routes exposed by the live API are retained as compatibility extensions.
 
-Deliberately not wrapped: the browser-redirect OAuth endpoints (`/auth/authenticate`, `/auth/link-social-login`, `/login-callback`), which a server-side SDK cannot meaningfully drive, and the account `theme`/`logo` branding routes.
+See [API coverage](docs/API_COVERAGE.md) for the exhaustive operation map and
+[compatibility notes](docs/COMPATIBILITY.md) for the few places where live
+behavior differs from the published schema.
 
 ## Requirements
 
-- Node.js 22+ for the built-in `FormData` / `Blob` APIs used by uploads. Tested
-  on 22 (maintenance LTS) and 24 (active LTS); Node 20 reached end-of-life in
-  April 2026 and is no longer supported.
-- or Bun 1.0+
+- Node.js 22+ for the built-in `FormData` / `Blob` APIs used by uploads. Packed
+  CJS and ESM imports are tested on 22 (maintenance LTS), 24 (active LTS), and
+  26 (Current); Node 20 reached end-of-life in April 2026 and is unsupported.
+- or Bun 1.3.14 (the version pinned for development and CI)
 
 ## Installation
 
@@ -36,7 +42,6 @@ import { AssinafyClient } from '@assinafy/sdk';
 const client = new AssinafyClient({
   apiKey: process.env.ASSINAFY_API_KEY!,
   accountId: process.env.ASSINAFY_ACCOUNT_ID!,
-  webhookSecret: process.env.ASSINAFY_WEBHOOK_SECRET,
 });
 
 const result = await client.uploadAndRequestSignatures({
@@ -59,35 +64,53 @@ The API supports two authentication methods. Prefer `apiKey` — it maps to the 
 // Preferred: X-Api-Key header
 new AssinafyClient({ apiKey: 'k_xxx', accountId: 'acc_xxx' });
 
-// Legacy: Authorization: Bearer <token>
+// Access token: Authorization: Bearer <token>
 new AssinafyClient({ token: 'jwt_xxx', accountId: 'acc_xxx' });
 ```
+
+Credentials are optional at construction time. A credentialless client uses a
+separate, auth-free transport for public authentication and signer-access-code
+operations, so an API key or Bearer token is never attached accidentally:
+
+```ts
+const publicClient = new AssinafyClient({
+  baseUrl: 'https://sandbox.assinafy.com.br/v1',
+});
+
+await publicClient.auth.login('me@example.com', 'password');
+await publicClient.documents.getPublic(documentId);
+await publicClient.signerDocuments.self(signerAccessCode);
+```
+
+Protected methods still require `apiKey` or `token`; the API returns its normal
+`401` response if one is called without credentials.
 
 ## Configuration
 
 | Option          | Type     | Default                                 | Description                                   |
 | --------------- | -------- | --------------------------------------- | --------------------------------------------- |
 | `apiKey`        | string   | —                                       | Preferred credential (sent as `X-Api-Key`).   |
-| `token`         | string   | —                                       | Legacy access token (sent as `Bearer`).       |
+| `token`         | string   | —                                       | Access token (sent as `Authorization: Bearer`). |
 | `accountId`     | string   | —                                       | Default workspace/account ID.                  |
 | `baseUrl`       | string   | `https://api.assinafy.com.br/v1`        | Override base URL (e.g. the sandbox).          |
-| `webhookSecret` | string   | —                                       | Shared secret used by `WebhookVerifier`.       |
+| `webhookSecret` | string   | —                                       | Opt-in HMAC secret used by `WebhookVerifier`; see its [contract caveat](docs/COMPATIBILITY.md#webhook-signature-verification-is-not-in-the-openapi-contract). |
 | `timeout`       | number   | `30000`                                 | Request timeout in milliseconds.               |
-| `maxRetries`    | number   | `2`                                     | Auto-retries on HTTP 429, honoring `Retry-After`. `0` disables. |
+| `maxRetries`    | number   | `2`                                     | Auto-retries eligible HTTP 429 responses, honoring `Retry-After`. `0` disables. |
 | `logger`        | `Logger` | no-op                                   | Optional `{debug,info,warn,error}` logger.     |
 
 ### Rate limiting
 
-The API allows ~120 requests/minute and returns `X-Rate-Limit-*` headers. On an
-HTTP `429`, the client automatically retries up to `maxRetries` times, waiting
-for the server-provided `Retry-After` (or `X-Rate-Limit-Reset`) delay before
-each attempt. Only `429` is retried, so non-idempotent calls are safe.
+On an HTTP `429`, the client automatically retries up to `maxRetries` times,
+waiting for the server-provided `Retry-After` (or `X-Rate-Limit-Reset`) delay
+before each attempt. Automatic replay is limited to `GET`, `HEAD`, `OPTIONS`,
+`PUT`, and `DELETE`. A `POST` or `PATCH` is retried only when the request has a
+non-empty `Idempotency-Key` header. No other HTTP status is retried.
 
 ### Factories
 
 ```ts
 // Positional factory
-const client = AssinafyClient.create('api-key', 'account-id', { webhookSecret: 'shhh' });
+const client = AssinafyClient.create('api-key', 'account-id');
 
 // From a plain object (accepts snake_case or camelCase keys)
 const client = AssinafyClient.fromConfig({
@@ -98,7 +121,9 @@ const client = AssinafyClient.fromConfig({
 
 ## Endpoint coverage
 
-Every public endpoint documented in https://api.assinafy.com.br/v1/docs is covered. The table below maps each resource to its API surface.
+All 89 operations documented at https://api.assinafy.com.br/v1/docs are
+covered. The table below is the resource-level summary; the auditable,
+operation-by-operation ledger is in [docs/API_COVERAGE.md](docs/API_COVERAGE.md).
 
 | Resource              | Endpoints                                                                                                                                                                                                                                          |
 | --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -107,16 +132,27 @@ Every public endpoint documented in https://api.assinafy.com.br/v1/docs is cover
 | `client.assignments`  | **list**, create, estimateCost, resetExpiration, resendNotification, estimateResendCost, listWhatsAppNotifications                                                                                                                                  |
 | `client.templates`    | **create**, list, get, **update**, **delete**, downloadPage                                                                                                                                                                                        |
 | `client.tags`         | list, create, update, delete                                                                                                                                                                                                                       |
-| `client.workspaces`   | create, list, get, update, delete                                                                                                                                                                                                                  |
+| `client.workspaces`   | create, list, get, update, delete, getTheme, downloadLogo, uploadLogo, deleteLogo, getStats                                                                                                                                                        |
 | `client.webhooks`     | register, get, inactivate, listEventTypes, listDispatches, retryDispatch                                                                                                                                                                           |
 | `client.fields`       | create, list, get, update, delete, validate, validateMultiple, listTypes                                                                                                                                                                           |
-| `client.auth`         | login, socialLogin, createApiKey, getApiKey, deleteApiKey, changePassword, requestPasswordReset, resetPassword                                                                                                                                     |
+| `client.auth`         | getSocialLoginUrl, getSocialLoginCallbackUrl, login, socialLogin, linkSocialLogin, createApiKey, getApiKey, deleteApiKey, changePassword, requestPasswordReset, resetPassword                                                                      |
+| `client.users`        | getCurrent, getStats                                                                                                                                                                                                                              |
 | `client.signerDocuments` | getCurrent, list, **search**, download, signMultiple, declineMultiple, self, acceptTerms, verifyEmail, confirmData, uploadSignature, downloadSignature, getAssignment, sign, decline                                                            |
 | `client.webhookVerifier` | verify, extractEvent, getEventType, getEventData                                                                                                                                                                                                |
 
+Every HTTP wrapper has TypeScript-checked request/response shapes and
+method-level JSDoc covering the wire payload, return shape, validation,
+relevant API errors, and a copyable example. Reusable and OpenAPI schema-level
+payloads are exported as named types; small method-local option bags remain
+inline in the generated declarations. Editors expose the reference on hover,
+and declaration files ship with the package. The coverage ledger links those
+typed methods back to each upstream operation without duplicating the schema.
+
 ## Resources
 
-Most account-scoped methods accept an optional `accountId` that overrides the client default. Workspace `get/update/delete` always require an explicit account ID.
+Most account-scoped methods accept an optional `accountId` that overrides the
+client default. Workspace `get`, `update`, `delete`, branding, and statistics
+methods always require an explicit account ID.
 
 ### Documents
 
@@ -167,21 +203,30 @@ await client.documents.isFullySigned(doc.id);
 await client.documents.getSigningProgress(doc.id);
 await client.documents.delete(doc.id);
 
-// Verify a signed document by its SHA-1 hash
+// Verify a signed document by its Assinafy signature hash
 await client.documents.verify('FE32EDDADE7CBDDCBB934E7402047450B0E59C02');
 
 // Public endpoints (no auth)
 await client.documents.getPublic(doc.id);
-await client.documents.sendToken(doc.id, 'jane@example.com', 'email');
+// Official request body: { email: 'jane@example.com' }
+await client.documents.sendToken(doc.id, 'jane@example.com');
 
-// Tags attached to a document (by tag name; unknown names are auto-created)
+// Explicit compatibility overload for older deployments:
+// { recipient: '+5548999990000', channel: 'whatsapp' }
+await client.documents.sendToken(doc.id, '+5548999990000', 'whatsapp');
+
+// The current OpenAPI contract requires existing tag IDs.
+const contractsTag = await client.tags.create({ name: 'Contracts' });
+const quarterTag = await client.tags.create({ name: '2026-Q1' });
+const urgentTag = await client.tags.create({ name: 'Urgent' });
 await client.documents.listTags(doc.id);
-await client.documents.replaceTags(doc.id, ['Contracts', '2026-Q1']); // [] detaches all
-await client.documents.addTags(doc.id, ['Urgent']);                   // append, idempotent
-await client.documents.detachTag(doc.id, tagId);                      // remove one
+await client.documents.replaceTags(doc.id, [contractsTag.id, quarterTag.id]); // [] detaches all
+await client.documents.addTags(doc.id, [urgentTag.id]);                         // append
+await client.documents.detachTag(doc.id, urgentTag.id);                         // remove one
 ```
 
-Uploads are validated locally: only `.pdf` files up to 25 MB are accepted (the API's current hard limit).
+Uploads are validated locally: only `.pdf` files up to 25 MB whose bytes begin
+with the PDF magic header (`%PDF-`) are accepted (the API's current hard limit).
 
 List endpoints return `{ data, meta }` where `meta` is populated from the `X-Pagination-*` headers returned by the API.
 
@@ -198,11 +243,14 @@ await client.signers.create({
 //     whatsapp_phone_number: '+5548999990000', has_accepted_terms: false }
 // (note: `cpf` is accepted on input but never echoed back by the API)
 
-// `email` is optional — a WhatsApp-only signer is valid (at least one is required)
+// Both contacts are optional in the create endpoint. A WhatsApp-only signer:
 await client.signers.create({
   full_name: 'WhatsApp Only',
   whatsapp_phone_number: '+5548999990000',
 });
+
+// Name-only is valid too, but cannot be notified until a contact is added.
+await client.signers.create({ full_name: 'Contact Pending' });
 
 // PHP SDK compatibility aliases are also accepted
 await client.signers.create({
@@ -246,8 +294,8 @@ await client.assignments.create(documentId, {
   ],
 });
 
-// Estimate cost (signers may omit `id` when only the channel matters) → ICostEstimate
-await client.assignments.estimateCost(documentId, { signers: ['signer-1'] });
+// Estimate cost (the endpoint prices channel descriptors, not signer IDs) → ICostEstimate
+await client.assignments.estimateCost(documentId, { signers: [{}] }); // default Email
 await client.assignments.estimateCost(documentId, {
   signers: [{ verification_method: 'Whatsapp' }],
 });
@@ -283,9 +331,17 @@ await client.signerDocuments.decline(documentId, assignmentId, accessCode, 'No l
 
 ### Templates
 
+`templates.list()` is part of the current OpenAPI document. The live API also
+exposes five template-management routes—`create`, `get`, `update`, `delete`,
+and `downloadPage`—that are retained as tested compatibility extensions even
+though they are absent from that document. See
+[compatibility notes](docs/COMPATIBILITY.md#template-management-live-extensions).
+Template status casing has varied between published examples and live
+responses; compare `template.status.toLowerCase()` when branching on it.
+
 ```ts
 // Create a template by uploading a PDF (multipart). The template starts in
-// `Uploaded` status and becomes `Ready` once its pages are processed.
+// an uploaded state and becomes ready once its pages are processed.
 const created = await client.templates.create(
   { filePath: './nda.pdf' },          // or { buffer, fileName: 'nda.pdf' }
   { name: 'NDA template' },
@@ -301,18 +357,28 @@ const created = await client.templates.create(
 const { data, meta } = await client.templates.list({ search: 'NDA', per_page: 20 });
 const template = await client.templates.get(created.id);   // includes pages[] + default_document_tags
 await client.templates.update(created.id, { name: 'NDA v2', message: 'Please sign' });
-await client.templates.downloadPage(created.id, template.pages![0].id); // → Buffer (JPEG)
+const firstPage = template.pages?.[0];
+if (firstPage) await client.templates.downloadPage(created.id, firstPage.id); // → Buffer (JPEG)
 await client.templates.delete(created.id);
 
-// Create a *document* from a template (each signer maps to a template role)
+// Create a document from an existing, configured template. Fresh uploads have
+// only an Editor role; add signer roles in Assinafy's editor first.
+const configured = await client.templates.get(templateId);
+const signerRole = configured.roles?.find(
+  (role) => typeof role.assignment_type === 'string'
+    && role.assignment_type.toLowerCase() !== 'editor',
+);
+if (!signerRole) throw new Error('Template has no signer role');
 await client.documents.createFromTemplate(
   templateId,
-  [{ role_id: template.roles![0].id, id: signerId, verification_method: 'Email', notification_methods: ['Email'] }],
+  [{ role_id: signerRole.id, id: signerId, verification_method: 'Email', notification_methods: ['Email'] }],
   { name: 'NDA - John Doe', message: 'Please sign at your earliest convenience.' },
 );
 
 // Estimate the cost before creating → ICostEstimate
-await client.documents.estimateCostFromTemplate(templateId, [{ role_id: 'role_id', id: signerId }]);
+await client.documents.estimateCostFromTemplate(templateId, [
+  { role_id: 'role_id', verification_method: 'Email', notification_methods: ['Email'] },
+]);
 // → { documents: 1, total_credits: 0, document_balance: 67, credit_balance: 0,
 //     has_sufficient_resources: true, blocking_reason: null, breakdown: [], … }
 ```
@@ -337,12 +403,49 @@ Attach/detach tags on a specific document via `client.documents.listTags / repla
 
 ### Workspaces
 
+The official create/update request schemas define `name` and
+`notification_sender_type`. The sandbox also accepts the color fields shown
+below; they are retained as a documented compatibility extension.
+
 ```ts
-await client.workspaces.create({ name: 'My Workspace', primary_color: '#ff0066' });
+// Colours are 6-char hex WITHOUT a leading '#' (unlike tags, which strip it).
+// '#ff0066' is rejected — the account endpoints want exactly 6 characters.
+await client.workspaces.create({
+  name: 'My Workspace',
+  notification_sender_type: 'Account',
+  primary_color: 'ff0066',
+  secondary_color: '0066ff',
+});
+// → { id, name, primary_color: 'ff0066', secondary_color: '0066ff', created_at }
 await client.workspaces.list();
 await client.workspaces.get(accountId);
-await client.workspaces.update(accountId, { name: 'Renamed' });
+await client.workspaces.update(accountId, {
+  name: 'Renamed',
+  notification_sender_type: 'User',
+  primary_color: '112233',
+});
+
+// Branding
+const theme = await client.workspaces.getTheme(accountId);
+const logo = await client.workspaces.downloadLogo(accountId); // Buffer
+await client.workspaces.uploadLogo(accountId, { filePath: './logo.png' });
+await client.workspaces.uploadLogo(accountId, {
+  buffer: logoBuffer,
+  fileName: 'logo.png',
+  contentType: 'image/png',
+});
+await client.workspaces.deleteLogo(accountId);
+
+// Latest 12 months by default; daily statistics require a YYYY-MM month.
+await client.workspaces.getStats(accountId);
+await client.workspaces.getStats(accountId, {
+  granularity: 'daily',
+  month: '2026-06',
+});
+
 await client.workspaces.delete(accountId);
+// If the API reports deletion restrictions, explicitly opt in to overriding them:
+await client.workspaces.delete(restrictedAccountId, { force: true });
 ```
 
 ### Field definitions
@@ -377,8 +480,14 @@ await client.fields.listTypes();
 Most server-side integrations should just use `X-Api-Key` directly. Use these endpoints when you need to bootstrap a session for a human user.
 
 ```ts
+// Browser OAuth: redirect the user to this URL. The callback helper returns the
+// Assinafy callback URL for provider configuration; neither follows a redirect.
+const oauthStart = client.auth.getSocialLoginUrl('google');
+const oauthCallback = client.auth.getSocialLoginCallbackUrl();
+
 const { access_token, user, accounts } = await client.auth.login('me@example.com', 'pw');
 await client.auth.socialLogin({ provider: 'google', token: 'google-id-token', has_accepted_terms: true });
+await client.auth.linkSocialLogin({ provider: 'google', token: 'google-id-token' });
 
 // Personal API key
 await client.auth.createApiKey('current-password');
@@ -389,6 +498,23 @@ await client.auth.deleteApiKey();
 await client.auth.changePassword({ email, password: 'current', new_password: 'next' });
 await client.auth.requestPasswordReset('me@example.com');
 await client.auth.resetPassword({ email, token: 'tk', new_password: 'next' });
+```
+
+### Authenticated user
+
+```ts
+const user = await client.users.getCurrent();
+// → { id, name, email, telephone, government_id, is_email_verified,
+//     has_accepted_terms, created_at, to_be_deleted_at }
+
+// Cross-account document funnel, latest 12 monthly periods by default.
+const monthly = await client.users.getStats();
+const daily = await client.users.getStats({
+  granularity: 'daily',
+  month: '2026-06',
+});
+// Each row includes period, documents_uploaded, documents_sent,
+// signature_requests by channel/view/completion, and documents_certified.
 ```
 
 ### Webhooks
@@ -416,22 +542,35 @@ await client.webhooks.retryDispatch(dispatchId);
 
 ### Webhook verification
 
-Webhook payloads are signed with HMAC-SHA256 of the raw body using the workspace `webhookSecret`. Assinafy sends the hex digest in the `X-Assinafy-Signature` header.
+`WebhookVerifier` is an opt-in HMAC-SHA256 utility for integrations whose
+Assinafy environment provides a shared secret and signature header. The
+current official OpenAPI document does **not** define a webhook signature
+scheme or header name. Confirm the delivery contract for your environment
+before enabling this check; do not reject production callbacks based on an
+assumed header. The example below uses an application-configured header name.
 
 ```ts
 import express from 'express';
 
+const webhookSecret = process.env.ASSINAFY_WEBHOOK_SECRET;
+const signatureHeader = process.env.ASSINAFY_SIGNATURE_HEADER;
+if (!webhookSecret || !signatureHeader) {
+  throw new Error('This deployment has no confirmed webhook-signature contract');
+}
+
+const webhookClient = new AssinafyClient({ webhookSecret });
+
 app.post('/webhooks/assinafy', express.raw({ type: 'application/json' }), (req, res) => {
-  const signature = req.header('x-assinafy-signature') ?? '';
+  const signature = req.header(signatureHeader) ?? '';
   const rawBody = req.body as Buffer;
 
-  if (!client.webhookVerifier.verify(rawBody, signature)) {
+  if (!webhookClient.webhookVerifier.verify(rawBody, signature)) {
     return res.status(401).send('Invalid signature');
   }
 
-  const event = client.webhookVerifier.extractEvent(rawBody);
-  const type = client.webhookVerifier.getEventType(event);
-  const data = client.webhookVerifier.getEventData(event);
+  const event = webhookClient.webhookVerifier.extractEvent(rawBody);
+  const type = webhookClient.webhookVerifier.getEventType(event);
+  const data = webhookClient.webhookVerifier.getEventData(event);
 
   switch (type) {
     case 'document_ready':            break;
@@ -445,7 +584,10 @@ app.post('/webhooks/assinafy', express.raw({ type: 'application/json' }), (req, 
 
 ### Signer-side endpoints
 
-For building custom signer portals. Every call requires the `signer-access-code` URL parameter that Assinafy emails/whatsapps to the signer.
+For building custom signer portals. Most calls require the `signer-access-code`
+URL parameter that Assinafy emails/whatsapps to the signer. Artifact download is
+the documented public exception; its optional fourth access-code argument exists
+only for compatibility with deployments that still expect the legacy query.
 
 ```ts
 await client.signerDocuments.self(accessCode);
@@ -453,19 +595,20 @@ await client.signerDocuments.acceptTerms(accessCode);
 await client.signerDocuments.verifyEmail({ signerAccessCode: accessCode, verificationCode: '123456' });
 
 await client.signerDocuments.getCurrent(signerId, accessCode);
-const { data } = await client.signerDocuments.list(signerId, accessCode, { search: 'invoice' });
+const { data } = await client.signerDocuments.list(signerId, accessCode, { per_page: 20 });
 // Signer-side counterpart of documents.search(), authorised by the access code.
 const found = await client.signerDocuments.search(signerId, accessCode, 'invoice');
-await client.signerDocuments.download(signerId, documentId, 'original', accessCode);
+await client.signerDocuments.download(signerId, documentId, 'original');
 
 await client.signerDocuments.confirmData(documentId, accessCode, {
   email: 'me@example.com',
-  whatsapp_phone_number: '+5548999990000',
-  has_accepted_terms: true,
+  full_name: 'Example Signer',
+  government_id: '123.456.789-00',
 });
+await client.signerDocuments.acceptTerms(accessCode);
 
-// Signature image management
-await client.signerDocuments.uploadSignature(accessCode, pngBuffer, { imageType: 'signature' });
+// Signature image management ({ reuse: true } persists it for future documents)
+await client.signerDocuments.uploadSignature(accessCode, pngBuffer, { imageType: 'signature', reuse: true });
 await client.signerDocuments.downloadSignature(accessCode, 'signature');
 
 // Sign / decline
@@ -497,14 +640,21 @@ const result = await client.uploadAndRequestSignatures({
   expiresAt: '2026-12-31T00:00:00Z',
 });
 
-result.document;   // IDocumentUploadResponse
+result.document;   // fully-processed IDocumentDetailsResponse (waitForReady: true, the default);
+                   // the raw IDocumentUploadResponse when waitForReady: false
 result.assignment; // IAssignment
 result.signer_ids; // string[]
 ```
 
+`waitForReady: false` skips only the final post-assignment document re-fetch.
+The helper always waits for the uploaded document to reach a metadata-ready
+state before creating its assignment; that safety wait is required to avoid a
+processing race.
+
 ## Errors
 
-Every method rejects with an `AssinafyError` subclass.
+HTTP methods reject with an `AssinafyError` subclass. Synchronous helpers such
+as `getSocialLoginUrl()` can throw `ValidationError` before any request.
 
 ```ts
 import { ApiError, ValidationError, NetworkError, AssinafyError } from '@assinafy/sdk';
@@ -526,25 +676,52 @@ try {
 
 ## Live smoke test
 
-A real-network test script under [`scripts/live-smoke.ts`](scripts/live-smoke.ts) exercises the full API. Use it to sanity-check a workspace before shipping.
+A redaction-safe real-network audit under
+[`scripts/live-smoke.ts`](scripts/live-smoke.ts) exercises read-only operations
+by default. Its `--all` mode creates an isolated sandbox workspace, audits
+reversible CRUD, upload, assignment, branding, statistics, and template flows,
+then attempts per-resource cleanup and force-deletes that workspace in `finally`.
+It complements the unit/contract suites. Optional login credentials enable the
+password-login probe; an optional signer access code/OTP enables read-only
+signer-link and OTP probes; and an optional HTTPS webhook receiver enables the
+subscription lifecycle. Password changes, API-key rotation, social-provider
+login/linking, legal consent, identity/signature mutation, signing, and decline
+flows are deliberately never automated by this harness and are always reported
+as explicit `SKIP`s. They require credentials, authorization, or legal fixtures
+that an API key/account/e-mail set cannot safely supply.
 
 ```bash
-ASSINAFY_API_KEY=… ASSINAFY_ACCOUNT_ID=… bun scripts/live-smoke.ts            # read-only
-ASSINAFY_API_KEY=… ASSINAFY_ACCOUNT_ID=… bun scripts/live-smoke.ts --write    # also creates+deletes a signer
-ASSINAFY_API_KEY=… ASSINAFY_ACCOUNT_ID=… bun scripts/live-smoke.ts --upload   # also uploads a PDF + a template, then deletes both
+# Read-only account/API checks. The base URL is deliberately mandatory.
+ASSINAFY_BASE_URL=https://sandbox.assinafy.com.br/v1 \
+ASSINAFY_API_KEY=… ASSINAFY_ACCOUNT_ID=… \
+bun scripts/live-smoke.ts
+
+# Full reversible audit in a disposable sandbox workspace.
+ASSINAFY_BASE_URL=https://sandbox.assinafy.com.br/v1 \
+ASSINAFY_API_KEY=… ASSINAFY_ACCOUNT_ID=… \
+ASSINAFY_TEST_EMAIL_PRIMARY=first@example.com \
+ASSINAFY_TEST_EMAIL_SECONDARY=second@example.com \
+bun scripts/live-smoke.ts --all
 ```
 
-Set `ASSINAFY_BASE_URL=https://sandbox.assinafy.com.br/v1` to run it against the
-sandbox instead of production.
+Mutation is refused unless the URL's exact host is the Assinafy sandbox. The
+explicit `--confirm-production` escape hatch exists for controlled environments
+but should not be used for routine SDK verification. The script never prints
+credentials, IDs, e-mail addresses, URLs, request/response payloads, or raw API
+errors. See [CONTRIBUTING.md](CONTRIBUTING.md#sandbox-tests) for optional fixture
+variables and safety guidance.
 
 ## Development
 
 ```bash
-bun install        # or npm install
-bun test           # runs bun:test suites (Bun is required for tests)
-npm run typecheck  # tsc --noEmit
-npm run lint
-npm run build      # tsup → dist/ (CJS + ESM + .d.ts)
+bun install          # or npm install
+bun run typecheck    # source, script, and test type checks
+bun run lint
+bun test             # bun:test suites
+bun run test:coverage
+bun run build        # tsup → dist/ (CJS + ESM + .d.ts)
+bun run lint:pkg     # publint + arethetypeswrong
+bun run verify       # complete local release gate
 ```
 
 ## License

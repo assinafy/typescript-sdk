@@ -1,5 +1,11 @@
 import { describe, test, expect } from 'bun:test';
-import { cleanListParams, cleanParams, handleAssinafyResponse, toSdkError } from './utils';
+import {
+    cleanListParams,
+    cleanParams,
+    createSafeLogger,
+    handleAssinafyResponse,
+    toSdkError,
+} from './utils';
 import { ApiError, AssinafyError, NetworkError, ValidationError } from './errors';
 import type { AxiosError } from 'axios';
 
@@ -9,10 +15,20 @@ describe('handleAssinafyResponse', () => {
         expect(result).toEqual({ id: '123' });
     });
 
+    test('normalizes a no-data acknowledgement envelope to undefined', () => {
+        expect(handleAssinafyResponse({ status: 200, message: 'OK' })).toBeUndefined();
+    });
+
     test('throws ApiError on non-2xx envelope', () => {
         expect(() =>
             handleAssinafyResponse({ status: 400, message: 'Bad', data: {} }),
         ).toThrow(ApiError);
+    });
+
+    test('throws for an error envelope even when data is omitted', () => {
+        expect(() => handleAssinafyResponse({ status: 401, message: 'Unauthorized' })).toThrow(
+            ApiError,
+        );
     });
 
     test('passes through when no envelope is present', () => {
@@ -44,6 +60,51 @@ describe('toSdkError', () => {
         expect(result).toBeInstanceOf(NetworkError);
     });
 
+    test('retains a sanitized network cause without Axios config or auth headers', () => {
+        const raw = {
+            isAxiosError: true,
+            name: 'AxiosError',
+            message: 'connect ECONNREFUSED',
+            code: 'ECONNREFUSED',
+            config: {
+                headers: {
+                    Authorization: 'Bearer must-not-leak',
+                    'X-Api-Key': 'must-not-leak',
+                },
+                data: { email: 'private@example.com' },
+            },
+            request: { socket: 'raw-request-object' },
+            toJSON: () => ({}),
+        } as unknown as AxiosError;
+
+        const result = toSdkError(raw, 'upload');
+        const cause = result.cause as Error & { code?: string; config?: unknown; request?: unknown };
+
+        expect(result).toBeInstanceOf(NetworkError);
+        expect(cause).not.toBe(raw);
+        expect(cause).toBeInstanceOf(Error);
+        expect(cause.name).toBe('AxiosError');
+        expect(cause.message).toBe('connect ECONNREFUSED');
+        expect(cause.code).toBe('ECONNREFUSED');
+        expect(cause.config).toBeUndefined();
+        expect(cause.request).toBeUndefined();
+        expect(JSON.stringify(cause)).not.toContain('must-not-leak');
+        expect(JSON.stringify(cause)).not.toContain('private@example.com');
+    });
+
+    test('redacts secrets embedded in an Axios network-error message', () => {
+        const raw = {
+            isAxiosError: true,
+            name: 'AxiosError',
+            message: 'X-Api-Key: should-not-appear',
+            toJSON: () => ({}),
+        } as unknown as AxiosError;
+
+        const result = toSdkError(raw, 'request');
+        expect(result.message).toBe('request: X-Api-Key: [REDACTED]');
+        expect((result.cause as Error).message).toBe('X-Api-Key: [REDACTED]');
+    });
+
     test('preserves the original value as `cause` when a non-Error is thrown', () => {
         // Regression: this path previously passed `{ cause }` into the *context*
         // parameter, so `error.cause` was silently dropped for non-Error throws.
@@ -51,6 +112,65 @@ describe('toSdkError', () => {
         expect(result.cause).toBe('boom-string');
         expect(result.context).toEqual({});
         expect(result.message).toBe('Failed to do thing');
+    });
+});
+
+describe('createSafeLogger', () => {
+    test('swallows synchronous logger exceptions', () => {
+        const throwing = () => {
+            throw new Error('logger unavailable');
+        };
+        const logger = createSafeLogger({
+            debug: throwing,
+            info: throwing,
+            warn: throwing,
+            error: throwing,
+        });
+
+        expect(() => logger.info('Request completed', { status: 'ready' })).not.toThrow();
+    });
+
+    test('observes rejected promises from runtime async logger callbacks', async () => {
+        const reject = async () => {
+            throw new Error('async logger unavailable');
+        };
+        const logger = createSafeLogger({
+            debug: reject,
+            info: reject,
+            warn: reject,
+            error: reject,
+        });
+
+        expect(() => logger.warn('Rate limited', { attempt: 1 })).not.toThrow();
+        // Give the wrapper's rejection handler a microtask turn. An unobserved
+        // rejection makes Bun fail this test process.
+        await Promise.resolve();
+    });
+
+    test('forwards only allowlisted non-PII operational context', () => {
+        const calls: Array<{ message: string; context?: Record<string, unknown> }> = [];
+        const logger = createSafeLogger({
+            debug: () => undefined,
+            info: (message, context) => calls.push(context ? { message, context } : { message }),
+            warn: () => undefined,
+            error: () => undefined,
+        });
+
+        logger.info('Creating signer', {
+            email: 'private@example.com',
+            fullName: 'Private Person',
+            path: '/private/person/contract.pdf',
+            url: 'https://example.test/sign?email=private@example.com',
+            documentId: 'sensitive-document-id',
+            signerCount: 2,
+            status: 'metadata_ready',
+        });
+
+        expect(calls).toEqual([
+            { message: 'Creating signer', context: { signerCount: 2 } },
+        ]);
+        expect(JSON.stringify(calls)).not.toContain('private@example.com');
+        expect(JSON.stringify(calls)).not.toContain('sensitive-document-id');
     });
 });
 

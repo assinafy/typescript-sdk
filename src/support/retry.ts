@@ -1,22 +1,14 @@
 /**
  * Rate-limit retry helpers.
  *
- * Every Assinafy response carries `X-Rate-Limit-*` headers and a `Retry-After`
- * header on 429s (the documented limit is 120 req/min). The client retries
- * 429 responses a bounded number of times, honoring `Retry-After` when present.
+ * Assinafy deployments may return standard `Retry-After` or
+ * `X-Rate-Limit-Reset` hints on a 429, but the current public OpenAPI contract
+ * does not guarantee either header or a fixed requests-per-minute quota. The
+ * client honors a usable hint when present and otherwise applies bounded
+ * exponential backoff.
  */
 
-/** Read a header case-insensitively from an axios headers bag. */
-function header(headers: Record<string, unknown> | undefined, name: string): string | undefined {
-    if (!headers) return undefined;
-    const lower = name.toLowerCase();
-    for (const [key, value] of Object.entries(headers)) {
-        if (key.toLowerCase() === lower && value != null) {
-            return Array.isArray(value) ? String(value[0]) : String(value);
-        }
-    }
-    return undefined;
-}
+import { readHeader } from './headers';
 
 /**
  * Delay (ms) the server asks us to wait, derived from `Retry-After` (seconds or
@@ -24,14 +16,14 @@ function header(headers: Record<string, unknown> | undefined, name: string): str
  * response carries no usable hint.
  */
 export function retryDelayFromHeaders(headers: Record<string, unknown> | undefined): number | undefined {
-    const retryAfter = header(headers, 'retry-after');
+    const retryAfter = readHeader(headers, 'retry-after');
     if (retryAfter !== undefined) {
         const seconds = Number(retryAfter);
         if (Number.isFinite(seconds)) return Math.max(0, seconds * 1000);
         const date = Date.parse(retryAfter);
         if (!Number.isNaN(date)) return Math.max(0, date - Date.now());
     }
-    const reset = header(headers, 'x-rate-limit-reset');
+    const reset = readHeader(headers, 'x-rate-limit-reset');
     if (reset !== undefined) {
         const seconds = Number(reset);
         if (Number.isFinite(seconds)) return Math.max(0, seconds * 1000);

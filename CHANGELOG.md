@@ -5,6 +5,123 @@ All notable changes to `@assinafy/sdk` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [2.1.0] - 2026-08-06
+
+### Added
+
+- Full typed coverage of the current official OpenAPI contract: **89/89
+  operations across 68 paths**, including account theme/logo/statistics, OAuth
+  URL helpers/linking, authenticated-user profile/statistics, and all signer
+  response/acknowledgement shapes.
+- An exhaustive machine-auditable endpoint ledger (`docs/API_COVERAGE.md`),
+  compatibility record, and a scheduled OpenAPI operation-drift gate.
+- Strict test-source typechecking and enforced Bun coverage floors. The suite
+  now executes every public HTTP wrapper and covers the production source at
+  more than 95% of functions and 98% of lines.
+- Canonical GitLab CI plus SHA-pinned GitHub mirror workflows. Tag mirrors now
+  build one immutable tarball, verify its checksum, and publish that same file
+  to npm (OIDC trusted publishing) and GitHub Packages.
+
+### Fixed
+
+- Public/login/signer-code requests now use a credential-free transport, so
+  account API keys and Bearer tokens cannot leak onto public routes.
+- The high-level upload workflow validates every signer before uploading and
+  always waits for document metadata before creating an assignment; opting out
+  only skips the final presentation re-fetch.
+- `sendToken(documentId, email)` now sends the official `{ email }` request and
+  uses the legacy `{ recipient, channel }` form only explicitly or after a
+  narrowly matched compatibility error.
+- Empty success acknowledgements resolve to `void`, malformed list envelopes
+  throw instead of silently becoming `[]`, and API response types were aligned
+  with nullable/variant wire shapes.
+- Automatic `429` replay is now limited to idempotent HTTP methods. `POST` and
+  `PATCH` require an explicit non-empty `Idempotency-Key`.
+- Configuration, upload files/PDF content, dynamic paths, polling values,
+  signer updates, webhook inputs/events, and pagination metadata receive strict
+  validation; diagnostic logging and network-error causes no longer expose
+  request credentials or user payloads.
+- Restored the official name-only signer request and account
+  `notification_sender_type` field. Both are now represented exactly as the
+  OpenAPI defines them; the live audit records the sandbox's lagging rejection
+  of `notification_sender_type` without blocking unrelated endpoint tests.
+- Restored the official public, code-free signer artifact download while
+  retaining an optional access-code argument for legacy deployments, and made
+  owner-only assignment-signer fields optional in signer-context responses.
+
+### Security
+
+- Updated the dependency graph and overrides to **zero known advisories**.
+- Removed arbitrary-ref/manual publishing, pinned current actions to immutable
+  commit SHAs, set least-privilege permissions/timeouts, and removed the
+  long-lived npm publish token in favor of OIDC.
+- Clarified that webhook HMAC verification is an opt-in utility: the current
+  Assinafy OpenAPI document does not specify a signing header or algorithm.
+
+### Earlier 2.1.0 audit work (completed 2026-07-19)
+
+Full audit against the live sandbox API (`https://sandbox.assinafy.com.br/v1`)
+and the OpenAPI reference: every safely runnable operation was probed, fixture-
+or legal-consent-dependent operations were recorded as explicit skips, and the
+SDK was reconciled against the observed request/response shapes.
+
+#### Fixed
+
+- **`signerDocuments.acceptTerms()` and `signerDocuments.verifyEmail()` were
+  unauthenticated.** Both sent the `signer-access-code` in the JSON request body,
+  but the API's `signerAccessCode` security scheme is a **query** parameter — so
+  every call was rejected with `401`. They now pass the code as
+  `?signer-access-code=…` (matching every other signer-side method), and
+  `verifyEmail` sends only `verification-code` in the body.
+- **`uploadAndRequestSignatures()` returned a stale document.** With
+  `waitForReady` enabled (the default) it still returned the pre-processing
+  upload snapshot (`status: 'uploaded'`, empty `pages`, no `assignment`). It now
+  returns the document re-fetched after the assignment is created, so `status`,
+  `pages`, and the embedded `assignment` are current.
+- **README workspace example used an invalid colour.** `primary_color:
+  '#ff0066'` is rejected by the account endpoints, which require exactly 6 hex
+  characters with **no** leading `#` (verified live). Fixed the example and
+  documented the format on the payload types.
+
+#### Added
+
+- **`workspaces.delete(accountId, { force: true })`** — send the documented
+  `force` flag (in the request body) to override deletion restrictions.
+- **`signerDocuments.uploadSignature(..., { reuse: true })`** — expose the API's
+  `reuse` query flag to persist a signature for reuse on future documents.
+- **`confirmData()` now accepts the documented `full_name` and `government_id`**
+  fields (additive; `undefined` values are stripped).
+- **`IDocumentUploadResponse.signing_url`** — the upload endpoint always returns
+  it (previously missing from the type).
+- **`IAssignmentEntry`** — a typed shape for `collect`-method assignment
+  `entries` (was `unknown[]`).
+- Request/response payload examples on **every** public method, and expanded
+  unit-test coverage across all resources.
+
+#### Changed
+
+- **`IDocumentUploadResponse.declined_by`** is now typed `ISigner | null` (was
+  `string | null`), matching the sibling document response types and the API.
+- Workspace `events` on webhook registration and `socialLogin.provider` now use
+  the open-enum (`… | AnyString`) convention, keeping literal autocomplete while
+  accepting server-controlled strings.
+- **Tooling / CI:** GitHub Actions are pinned to commit SHAs (with a
+  `dependabot.yml` to keep them and npm deps current); the release workflow pins
+  an exact Bun version for reproducible, provenance-signed publishes; `scripts/`
+  is now linted and typechecked; the redundant `.npmignore` and the stale,
+  CI-unused `package-lock.json` were removed (the repo is Bun-first).
+
+#### Compatibility notes
+
+- The sandbox still rejects `notification_sender_type` during account creation
+  but accepts it during update. The SDK exposes the official field and records
+  that sandbox lag explicitly instead of deleting documented functionality.
+- The live list API clamps `per-page` to **50**. `sendToken` uses the current
+  official `{ email }` body first and retains the older `{ recipient, channel }`
+  form as an explicit, narrowly scoped compatibility path.
+
 ## [2.0.0] - 2026-07-15
 
 ### Removed (breaking)
@@ -325,6 +442,9 @@ fields (`cpf`, `whatsapp_phone_number`) with the PHP SDK and n8n node.
 - High-level `uploadAndRequestSignatures` helper on `AssinafyClient`.
 - `PaginatedResult<T>` with parsed `X-Pagination-*` header meta.
 
+[Unreleased]: https://github.com/assinafy/typescript-sdk/compare/v2.1.0...HEAD
+[2.1.0]: https://github.com/assinafy/typescript-sdk/compare/v2.0.0...v2.1.0
+[2.0.0]: https://github.com/assinafy/typescript-sdk/releases/tag/v2.0.0
 [1.5.0]: https://github.com/assinafy/typescript-sdk/releases/tag/v1.5.0
 [1.4.0]: https://github.com/assinafy/typescript-sdk/releases/tag/v1.4.0
 [1.3.0]: https://github.com/assinafy/typescript-sdk/releases/tag/v1.3.0

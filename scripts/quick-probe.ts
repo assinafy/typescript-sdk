@@ -6,8 +6,8 @@
  */
 import { AssinafyClient } from '../src';
 
-const apiKey = process.env.ASSINAFY_API_KEY;
-const accountId = process.env.ASSINAFY_ACCOUNT_ID;
+const apiKey = process.env['ASSINAFY_API_KEY'];
+const accountId = process.env['ASSINAFY_ACCOUNT_ID'];
 if (!apiKey || !accountId) {
     throw new Error('Set ASSINAFY_API_KEY and ASSINAFY_ACCOUNT_ID.');
 }

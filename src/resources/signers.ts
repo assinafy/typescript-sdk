@@ -14,22 +14,57 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export class SignerResource extends BaseResource {
     /**
-     * Create a signer in the workspace.
+     * Create a signer in the workspace (`POST /accounts/{accountId}/signers`).
      *
-     * `email` is optional — the API also accepts whatsapp-only signers — but at
-     * least one of `email` / `whatsapp_phone_number` (or the `phone` alias) is
-     * required. When an `email` is supplied the call is idempotent by email:
-     * an existing signer with that address is reused instead of duplicated.
+     * `email` and `whatsapp_phone_number` are both optional in the official
+     * schema; a name-only signer is valid. When an `email` is supplied the call
+     * is idempotent by email:
+     * an existing signer with that address is reused instead of duplicated (a
+     * duplicate POST is answered by the API with `400 "Um signatário com este
+     * e-mail já existe."`, which this method recovers from transparently).
+     *
+     * @param payload - The signer to create. Only `full_name` is required.
+     * Optional `email`, `whatsapp_phone_number`/`phone`, and `cpf` are normalized
+     * before sending.
+     * @param accountId - Override the client's default account ID.
+     * @returns The created (or reused) signer. Note the response **never echoes
+     * `cpf` back**, even when one was sent:
+     * ```jsonc
+     * {
+     *   "resource": "signer",
+     *   "id": "19e6b92e7895332ed9708535d8c",
+     *   "full_name": "Ana Souza",
+     *   "email": "ana@example.com",
+     *   "whatsapp_phone_number": null,
+     *   "has_accepted_terms": false
+     * }
+     * ```
+     * @throws {ValidationError} If the name/contact values are malformed or no
+     * account ID is available.
+     * @throws {ApiError} If the API rejects the request for a reason other than a
+     * recoverable duplicate email.
+     *
+     * @example
+     * ```ts
+     * const signer = await client.signers.create({
+     *   full_name: 'Ana Souza',
+     *   email: 'ana@example.com',
+     *   cpf: '390.533.447-05', // sent as '39053344705', never echoed back
+     * });
+     *
+     * // A whatsapp-only signer (no email):
+     * await client.signers.create({
+     *   full_name: 'Bruno Lima',
+     *   whatsapp_phone_number: '+5548999990000',
+     * });
+     *
+     * // Name-only is also valid (but cannot receive a notification yet):
+     * await client.signers.create({ full_name: 'Carla Sem Contato' });
+     * ```
      */
     async create(payload: ICreateSignerPayload, accountId?: string): Promise<ICreateSignerResponse> {
         const id = this.accountId(accountId);
-        const phone = payload.whatsapp_phone_number ?? payload.phone;
-        if (!payload.email && !phone) {
-            throw new ValidationError(
-                'A signer requires at least an email or a whatsapp_phone_number',
-            );
-        }
-        if (payload.email) this.assertEmail(payload.email);
+        validateCreateSignerPayload(payload);
 
         if (payload.email) {
             const existing = await this.findByEmail(payload.email, id);
@@ -42,7 +77,10 @@ export class SignerResource extends BaseResource {
         this.logger.info('Creating signer', { email: payload.email });
         try {
             return await this.call('Failed to create signer', () =>
-                this.http.post(`/accounts/${id}/signers`, normaliseSignerPayload(payload)),
+                this.http.post(
+                    `/accounts/${this.pathSegment(id, 'Account ID')}/signers`,
+                    normaliseSignerPayload(payload),
+                ),
             );
         } catch (err) {
             // Recover from the lost-race case: another caller created the same
@@ -68,24 +106,107 @@ export class SignerResource extends BaseResource {
         }
     }
 
-    /** Get a signer by ID. */
+    /**
+     * Get a signer by ID (`GET /accounts/{accountId}/signers/{signerId}`).
+     *
+     * @param signerId - The signer to fetch.
+     * @param accountId - Override the client's default account ID.
+     * @returns The signer:
+     * ```jsonc
+     * {
+     *   "resource": "signer",
+     *   "id": "19e6b92e7895332ed9708535d8c",
+     *   "full_name": "Example Signer",
+     *   "email": "signer@example.com",
+     *   "whatsapp_phone_number": null,
+     *   "has_accepted_terms": false
+     * }
+     * ```
+     * @throws {ValidationError} If `signerId` is missing or no account ID is available.
+     * @throws {ApiError} `404` if the signer does not exist.
+     *
+     * @example
+     * ```ts
+     * const signer = await client.signers.get('19e6b92e7895332ed9708535d8c');
+     * ```
+     */
     async get(signerId: string, accountId?: string): Promise<ISigner> {
         const id = this.accountId(accountId);
         const sid = this.requireId(signerId, 'Signer ID');
         return this.call('Failed to fetch signer', () =>
-            this.http.get(`/accounts/${id}/signers/${sid}`),
+            this.http.get(
+                `/accounts/${this.pathSegment(id, 'Account ID')}/signers/${this.pathSegment(sid, 'Signer ID')}`,
+            ),
         );
     }
 
-    /** List signers for the workspace (supports `page`, `per-page`, `search`, `sort`). */
+    /**
+     * List signers for the workspace (`GET /accounts/{accountId}/signers`).
+     * Pagination info (if any) is attached in `meta`.
+     *
+     * @param params - `page`, `per-page`, `search`, `sort`. `per-page` is
+     * clamped to the API maximum of 50.
+     * @param accountId - Override the client's default account ID.
+     * @returns The matching signers, with pagination in `meta`. Each item:
+     * ```jsonc
+     * {
+     *   "id": "19e6b92e7895332ed9708535d8c",
+     *   "full_name": "Example Signer",
+     *   "email": "signer@example.com",
+     *   "whatsapp_phone_number": null,
+     *   "has_accepted_terms": false
+     * }
+     * ```
+     * @throws {ValidationError} If no account ID is available.
+     * @throws {ApiError} If the API rejects the request.
+     *
+     * @example
+     * ```ts
+     * const { data, meta } = await client.signers.list({
+     *   search: 'ana',
+     *   'per-page': 20,
+     * });
+     * ```
+     */
     async list(params: IListParams = {}, accountId?: string): Promise<ISignerListResponse> {
         const id = this.accountId(accountId);
         return this.callList<ISigner>('Failed to list signers', () =>
-            this.http.get(`/accounts/${id}/signers`, { params: cleanListParams(params) }),
+            this.http.get(`/accounts/${this.pathSegment(id, 'Account ID')}/signers`, {
+                params: cleanListParams(params),
+            }),
         );
     }
 
-    /** Update a signer. Fails if the signer has active assignments. */
+    /**
+     * Update a signer (`PUT /accounts/{accountId}/signers/{signerId}`). Fails
+     * if the signer has active assignments.
+     *
+     * @param signerId - The signer to update.
+     * @param payload - Fields to change. Any `cpf` is stripped to digits before
+     * sending.
+     * @param accountId - Override the client's default account ID.
+     * @returns The updated signer (as with create, `cpf` is never echoed back):
+     * ```jsonc
+     * {
+     *   "resource": "signer",
+     *   "id": "19e6b92e7895332ed9708535d8c",
+     *   "full_name": "Ana Souza Lima",
+     *   "email": "ana@example.com",
+     *   "whatsapp_phone_number": null,
+     *   "has_accepted_terms": false
+     * }
+     * ```
+     * @throws {ValidationError} If `signerId` is missing or no account ID is available.
+     * @throws {ApiError} `400` if the signer has active assignments; `404` if it
+     * does not exist.
+     *
+     * @example
+     * ```ts
+     * await client.signers.update('19e6b92e7895332ed9708535d8c', {
+     *   full_name: 'Ana Souza Lima',
+     * });
+     * ```
+     */
     async update(
         signerId: string,
         payload: IUpdateSignerPayload,
@@ -93,23 +214,44 @@ export class SignerResource extends BaseResource {
     ): Promise<ICreateSignerResponse> {
         const id = this.accountId(accountId);
         const sid = this.requireId(signerId, 'Signer ID');
+        validateUpdateSignerPayload(payload);
         return this.call('Failed to update signer', () =>
-            this.http.put(`/accounts/${id}/signers/${sid}`, normaliseSignerPayload(payload)),
-        );
-    }
-
-    /** Delete a signer. */
-    async delete(signerId: string, accountId?: string): Promise<void> {
-        const id = this.accountId(accountId);
-        const sid = this.requireId(signerId, 'Signer ID');
-        return this.callVoid('Failed to delete signer', () =>
-            this.http.delete(`/accounts/${id}/signers/${sid}`),
+            this.http.put(
+                `/accounts/${this.pathSegment(id, 'Account ID')}/signers/${this.pathSegment(sid, 'Signer ID')}`,
+                normaliseSignerPayload(payload),
+            ),
         );
     }
 
     /**
-     * Find a signer by exact email, using the API's `search` filter to narrow
-     * the page first. Returns `null` if none match.
+     * Delete a signer (`DELETE /accounts/{accountId}/signers/{signerId}`).
+     *
+     * @param signerId - The signer to delete.
+     * @param accountId - Override the client's default account ID.
+     * @returns Nothing on success (resolves to `void`).
+     * @throws {ValidationError} If `signerId` is missing or no account ID is available.
+     * @throws {ApiError} `404` if the signer does not exist; `400`/`409` if it
+     * still has active assignments.
+     *
+     * @example
+     * ```ts
+     * await client.signers.delete('19e6b92e7895332ed9708535d8c');
+     * ```
+     */
+    async delete(signerId: string, accountId?: string): Promise<void> {
+        const id = this.accountId(accountId);
+        const sid = this.requireId(signerId, 'Signer ID');
+        return this.callVoid('Failed to delete signer', () =>
+            this.http.delete(
+                `/accounts/${this.pathSegment(id, 'Account ID')}/signers/${this.pathSegment(sid, 'Signer ID')}`,
+            ),
+        );
+    }
+
+    /**
+     * Find a signer by exact email
+     * (`GET /accounts/{accountId}/signers?search={email}`), using the API's
+     * `search` filter to narrow the page first. Returns `null` if none match.
      *
      * `search` is a substring match across signer fields, so the result is
      * re-filtered here for an exact, case-insensitive email match.
@@ -120,10 +262,30 @@ export class SignerResource extends BaseResource {
      * matched more than 50 could in principle miss one — the API exposes no
      * exact-email filter to rule that out.
      *
+     * A `404` from the underlying list is treated as "no match" and mapped to
+     * `null`; any other {@link ApiError} propagates.
+     *
      * @param email - Exact email address to look for.
      * @param accountId - Override the client's default account ID.
-     * @returns The matching {@link ISigner}, or `null`.
+     * @returns The matching {@link ISigner}, or `null` if none match. A hit
+     * looks like:
+     * ```jsonc
+     * {
+     *   "id": "19e6b92e7895332ed9708535d8c",
+     *   "full_name": "Ana Souza",
+     *   "email": "ana@example.com",
+     *   "whatsapp_phone_number": null,
+     *   "has_accepted_terms": false
+     * }
+     * ```
      * @throws {ValidationError} If `email` is not a valid address.
+     * @throws {ApiError} If the list request fails with a status other than 404.
+     *
+     * @example
+     * ```ts
+     * const signer = await client.signers.findByEmail('ana@example.com');
+     * if (signer) console.log(signer.id);
+     * ```
      */
     async findByEmail(email: string, accountId?: string): Promise<ISigner | null> {
         this.assertEmail(email);
@@ -143,6 +305,70 @@ export class SignerResource extends BaseResource {
         if (!email || !EMAIL_RE.test(email)) {
             throw new ValidationError('Invalid email address', { email });
         }
+    }
+}
+
+/** Validate a create payload without performing a request. */
+export function validateCreateSignerPayload(payload: ICreateSignerPayload): void {
+    if (!payload || typeof payload !== 'object') {
+        throw new ValidationError('Signer payload is required');
+    }
+    if (typeof payload.full_name !== 'string' || !payload.full_name.trim()) {
+        throw new ValidationError('full_name is required');
+    }
+    const phone = payload.whatsapp_phone_number ?? payload.phone;
+    if (
+        payload.email !== undefined &&
+        (typeof payload.email !== 'string' || !EMAIL_RE.test(payload.email))
+    ) {
+        throw new ValidationError('Invalid email address', { email: payload.email });
+    }
+    if (phone !== undefined && (typeof phone !== 'string' || !phone.trim())) {
+        throw new ValidationError('whatsapp_phone_number cannot be empty');
+    }
+    validateOptionalCpf(payload.cpf);
+}
+
+/** Validate the fields supplied to a partial signer update. */
+export function validateUpdateSignerPayload(payload: IUpdateSignerPayload): void {
+    if (!payload || typeof payload !== 'object') {
+        throw new ValidationError('Signer update payload is required');
+    }
+
+    const hasSupportedField = [
+        payload.full_name,
+        payload.email,
+        payload.whatsapp_phone_number,
+        payload.phone,
+        payload.cpf,
+    ].some((value) => value !== undefined);
+    if (!hasSupportedField) {
+        throw new ValidationError('Signer update must include at least one field');
+    }
+    if (
+        payload.full_name !== undefined &&
+        (typeof payload.full_name !== 'string' || !payload.full_name.trim())
+    ) {
+        throw new ValidationError('full_name cannot be empty');
+    }
+    if (
+        payload.email !== undefined &&
+        (typeof payload.email !== 'string' || !EMAIL_RE.test(payload.email))
+    ) {
+        throw new ValidationError('Invalid email address', { email: payload.email });
+    }
+
+    const phone = payload.whatsapp_phone_number ?? payload.phone;
+    if (phone !== undefined && (typeof phone !== 'string' || !phone.trim())) {
+        throw new ValidationError('whatsapp_phone_number cannot be empty');
+    }
+    validateOptionalCpf(payload.cpf);
+}
+
+function validateOptionalCpf(cpf: string | undefined): void {
+    if (cpf === undefined) return;
+    if (typeof cpf !== 'string' || cpf.replace(/\D/g, '').length === 0) {
+        throw new ValidationError('cpf must contain digits');
     }
 }
 

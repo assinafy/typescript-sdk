@@ -37,7 +37,23 @@ describe('TagResource', () => {
         await expect(tags.create({ name: '' })).rejects.toThrow(ValidationError);
     });
 
-    test('create posts name + color', async () => {
+    test('create posts name + color to the account-scoped path', async () => {
+        let url = '';
+        let body: unknown;
+        const ax = {
+            ...mockAxios,
+            post: async (u: string, b: unknown) => {
+                url = u;
+                body = b;
+                return { status: 200, data: { status: 200, data: { id: 't1' } } };
+            },
+        } as unknown as AxiosInstance;
+        await new TagResource(ax, 'acc').create({ name: 'Contracts', color: 'ff8800' });
+        expect(url).toBe('/accounts/acc/tags');
+        expect(body).toEqual({ name: 'Contracts', color: 'ff8800' });
+    });
+
+    test('create omits color when not provided', async () => {
         let body: unknown;
         const ax = {
             ...mockAxios,
@@ -46,8 +62,21 @@ describe('TagResource', () => {
                 return { status: 200, data: { status: 200, data: { id: 't1' } } };
             },
         } as unknown as AxiosInstance;
-        await new TagResource(ax, 'acc').create({ name: 'Contracts', color: 'ff8800' });
-        expect(body).toEqual({ name: 'Contracts', color: 'ff8800' });
+        await new TagResource(ax, 'acc').create({ name: 'Contracts' });
+        expect(body).toEqual({ name: 'Contracts' });
+    });
+
+    test('create forwards color verbatim (leading # is stripped server-side, not by the SDK)', async () => {
+        let body: unknown;
+        const ax = {
+            ...mockAxios,
+            post: async (_u: string, b: unknown) => {
+                body = b;
+                return { status: 200, data: { status: 200, data: { id: 't1' } } };
+            },
+        } as unknown as AxiosInstance;
+        await new TagResource(ax, 'acc').create({ name: 'Contracts', color: '#ff8800' });
+        expect(body).toEqual({ name: 'Contracts', color: '#ff8800' });
     });
 
     test('update preserves color:null (clear) but omits absent fields', async () => {
@@ -61,6 +90,39 @@ describe('TagResource', () => {
         } as unknown as AxiosInstance;
         await new TagResource(ax, 'acc').update('t1', { color: null });
         expect(body).toEqual({ color: null });
+    });
+
+    test('update puts name + color to the tag path', async () => {
+        let url = '';
+        let body: unknown;
+        const ax = {
+            ...mockAxios,
+            put: async (u: string, b: unknown) => {
+                url = u;
+                body = b;
+                return { status: 200, data: { status: 200, data: { id: 't1' } } };
+            },
+        } as unknown as AxiosInstance;
+        await new TagResource(ax, 'acc').update('t1', { name: 'Signed', color: '112233' });
+        expect(url).toBe('/accounts/acc/tags/t1');
+        expect(body).toEqual({ name: 'Signed', color: '112233' });
+    });
+
+    test('update omits an absent color (name-only change)', async () => {
+        let body: unknown;
+        const ax = {
+            ...mockAxios,
+            put: async (_u: string, b: unknown) => {
+                body = b;
+                return { status: 200, data: { status: 200, data: { id: 't1' } } };
+            },
+        } as unknown as AxiosInstance;
+        await new TagResource(ax, 'acc').update('t1', { name: 'Signed' });
+        expect(body).toEqual({ name: 'Signed' });
+    });
+
+    test('update requires a tag id', async () => {
+        await expect(tags.update('', { name: 'x' })).rejects.toThrow(ValidationError);
     });
 
     test('delete requires a tag id', async () => {
@@ -81,5 +143,21 @@ describe('TagResource', () => {
         await new TagResource(ax, 'acc').delete('t1', { force: true });
         expect(url).toBe('/accounts/acc/tags/t1');
         expect(params).toEqual({ force: 'true' });
+    });
+
+    test('delete sends no params when force is not requested', async () => {
+        let url = '';
+        let params: unknown = 'unset';
+        const ax = {
+            ...mockAxios,
+            delete: async (u: string, cfg: { params: unknown }) => {
+                url = u;
+                params = cfg?.params;
+                return { status: 200 };
+            },
+        } as unknown as AxiosInstance;
+        await new TagResource(ax, 'acc').delete('t1');
+        expect(url).toBe('/accounts/acc/tags/t1');
+        expect(params).toBeUndefined();
     });
 });

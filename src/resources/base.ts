@@ -1,8 +1,10 @@
 import type { AxiosInstance, AxiosResponse, AxiosResponseHeaders } from 'axios';
-import { ApiError, ValidationError } from '../errors';
+import { ApiError, AssinafyError, ValidationError } from '../errors';
 import type { Logger, PaginatedResult, PaginationMeta } from '../types';
 import { createNoopLogger, handleAssinafyResponse, toSdkError } from '../utils';
-import { buildUploadForm, loadSource, validateUpload } from './upload';
+import { readHeader } from '../support/headers';
+import { encodePathSegment } from '../support/path';
+import { buildUploadForm, loadSource, MAX_UPLOAD_BYTES, validateUpload } from './upload';
 import type { DocumentUploadSource } from './upload';
 
 /** Content-Type required by the document and template upload endpoints. */
@@ -30,7 +32,7 @@ export abstract class BaseResource {
     /** Resolve the effective account id, throwing if none is available. */
     protected accountId(explicit?: string): string {
         const id = explicit ?? this.defaultAccountId;
-        if (!id) {
+        if (typeof id !== 'string' || id.trim().length === 0) {
             throw new ValidationError(
                 'Account ID is required. Provide it as a parameter or set a default in the client.',
             );
@@ -40,10 +42,20 @@ export abstract class BaseResource {
 
     /** Guard required path arguments (documentId, signerId, …). */
     protected requireId<T extends string>(value: T | undefined | null, name: string): T {
-        if (!value) {
+        if (typeof value !== 'string' || value.trim().length === 0) {
             throw new ValidationError(`${name} is required`);
         }
         return value;
+    }
+
+    /** Validate and encode a value that will occupy one URL path segment. */
+    protected pathSegment(value: string | undefined | null, name: string): string {
+        const required = this.requireId(value, name);
+        try {
+            return encodePathSegment(required);
+        } catch {
+            throw new ValidationError(`${name} contains invalid URL characters`);
+        }
     }
 
     /** Execute an HTTP call and return the unwrapped envelope body. */
@@ -73,6 +85,10 @@ export abstract class BaseResource {
             if (response.status < 200 || response.status >= 300) {
                 throw new ValidationError(`${label}: HTTP ${response.status}`);
             }
+            // Validate an Assinafy status/message envelope when present. This
+            // also normalizes acknowledgement responses that intentionally omit
+            // `data` to `void`.
+            handleAssinafyResponse<void>(response.data);
         } catch (err) {
             throw toSdkError(err, label);
         }
@@ -110,7 +126,7 @@ export abstract class BaseResource {
         formOptions: { name?: string; metadata?: Record<string, unknown> },
         labels: { errorLabel: string; missingId: string },
     ): Promise<T> {
-        const { buffer, fileName } = await loadSource(source);
+        const { buffer, fileName } = await loadSource(source, { maxBytes: MAX_UPLOAD_BYTES });
         validateUpload(buffer, fileName);
 
         this.logger.info('Uploading PDF', { path, fileName, size: buffer.byteLength });
@@ -133,11 +149,16 @@ export abstract class BaseResource {
         try {
             const response = await request();
             const unwrapped = handleAssinafyResponse<T[] | { data?: T[] }>(response.data);
-            const data: T[] = Array.isArray(unwrapped)
-                ? unwrapped
-                : Array.isArray(unwrapped?.data)
-                    ? (unwrapped as { data: T[] }).data
-                    : [];
+            let data: T[];
+            if (Array.isArray(unwrapped)) {
+                data = unwrapped;
+            } else if (Array.isArray(unwrapped?.data)) {
+                data = (unwrapped as { data: T[] }).data;
+            } else {
+                throw new AssinafyError(`${label}: API returned a malformed list payload`, {
+                    responseData: unwrapped,
+                });
+            }
             const meta = parsePaginationMeta(response.headers);
             return meta === undefined ? { data } : { data, meta };
         } catch (err) {
@@ -153,12 +174,8 @@ function parsePaginationMeta(
 ): PaginationMeta | undefined {
     if (!headers) return undefined;
 
-    const read = (key: string): string | undefined => {
-        const h = headers as Record<string, unknown>;
-        const raw = h[key] ?? h[key.toLowerCase()];
-        if (raw === undefined || raw === null) return undefined;
-        return Array.isArray(raw) ? String(raw[0]) : String(raw);
-    };
+    const read = (key: string): string | undefined =>
+        readHeader(headers as Record<string, unknown>, key);
 
     const current = toInt(read('x-pagination-current-page'));
     const perPage = toInt(read('x-pagination-per-page'));
@@ -179,6 +196,8 @@ function parsePaginationMeta(
 
 function toInt(value: string | undefined): number | undefined {
     if (value === undefined) return undefined;
-    const n = Number.parseInt(value, 10);
-    return Number.isFinite(n) ? n : undefined;
+    const normalized = value.trim();
+    if (!/^\d+$/.test(normalized)) return undefined;
+    const n = Number(normalized);
+    return Number.isSafeInteger(n) ? n : undefined;
 }

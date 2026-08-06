@@ -1,5 +1,9 @@
 import { describe, test, expect } from 'bun:test';
-import { AssignmentResource, buildAssignmentPayload } from './assignments';
+import {
+    AssignmentResource,
+    buildAssignmentEstimatePayload,
+    buildAssignmentPayload,
+} from './assignments';
 import { ValidationError } from '../errors';
 import type { AxiosInstance } from 'axios';
 
@@ -41,15 +45,46 @@ describe('buildAssignmentPayload', () => {
     });
 
     test('allows estimation payloads without signer ids when methods are supplied', () => {
-        const body = buildAssignmentPayload(
-            {
-                signers: [{ verification_method: 'Whatsapp' }, {}],
-            },
-            { allowSignersWithoutId: true },
-        );
+        const body = buildAssignmentEstimatePayload({
+            signers: [{ verification_method: 'Whatsapp' }, {}],
+        });
         expect(body).toEqual({
             method: 'virtual',
             signers: [{ verification_method: 'Whatsapp' }, {}],
+        });
+    });
+
+    test('allows collect estimates with entries and no signer list', () => {
+        const body = buildAssignmentEstimatePayload({
+            method: 'collect',
+            entries: [{ page_id: 'page-1', fields: [] }],
+        });
+        expect(body).toEqual({
+            method: 'collect',
+            entries: [{ page_id: 'page-1', fields: [] }],
+        });
+    });
+
+    test('requires entries for collect requests', () => {
+        expect(() => buildAssignmentPayload({ method: 'collect', signers: ['a'] })).toThrow(
+            ValidationError,
+        );
+    });
+
+    test('estimate bodies project away create-only and signer identity fields', () => {
+        const payload = {
+            signers: [{ id: 'ignored', step: 3, verification_method: 'Email' }],
+            message: 'ignored',
+            expires_at: 'ignored',
+            copy_receivers: ['ignored'],
+        } as never;
+        expect(buildAssignmentEstimatePayload(payload)).toEqual({
+            method: 'virtual',
+            signers: [{ verification_method: 'Email' }],
+        });
+        expect(buildAssignmentEstimatePayload({ signers: ['legacy-id'] } as never)).toEqual({
+            method: 'virtual',
+            signers: [{}],
         });
     });
 
@@ -133,6 +168,26 @@ describe('AssignmentResource', () => {
         });
     });
 
+    test('estimateCost accepts official collect payloads without signers', async () => {
+        let capturedBody: unknown;
+        const axiosMock = {
+            post: async (_url: string, body: unknown) => {
+                capturedBody = body;
+                return { status: 200, data: { status: 200, data: { total_credits: 0 } } };
+            },
+        } as unknown as AxiosInstance;
+
+        await new AssignmentResource(axiosMock, 'acc').estimateCost('doc-1', {
+            method: 'collect',
+            entries: [{ page_id: 'page-1', fields: [] }],
+        });
+
+        expect(capturedBody).toEqual({
+            method: 'collect',
+            entries: [{ page_id: 'page-1', fields: [] }],
+        });
+    });
+
     test('estimateCost returns the full ICostEstimate shape', async () => {
         const estimate = {
             documents: 1,
@@ -151,7 +206,7 @@ describe('AssignmentResource', () => {
             post: async () => ({ status: 200, data: { status: 200, data: estimate } }),
         } as unknown as AxiosInstance;
         const resource = new AssignmentResource(axiosMock, 'acc');
-        const result = await resource.estimateCost('doc-1', { signers: ['s1'] });
+        const result = await resource.estimateCost('doc-1', { signers: [{}] });
         expect(result).toEqual(estimate);
         expect(result.has_sufficient_resources).toBe(true);
         expect(result.blocking_reason).toBeNull();
@@ -169,6 +224,8 @@ describe('AssignmentResource', () => {
         } as unknown as AxiosInstance;
         const resource = new AssignmentResource(axiosMock, 'acc');
         const result = await resource.estimateResendCost('doc-1', 'asg-1', 's1');
+        expect('total' in result).toBe(true);
+        if (!('total' in result)) throw new Error('Expected the legacy resend-cost shape');
         expect(result.total).toBe(0);
         expect(result.breakdown[0]?.code).toBe('NotificationEmailResend');
     });
@@ -203,8 +260,80 @@ describe('AssignmentResource', () => {
         // typed access compiles + matches the live wire shape
         expect(asg.signers[0]?.step).toBe(1);
         expect(asg.signers[0]?.notified).toBe(true);
-        expect(asg.items?.[0]?.field.type).toBe('virtual');
+        expect(asg.items?.[0]?.field?.type).toBe('virtual');
         expect(asg.signing_urls?.[0]).toEqual({ signer_id: 's1', url: 'https://app/sign/abc' });
+    });
+
+    test('resetExpiration puts the reset-expiration path with a non-null date', async () => {
+        let capturedUrl = '';
+        let capturedBody: unknown;
+        const axiosMock = {
+            put: async (url: string, body: unknown) => {
+                capturedUrl = url;
+                capturedBody = body;
+                return { status: 200, data: { status: 200, data: { id: 'asg-1' } } };
+            },
+        } as unknown as AxiosInstance;
+
+        const resource = new AssignmentResource(axiosMock, 'acc');
+        await resource.resetExpiration('doc-1', 'asg-1', '2026-12-31T23:59:59Z');
+
+        expect(capturedUrl).toBe('/documents/doc-1/assignments/asg-1/reset-expiration');
+        expect(capturedBody).toEqual({ expires_at: '2026-12-31T23:59:59Z' });
+    });
+
+    test('resetExpiration keeps expires_at: null in the body (does not strip null)', async () => {
+        let capturedUrl = '';
+        let capturedBody: unknown;
+        const axiosMock = {
+            put: async (url: string, body: unknown) => {
+                capturedUrl = url;
+                capturedBody = body;
+                return { status: 200, data: { status: 200, data: { id: 'asg-1' } } };
+            },
+        } as unknown as AxiosInstance;
+
+        const resource = new AssignmentResource(axiosMock, 'acc');
+        await resource.resetExpiration('doc-1', 'asg-1', null);
+
+        expect(capturedUrl).toBe('/documents/doc-1/assignments/asg-1/reset-expiration');
+        // `null` is meaningful ("no expiration") and must survive as an explicit key.
+        expect(capturedBody).toEqual({ expires_at: null });
+        expect('expires_at' in (capturedBody as Record<string, unknown>)).toBe(true);
+    });
+
+    test('resetExpiration requires both the document and assignment IDs', async () => {
+        const axiosMock = {
+            put: async () => ({ status: 200, data: { status: 200, data: {} } }),
+        } as unknown as AxiosInstance;
+        const resource = new AssignmentResource(axiosMock, 'acc');
+        await expect(resource.resetExpiration('', 'asg-1', null)).rejects.toThrow(ValidationError);
+        await expect(resource.resetExpiration('doc-1', '', null)).rejects.toThrow(ValidationError);
+    });
+
+    test('listWhatsAppNotifications gets the whatsapp-notifications path', async () => {
+        let capturedUrl = '';
+        const axiosMock = {
+            get: async (url: string) => {
+                capturedUrl = url;
+                return { status: 200, data: { status: 200, data: [] } };
+            },
+        } as unknown as AxiosInstance;
+
+        const resource = new AssignmentResource(axiosMock, 'acc');
+        const result = await resource.listWhatsAppNotifications('doc-1', 'asg-1');
+
+        expect(capturedUrl).toBe('/documents/doc-1/assignments/asg-1/whatsapp-notifications');
+        expect(result).toEqual([]);
+    });
+
+    test('listWhatsAppNotifications requires both the document and assignment IDs', async () => {
+        const axiosMock = {
+            get: async () => ({ status: 200, data: { status: 200, data: [] } }),
+        } as unknown as AxiosInstance;
+        const resource = new AssignmentResource(axiosMock, 'acc');
+        await expect(resource.listWhatsAppNotifications('', 'asg-1')).rejects.toThrow(ValidationError);
+        await expect(resource.listWhatsAppNotifications('doc-1', '')).rejects.toThrow(ValidationError);
     });
 });
 
@@ -221,11 +350,14 @@ describe('AssignmentResource.list', () => {
                 return okList;
             },
         } as unknown as AxiosInstance;
-        await new AssignmentResource(ax, 'acc').list({ 'per-page': 20 });
+        await new AssignmentResource(ax, 'acc').list(
+            { 'per-page': 20, accountId: 'attacker-account' } as never,
+        );
         expect(url).toBe('/assignments');
         // The API 400s on account_id / X-Account-Id; only camelCase accountId works.
         expect(params).toEqual({ accountId: 'acc', 'per-page': 20 });
         expect(params['account_id']).toBeUndefined();
+        expect(params['accountId']).toBe('acc');
     });
 
     test('honours an explicit accountId override', async () => {
@@ -243,5 +375,57 @@ describe('AssignmentResource.list', () => {
     test('throws ValidationError when no account ID is available', async () => {
         const ax = { get: async () => okList } as unknown as AxiosInstance;
         await expect(new AssignmentResource(ax).list()).rejects.toThrow(ValidationError);
+    });
+});
+
+describe('AssignmentResource.resendNotification', () => {
+    test('PUTs the signer resend endpoint without a request body and unwraps the result', async () => {
+        let capturedUrl = '';
+        let argumentCount = 0;
+        const response = { is_sent: true, document_id: 'doc-1', signer_id: 'signer-1' };
+        const http = {
+            put: async (...args: unknown[]) => {
+                capturedUrl = args[0] as string;
+                argumentCount = args.length;
+                return { status: 200, data: { status: 200, data: response } };
+            },
+        } as unknown as AxiosInstance;
+
+        const result = await new AssignmentResource(http, 'acc').resendNotification(
+            'doc-1',
+            'assignment-1',
+            'signer-1',
+        );
+
+        expect(capturedUrl).toBe(
+            '/documents/doc-1/assignments/assignment-1/signers/signer-1/resend',
+        );
+        expect(argumentCount).toBe(1);
+        expect(result).toEqual(response);
+    });
+
+    test('encodes every caller-controlled ID as one path segment', async () => {
+        let capturedUrl = '';
+        const ax = {
+            put: async (url: string) => {
+                capturedUrl = url;
+                return {
+                    status: 200,
+                    data: {
+                        status: 200,
+                        data: { is_sent: true, document_id: 'doc/1', signer_id: 'signer/1' },
+                    },
+                };
+            },
+        } as unknown as AxiosInstance;
+
+        await new AssignmentResource(ax, 'acc').resendNotification(
+            'doc/1',
+            'assignment/1',
+            'signer/1',
+        );
+        expect(capturedUrl).toBe(
+            '/documents/doc%2F1/assignments/assignment%2F1/signers/signer%2F1/resend',
+        );
     });
 });

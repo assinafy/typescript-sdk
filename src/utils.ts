@@ -2,6 +2,15 @@ import axios from 'axios';
 import { ApiError, AssinafyError, NetworkError } from './errors';
 import type { Logger } from './types';
 
+const SAFE_LOG_NUMBER_FIELDS = new Set([
+    'attempt',
+    'attempts',
+    'delayMs',
+    'maxRetries',
+    'signerCount',
+    'size',
+]);
+
 /**
  * Unwrap the Assinafy API envelope `{ status, message, data }`.
  * Throws {@link ApiError} when the envelope reports a non-success status.
@@ -9,11 +18,17 @@ import type { Logger } from './types';
 export function handleAssinafyResponse<T>(response: unknown): T {
     const resp = response as { status?: number; data?: T; message?: string } | null | undefined;
 
-    if (resp && typeof resp === 'object' && resp.status !== undefined && 'data' in resp) {
-        if ((resp.status as number) >= 200 && (resp.status as number) < 300) {
+    if (
+        resp
+        && typeof resp === 'object'
+        && typeof resp.status === 'number'
+        && ('data' in resp || 'message' in resp)
+    ) {
+        if (resp.status >= 200 && resp.status < 300) {
+            // Some acknowledgement operations intentionally omit `data`.
             return resp.data as T;
         }
-        throw ApiError.fromResponse(resp.status as number, resp);
+        throw ApiError.fromResponse(resp.status, resp);
     }
 
     return response as T;
@@ -66,7 +81,13 @@ export function toSdkError(error: unknown, fallbackMessage: string): AssinafyErr
             const body = decodeBinaryErrorBody(error.response?.data ?? null);
             return ApiError.fromResponse(status, body ?? null);
         }
-        return new NetworkError(`${fallbackMessage}: ${error.message}`, { cause: error });
+        // AxiosError retains the entire request config, including Authorization
+        // and X-Api-Key headers. Never attach that object to a public SDK error:
+        // error reporters commonly serialize `cause`, which would disclose the
+        // caller's credentials and request body. Keep only diagnostic fields
+        // that are useful for transport failures.
+        const cause = sanitiseNetworkCause(error);
+        return new NetworkError(`${fallbackMessage}: ${cause.message}`, { cause });
     }
 
     if (error instanceof Error) {
@@ -84,6 +105,100 @@ export function createNoopLogger(): Logger {
         warn: () => undefined,
         error: () => undefined,
     };
+}
+
+/**
+ * Wrap a caller-supplied logger so observability is never a correctness or
+ * privacy boundary.
+ *
+ * Logger exceptions (including rejected promises returned by an `async`
+ * callback) are swallowed, so a successful API request cannot be converted
+ * into an SDK failure by telemetry. Context is reduced to a small allowlist of
+ * operational numeric counters; request bodies, paths, URLs, names, emails,
+ * phone numbers, account/document identifiers and credentials are never
+ * forwarded.
+ *
+ * @internal
+ */
+export function createSafeLogger(logger: Logger = createNoopLogger()): Logger {
+    return {
+        debug: (message, context) => invokeLogger(logger, 'debug', message, context),
+        info: (message, context) => invokeLogger(logger, 'info', message, context),
+        warn: (message, context) => invokeLogger(logger, 'warn', message, context),
+        error: (message, context) => invokeLogger(logger, 'error', message, context),
+    };
+}
+
+function invokeLogger(
+    logger: Logger,
+    level: keyof Logger,
+    message: string,
+    context: Record<string, unknown> | undefined,
+): void {
+    try {
+        // Although Logger callbacks are typed as `void`, JavaScript callers can
+        // supply async functions. Observe a returned thenable so its rejection
+        // does not become an unhandled rejection.
+        const method = logger[level] as (
+            message: string,
+            context?: Record<string, unknown>,
+        ) => unknown;
+        const safeContext = sanitiseLogContext(context);
+        const result = safeContext === undefined
+            ? method.call(logger, message)
+            : method.call(logger, message, safeContext);
+        if (isPromiseLike(result)) {
+            void Promise.resolve(result).catch(() => undefined);
+        }
+    } catch {
+        // Logging is best-effort and must never alter request semantics.
+    }
+}
+
+function sanitiseLogContext(
+    context: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+    if (!context) return undefined;
+
+    const safe: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(context)) {
+        if (SAFE_LOG_NUMBER_FIELDS.has(key) && typeof value === 'number' && Number.isFinite(value)) {
+            safe[key] = value;
+        }
+    }
+
+    return Object.keys(safe).length > 0 ? safe : undefined;
+}
+
+function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
+    return (
+        (typeof value === 'object' && value !== null) || typeof value === 'function'
+    ) && typeof (value as { then?: unknown }).then === 'function';
+}
+
+type ErrorWithCode = Error & { code?: unknown };
+
+function sanitiseNetworkCause(error: ErrorWithCode): ErrorWithCode {
+    const safe = new Error(redactSensitiveErrorText(error.message)) as ErrorWithCode;
+    safe.name = error.name || 'AxiosError';
+    if (typeof error.code === 'string' || typeof error.code === 'number') {
+        Object.defineProperty(safe, 'code', {
+            configurable: false,
+            enumerable: true,
+            value: error.code,
+            writable: false,
+        });
+    }
+    return safe;
+}
+
+function redactSensitiveErrorText(message: string): string {
+    return message
+        .replace(
+            /((?:authorization|x-api-key|api[_-]?key|access[_-]?token|token|secret)\s*[:=]\s*)(?:bearer\s+)?[^\s,;]+/gi,
+            '$1[REDACTED]',
+        )
+        .replace(/(https?:\/\/)[^/@\s]+:[^/@\s]+@/gi, '$1[REDACTED]@');
 }
 
 /** Strip undefined values from a params record (Axios sends `undefined` as literal). */

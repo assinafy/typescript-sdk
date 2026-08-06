@@ -1,251 +1,1427 @@
 /**
- * Live smoke test against https://api.assinafy.com.br/v1.
+ * Redaction-safe live integration audit for the Assinafy API.
  *
- * Run with:
- *   ASSINAFY_API_KEY=... ASSINAFY_ACCOUNT_ID=... bun scripts/live-smoke.ts
+ * Read-only audit:
+ *   ASSINAFY_BASE_URL=... ASSINAFY_API_KEY=... ASSINAFY_ACCOUNT_ID=... \
+ *     bun scripts/live-smoke.ts
  *
- * It exercises every read-only or non-destructive endpoint and prints PASS/FAIL
- * for each section. Add `--write` to also create + delete a signer.
+ * Full disposable-workspace audit (sandbox only by default):
+ *   ASSINAFY_BASE_URL=... ASSINAFY_API_KEY=... ASSINAFY_ACCOUNT_ID=... \
+ *   ASSINAFY_TEST_EMAIL_PRIMARY=... ASSINAFY_TEST_EMAIL_SECONDARY=... \
+ *     bun scripts/live-smoke.ts --all
+ *
+ * The script intentionally never prints credentials, resource IDs, names,
+ * e-mail addresses, webhook URLs, response bodies, request payloads, or raw
+ * error messages. Every fixture is generated in memory and every mutable
+ * resource is created inside a disposable workspace that is force-deleted in
+ * `finally`.
  */
 
-import { promises as fs } from 'node:fs';
-import path from 'node:path';
-import { AssinafyClient } from '../src';
+import { createHash, randomBytes } from 'node:crypto';
+import {
+    ApiError,
+    AssinafyClient,
+    AssinafyError,
+    type ICreateAssignmentPayload,
+    type IDocumentDetailsResponse,
+    type ITemplateDetailsResponse,
+} from '../src';
 
-const apiKey = process.env.ASSINAFY_API_KEY;
-const accountId = process.env.ASSINAFY_ACCOUNT_ID;
-const baseUrl = process.env.ASSINAFY_BASE_URL; // e.g. https://sandbox.assinafy.com.br/v1
-if (!apiKey || !accountId) {
-    throw new Error('Set ASSINAFY_API_KEY and ASSINAFY_ACCOUNT_ID.');
+const SANDBOX_HOST = 'sandbox.assinafy.com.br';
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const TEMPLATE_WAIT_MS = 90_000;
+const DISPATCH_WAIT_MS = 20_000;
+
+type AuditStatus = 'PASS' | 'FAIL' | 'SKIP';
+
+interface AuditRecord {
+    label: string;
+    status: AuditStatus;
 }
 
-const writeMode = process.argv.includes('--write');
-const uploadMode = process.argv.includes('--upload');
+type StepResult<T> = { ok: true; value: T } | { ok: false };
 
-const client = new AssinafyClient(baseUrl ? { apiKey, accountId, baseUrl } : { apiKey, accountId });
+interface AuditConfig {
+    accountId: string;
+    apiKey: string;
+    baseUrl: string;
+    fullAudit: boolean;
+    primaryEmail: string | undefined;
+    secondaryEmail: string | undefined;
+    webhookUrl: string | undefined;
+    loginEmail: string | undefined;
+    loginPassword: string | undefined;
+    signerAccessCode: string | undefined;
+    signerOtp: string | undefined;
+    publicDocumentId: string | undefined;
+}
 
-const results: Array<{ section: string; ok: boolean; note: string }> = [];
+interface SandboxState {
+    workspaceId: string | undefined;
+    client: AssinafyClient | undefined;
+    webhookActive: boolean;
+    documents: Set<string>;
+    templates: Set<string>;
+    tags: Set<string>;
+    fields: Set<string>;
+    signers: Set<string>;
+}
 
-async function run(section: string, fn: () => Promise<string>): Promise<void> {
+class AuditAssertionError extends Error {}
+class AuditConfigurationError extends Error {}
+
+class Reporter {
+    private readonly records: AuditRecord[] = [];
+
+    async step<T>(label: string, operation: () => Promise<T>): Promise<StepResult<T>> {
+        try {
+            const value = await operation();
+            this.record('PASS', label);
+            return { ok: true, value };
+        } catch (error) {
+            this.record('FAIL', label, safeFailure(error));
+            return { ok: false };
+        }
+    }
+
+    async stepWithKnownApiStatusSkip<T>(
+        label: string,
+        statusCode: number,
+        reason: string,
+        operation: () => Promise<T>,
+    ): Promise<StepResult<T>> {
+        try {
+            const value = await operation();
+            this.record('PASS', label);
+            return { ok: true, value };
+        } catch (error) {
+            if (error instanceof ApiError && error.statusCode === statusCode) {
+                this.record('SKIP', label, reason);
+                return { ok: false };
+            }
+            this.record('FAIL', label, safeFailure(error));
+            return { ok: false };
+        }
+    }
+
+    skip(label: string, reason: string): void {
+        this.record('SKIP', label, reason);
+    }
+
+    finish(): boolean {
+        const passed = this.records.filter((record) => record.status === 'PASS').length;
+        const failed = this.records.filter((record) => record.status === 'FAIL').length;
+        const skipped = this.records.filter((record) => record.status === 'SKIP').length;
+        console.log(`SUMMARY PASS=${passed} FAIL=${failed} SKIP=${skipped}`);
+        return failed === 0;
+    }
+
+    private record(status: AuditStatus, label: string, note?: string): void {
+        this.records.push({ status, label });
+        console.log(note ? `${status} ${label} (${note})` : `${status} ${label}`);
+    }
+}
+
+function safeFailure(error: unknown): string {
+    if (error instanceof ApiError) return `HTTP ${error.statusCode}`;
+    if (error instanceof AuditAssertionError) return 'contract assertion failed';
+    if (error instanceof AuditConfigurationError) return 'configuration rejected';
+    if (error instanceof AssinafyError) return 'SDK operation failed';
+    return 'unexpected failure';
+}
+
+function assertCondition(condition: unknown): asserts condition {
+    if (!condition) throw new AuditAssertionError();
+}
+
+function assertId(value: unknown): asserts value is string {
+    assertCondition(typeof value === 'string' && value.length > 0);
+}
+
+function assertBuffer(value: unknown): asserts value is Buffer {
+    assertCondition(Buffer.isBuffer(value) && value.byteLength > 0);
+}
+
+function assertArray(value: unknown): asserts value is unknown[] {
+    assertCondition(Array.isArray(value));
+}
+
+function requiredEnv(name: string): string {
+    const value = process.env[name]?.trim();
+    if (!value) throw new AuditConfigurationError();
+    return value;
+}
+
+function optionalEnv(name: string): string | undefined {
+    const value = process.env[name]?.trim();
+    return value || undefined;
+}
+
+function loadConfig(): AuditConfig {
+    const args = new Set(process.argv.slice(2));
+    const allowed = new Set(['--all', '--confirm-production']);
+    if ([...args].some((argument) => !allowed.has(argument))) {
+        throw new AuditConfigurationError();
+    }
+
+    const baseUrl = requiredEnv('ASSINAFY_BASE_URL').replace(/\/+$/, '');
+    let parsedBaseUrl: URL;
     try {
-        const note = await fn();
-        results.push({ section, ok: true, note });
-        console.log(`PASS ${section}: ${note}`);
-    } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        results.push({ section, ok: false, note: msg });
-        console.log(`FAIL ${section}: ${msg}`);
+        parsedBaseUrl = new URL(baseUrl);
+    } catch {
+        throw new AuditConfigurationError();
+    }
+    if (
+        parsedBaseUrl.protocol !== 'https:' ||
+        parsedBaseUrl.username ||
+        parsedBaseUrl.password ||
+        parsedBaseUrl.search ||
+        parsedBaseUrl.hash ||
+        !/^\/v1\/?$/.test(parsedBaseUrl.pathname)
+    ) {
+        throw new AuditConfigurationError();
+    }
+
+    const fullAudit = args.has('--all');
+    const confirmProduction = args.has('--confirm-production');
+    if (
+        fullAudit &&
+        parsedBaseUrl.host.toLowerCase() !== SANDBOX_HOST &&
+        !confirmProduction
+    ) {
+        throw new AuditConfigurationError();
+    }
+
+    const primaryEmail = optionalEnv('ASSINAFY_TEST_EMAIL_PRIMARY');
+    const secondaryEmail = optionalEnv('ASSINAFY_TEST_EMAIL_SECONDARY');
+    if (fullAudit && (!primaryEmail || !secondaryEmail)) {
+        throw new AuditConfigurationError();
+    }
+    for (const email of [primaryEmail, secondaryEmail]) {
+        if (email !== undefined && !EMAIL_RE.test(email)) throw new AuditConfigurationError();
+    }
+
+    const webhookUrl = optionalEnv('ASSINAFY_TEST_WEBHOOK_URL');
+    if (webhookUrl !== undefined) validateFixtureUrl(webhookUrl);
+
+    const loginEmail = optionalEnv('ASSINAFY_TEST_LOGIN_EMAIL');
+    const loginPassword = optionalEnv('ASSINAFY_TEST_LOGIN_PASSWORD');
+    if ((loginEmail === undefined) !== (loginPassword === undefined)) {
+        throw new AuditConfigurationError();
+    }
+    if (loginEmail !== undefined && !EMAIL_RE.test(loginEmail)) {
+        throw new AuditConfigurationError();
+    }
+
+    return {
+        accountId: requiredEnv('ASSINAFY_ACCOUNT_ID'),
+        apiKey: requiredEnv('ASSINAFY_API_KEY'),
+        baseUrl,
+        fullAudit,
+        primaryEmail,
+        secondaryEmail,
+        webhookUrl,
+        loginEmail,
+        loginPassword,
+        signerAccessCode: optionalEnv('ASSINAFY_SIGNER_ACCESS_CODE'),
+        signerOtp: optionalEnv('ASSINAFY_SIGNER_OTP'),
+        publicDocumentId: optionalEnv('ASSINAFY_PUBLIC_DOCUMENT_ID'),
+    };
+}
+
+function validateFixtureUrl(value: string): void {
+    let url: URL;
+    try {
+        url = new URL(value);
+    } catch {
+        throw new AuditConfigurationError();
+    }
+    if (url.protocol !== 'https:' || url.username || url.password) {
+        throw new AuditConfigurationError();
+    }
+}
+
+function makePdf(): Buffer {
+    const stream = 'BT /F1 12 Tf 72 720 Td (Assinafy SDK integration audit) Tj ET\n';
+    const objects = [
+        '1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n',
+        '2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n',
+        '3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>\nendobj\n',
+        `4 0 obj\n<< /Length ${Buffer.byteLength(stream)} >>\nstream\n${stream}endstream\nendobj\n`,
+        '5 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n',
+    ];
+    const chunks: Buffer[] = [Buffer.from('%PDF-1.4\n%\xE2\xE3\xCF\xD3\n', 'binary')];
+    const offsets: number[] = [];
+    let offset = chunks[0]?.byteLength ?? 0;
+
+    for (const object of objects) {
+        offsets.push(offset);
+        const chunk = Buffer.from(object, 'utf8');
+        chunks.push(chunk);
+        offset += chunk.byteLength;
+    }
+
+    const xrefOffset = offset;
+    const xref = [
+        'xref\n0 6\n',
+        '0000000000 65535 f \n',
+        ...offsets.map((value) => `${String(value).padStart(10, '0')} 00000 n \n`),
+        'trailer\n<< /Size 6 /Root 1 0 R >>\n',
+        `startxref\n${xrefOffset}\n%%EOF\n`,
+    ].join('');
+    chunks.push(Buffer.from(xref, 'utf8'));
+    return Buffer.concat(chunks);
+}
+
+function makePng(): Buffer {
+    return Buffer.from(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+        'base64',
+    );
+}
+
+function randomLabel(prefix: string): string {
+    return `${prefix}-${Date.now()}-${randomBytes(6).toString('hex')}`;
+}
+
+function currentMonth(): string {
+    return new Date().toISOString().slice(0, 7);
+}
+
+function delay(milliseconds: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+async function runGlobalReads(
+    config: AuditConfig,
+    client: AssinafyClient,
+    reporter: Reporter,
+): Promise<void> {
+    await reporter.step('authentication.oauth-start-url', async () => {
+        const url = new URL(client.auth.getSocialLoginUrl('google'));
+        assertCondition(url.protocol === 'https:');
+    });
+    await reporter.step('authentication.oauth-callback-url', async () => {
+        const url = new URL(client.auth.getSocialLoginCallbackUrl());
+        assertCondition(url.protocol === 'https:');
+    });
+    await reporter.step('authentication.api-key-read', async () => {
+        await client.auth.getApiKey();
+    });
+
+    if (config.loginEmail && config.loginPassword) {
+        await reporter.step('authentication.password-login', async () => {
+            const result = await client.auth.login(config.loginEmail!, config.loginPassword!);
+            assertCondition(typeof result.access_token === 'string' && result.access_token.length > 0);
+        });
+    } else {
+        reporter.skip('authentication.password-login', 'login fixture not supplied');
+    }
+    reporter.skip('authentication.password-management', 'password mutation fixture not supplied');
+    reporter.skip('authentication.api-key-rotation', 'credential rotation is intentionally isolated');
+    reporter.skip('authentication.social-provider-login', 'provider token fixture not supplied');
+    reporter.skip('authentication.social-provider-link', 'provider-link fixture not supplied');
+
+    await reporter.step('users.self', async () => {
+        const user = await client.users.getCurrent();
+        assertId(user.id);
+    });
+    await reporter.stepWithKnownApiStatusSkip(
+        'users.stats-monthly',
+        404,
+        'official route is not deployed in sandbox',
+        async () => {
+            assertArray(await client.users.getStats());
+        },
+    );
+    await reporter.stepWithKnownApiStatusSkip(
+        'users.stats-daily',
+        404,
+        'official route is not deployed in sandbox',
+        async () => {
+            assertArray(
+                await client.users.getStats({ granularity: 'daily', month: currentMonth() }),
+            );
+        },
+    );
+
+    await reporter.step('workspaces.list', async () => {
+        const result = await client.workspaces.list();
+        assertArray(result.data);
+    });
+    await reporter.step('workspaces.get-source', async () => {
+        const workspace = await client.workspaces.get(config.accountId);
+        assertId(workspace.id);
+    });
+    await reporter.step('workspaces.theme-source', async () => {
+        const theme = await client.workspaces.getTheme(config.accountId);
+        assertCondition(typeof theme.account_name === 'string');
+    });
+    await reporter.stepWithKnownApiStatusSkip(
+        'workspaces.stats-source-monthly',
+        404,
+        'official route is not deployed in sandbox',
+        async () => {
+            assertArray(await client.workspaces.getStats(config.accountId));
+        },
+    );
+    await reporter.stepWithKnownApiStatusSkip(
+        'workspaces.stats-source-daily',
+        404,
+        'official route is not deployed in sandbox',
+        async () => {
+            assertArray(
+                await client.workspaces.getStats(config.accountId, {
+                    granularity: 'daily',
+                    month: currentMonth(),
+                }),
+            );
+        },
+    );
+
+    await reporter.step('documents.statuses', async () => {
+        assertArray(await client.documents.statuses());
+    });
+    await reporter.step('documents.verify-public', async () => {
+        const verification = await client.documents.verify('0000000000000000000000000000000000000000');
+        assertCondition(typeof verification.is_valid === 'boolean');
+    });
+    await reporter.step('fields.types', async () => {
+        assertArray(await client.fields.listTypes());
+    });
+    await reporter.step('webhooks.event-types', async () => {
+        assertArray(await client.webhooks.listEventTypes());
+    });
+
+    await runOptionalSignerReads(config, client, reporter);
+}
+
+async function runOptionalSignerReads(
+    config: AuditConfig,
+    client: AssinafyClient,
+    reporter: Reporter,
+): Promise<void> {
+    const accessCode = config.signerAccessCode;
+    if (!accessCode) {
+        reporter.skip('signer-documents.read-suite', 'signer access-code fixture not supplied');
+        reporter.skip('signer-documents.verify-otp', 'signer OTP fixture not supplied');
+        reporter.skip('signer-documents.legal-and-signing-mutations', 'legal mutation fixture not supplied');
+        return;
+    }
+
+    const self = await reporter.step('signer-documents.self', async () => {
+        const signer = await client.signerDocuments.self(accessCode);
+        assertId(signer.id);
+        return signer;
+    });
+    if (!self.ok) {
+        reporter.skip('signer-documents.list', 'signer profile was unavailable');
+        reporter.skip('signer-documents.search', 'signer profile was unavailable');
+        reporter.skip('signer-documents.current', 'signer profile was unavailable');
+    } else {
+        const signerId = self.value.id;
+        const listed = await reporter.step('signer-documents.list', async () => {
+            const result = await client.signerDocuments.list(signerId, accessCode, { 'per-page': 5 });
+            assertArray(result.data);
+            return result.data;
+        });
+        await reporter.step('signer-documents.search', async () => {
+            const result = await client.signerDocuments.search(signerId, accessCode);
+            assertArray(result.data);
+        });
+
+        const firstDocument = listed.ok ? listed.value[0] : undefined;
+        if (firstDocument) {
+            await reporter.step('signer-documents.current', async () => {
+                const document = await client.signerDocuments.getCurrent(signerId, accessCode);
+                assertId(document.id);
+            });
+            await reporter.step('signer-documents.download-original', async () => {
+                assertBuffer(
+                    await client.signerDocuments.download(
+                        signerId,
+                        firstDocument.id,
+                        'original',
+                    ),
+                );
+            });
+        } else {
+            reporter.skip('signer-documents.current', 'no signer document fixture exists');
+            reporter.skip('signer-documents.download-original', 'no signer document fixture exists');
+        }
+
+        if (self.value.has_signature) {
+            await reporter.step('signer-documents.download-signature', async () => {
+                assertBuffer(await client.signerDocuments.downloadSignature(accessCode));
+            });
+        } else {
+            reporter.skip('signer-documents.download-signature', 'stored signature fixture not present');
+        }
+    }
+
+    if (config.signerOtp) {
+        await reporter.step('signer-documents.verify-otp', async () => {
+            await client.signerDocuments.verifyEmail({
+                signerAccessCode: accessCode,
+                verificationCode: config.signerOtp!,
+            });
+        });
+    } else {
+        reporter.skip('signer-documents.verify-otp', 'signer OTP fixture not supplied');
+    }
+    reporter.skip('signer-documents.accept-terms', 'explicit legal-consent fixture not supplied');
+    reporter.skip('signer-documents.confirm-data', 'identity mutation fixture not supplied');
+    reporter.skip('signer-documents.upload-signature', 'signature mutation fixture not supplied');
+    reporter.skip('signer-documents.assignment-read', 'accepted-terms fixture not supplied');
+    reporter.skip('signer-documents.sign', 'field-value signing fixture not supplied');
+    reporter.skip('signer-documents.sign-multiple', 'reusable-signature fixture not supplied');
+    reporter.skip('signer-documents.decline', 'decline authorization fixture not supplied');
+    reporter.skip('signer-documents.decline-multiple', 'decline authorization fixture not supplied');
+}
+
+async function runReadOnlyAccountAudit(
+    config: AuditConfig,
+    client: AssinafyClient,
+    reporter: Reporter,
+): Promise<void> {
+    await reporter.step('documents.list', async () => {
+        const result = await client.documents.list({ 'per-page': 5 });
+        assertArray(result.data);
+    });
+    await reporter.step('documents.search', async () => {
+        const result = await client.documents.search({ 'per-page': 5 });
+        assertArray(result.data);
+    });
+    await reporter.step('assignments.list', async () => {
+        const result = await client.assignments.list({ 'per-page': 5 });
+        assertArray(result.data);
+    });
+    await reporter.step('signers.list', async () => {
+        const result = await client.signers.list({ 'per-page': 5 });
+        assertArray(result.data);
+    });
+    await reporter.step('tags.list', async () => {
+        assertArray(await client.tags.list());
+    });
+    await reporter.step('fields.list', async () => {
+        assertArray(await client.fields.list({ include_inactive: true, include_standard: true }));
+    });
+    await reporter.step('templates.list', async () => {
+        const result = await client.templates.list({ 'per-page': 5 });
+        assertArray(result.data);
+    });
+    await reporter.step('webhooks.get', async () => {
+        await client.webhooks.get();
+    });
+    await reporter.step('webhooks.dispatches', async () => {
+        const result = await client.webhooks.listDispatches({ 'per-page': 5 });
+        assertArray(result.data);
+    });
+
+    if (config.publicDocumentId) {
+        await reporter.step('documents.public', async () => {
+            const document = await client.documents.getPublic(config.publicDocumentId!);
+            assertId(document.id);
+        });
+    } else {
+        reporter.skip('documents.public', 'public document fixture not supplied');
+    }
+    reporter.skip('workspaces.logo-download-source', 'existing logo fixture not declared');
+    reporter.skip('webhooks.retry-dispatch', 'read-only mode does not retry deliveries');
+}
+
+async function runFullSandboxAudit(
+    config: AuditConfig,
+    rootClient: AssinafyClient,
+    reporter: Reporter,
+): Promise<void> {
+    assertCondition(config.primaryEmail && config.secondaryEmail);
+    const primaryEmail = config.primaryEmail;
+    const secondaryEmail = config.secondaryEmail;
+    const pdf = makePdf();
+    const png = makePng();
+    const state: SandboxState = {
+        workspaceId: undefined,
+        client: undefined,
+        webhookActive: false,
+        documents: new Set(),
+        templates: new Set(),
+        tags: new Set(),
+        fields: new Set(),
+        signers: new Set(),
+    };
+
+    try {
+        const workspaceCreated = await reporter.step('workspaces.create-disposable', async () => {
+            const workspace = await rootClient.workspaces.create({
+                name: randomLabel('sdk-integration-audit'),
+            });
+            assertId(workspace.id);
+            return workspace;
+        });
+        if (!workspaceCreated.ok) {
+            reporter.skip('sandbox.mutable-resource-suite', 'disposable workspace was not created');
+            return;
+        }
+
+        state.workspaceId = workspaceCreated.value.id;
+        state.client = new AssinafyClient({
+            apiKey: config.apiKey,
+            accountId: state.workspaceId,
+            baseUrl: config.baseUrl,
+        });
+        const client = state.client;
+        const workspaceId = state.workspaceId;
+
+        await reporter.step('workspaces.get-disposable', async () => {
+            const workspace = await client.workspaces.get(workspaceId);
+            assertCondition(workspace.id === workspaceId);
+        });
+        await reporter.step('workspaces.update-disposable', async () => {
+            const workspace = await client.workspaces.update(workspaceId, {
+                name: randomLabel('sdk-integration-audit-updated'),
+            });
+            assertCondition(workspace.id === workspaceId);
+        });
+        await reporter.step('workspaces.update-notification-sender', async () => {
+            const workspace = await client.workspaces.update(workspaceId, {
+                notification_sender_type: 'Account',
+            });
+            assertCondition(workspace.id === workspaceId);
+        });
+        await reporter.step('workspaces.update-brand-colors-extension', async () => {
+            const workspace = await client.workspaces.update(workspaceId, {
+                primary_color: '2255aa',
+                secondary_color: '11aa77',
+            });
+            assertCondition(workspace.id === workspaceId);
+        });
+        await reporter.step('workspaces.theme-disposable', async () => {
+            const theme = await client.workspaces.getTheme(workspaceId);
+            assertCondition(typeof theme.account_name === 'string');
+        });
+        await reporter.stepWithKnownApiStatusSkip(
+            'workspaces.stats-disposable-monthly',
+            404,
+            'official route is not deployed in sandbox',
+            async () => {
+                assertArray(await client.workspaces.getStats(workspaceId));
+            },
+        );
+        await reporter.stepWithKnownApiStatusSkip(
+            'workspaces.stats-disposable-daily',
+            404,
+            'official route is not deployed in sandbox',
+            async () => {
+                assertArray(
+                    await client.workspaces.getStats(workspaceId, {
+                        granularity: 'daily',
+                        month: currentMonth(),
+                    }),
+                );
+            },
+        );
+
+        const logoUploaded = await reporter.step('workspaces.logo-upload', async () => {
+            await client.workspaces.uploadLogo(workspaceId, {
+                buffer: png,
+                fileName: 'sdk-integration-audit.png',
+                contentType: 'image/png',
+            });
+        });
+        if (logoUploaded.ok) {
+            await reporter.step('workspaces.logo-download', async () => {
+                assertBuffer(await client.workspaces.downloadLogo(workspaceId));
+            });
+            await reporter.step('workspaces.logo-delete', async () => {
+                await client.workspaces.deleteLogo(workspaceId);
+            });
+        } else {
+            reporter.skip('workspaces.logo-download', 'logo upload failed');
+            reporter.skip('workspaces.logo-delete', 'logo upload failed');
+        }
+
+        await configureDisposableWebhook(config, client, reporter, state, secondaryEmail);
+
+        const firstTag = await reporter.step('tags.create-primary', async () => {
+            const tag = await client.tags.create({
+                name: randomLabel('sdk-integration-primary'),
+                color: '3366aa',
+            });
+            assertId(tag.id);
+            state.tags.add(tag.id);
+            return tag;
+        });
+        const secondTag = await reporter.step('tags.create-secondary', async () => {
+            const tag = await client.tags.create({
+                name: randomLabel('sdk-integration-secondary'),
+            });
+            assertId(tag.id);
+            state.tags.add(tag.id);
+            return tag;
+        });
+        await reporter.step('tags.list', async () => {
+            assertArray(await client.tags.list());
+        });
+        if (firstTag.ok) {
+            await reporter.step('tags.update', async () => {
+                const tag = await client.tags.update(firstTag.value.id, {
+                    name: randomLabel('sdk-integration-updated'),
+                    color: '7744aa',
+                });
+                assertCondition(tag.id === firstTag.value.id);
+            });
+        } else {
+            reporter.skip('tags.update', 'tag fixture was not created');
+        }
+
+        const fieldCreated = await reporter.step('fields.create', async () => {
+            const field = await client.fields.create({
+                type: 'text',
+                name: randomLabel('SDK integration field'),
+                is_required: true,
+                is_active: true,
+            });
+            assertId(field.id);
+            state.fields.add(field.id);
+            return field;
+        });
+        await reporter.step('fields.list', async () => {
+            assertArray(await client.fields.list({ include_inactive: true, include_standard: true }));
+        });
+        if (fieldCreated.ok) {
+            await reporter.step('fields.get', async () => {
+                const field = await client.fields.get(fieldCreated.value.id);
+                assertCondition(field.id === fieldCreated.value.id);
+            });
+            await reporter.step('fields.update', async () => {
+                const field = await client.fields.update(fieldCreated.value.id, {
+                    name: randomLabel('SDK integration field updated'),
+                    regex: null,
+                    is_required: false,
+                });
+                assertCondition(field.id === fieldCreated.value.id);
+            });
+            await reporter.step('fields.validate', async () => {
+                const result = await client.fields.validate(fieldCreated.value.id, 'audit-ok');
+                assertCondition(typeof result.success === 'boolean');
+            });
+            await reporter.step('fields.validate-multiple', async () => {
+                const results = await client.fields.validateMultiple([
+                    { field_id: fieldCreated.value.id, value: 'audit-ok' },
+                    { field_id: fieldCreated.value.id, value: 'audit-not-ok' },
+                ]);
+                assertCondition(results.length === 2);
+            });
+        } else {
+            reporter.skip('fields.get', 'field fixture was not created');
+            reporter.skip('fields.update', 'field fixture was not created');
+            reporter.skip('fields.validate', 'field fixture was not created');
+            reporter.skip('fields.validate-multiple', 'field fixture was not created');
+        }
+
+        const firstSigner = await createDisposableSigner(
+            client,
+            reporter,
+            state,
+            'signers.create-primary',
+            primaryEmail,
+            randomLabel('SDK Integration Signer Primary'),
+        );
+        const secondSigner = await createDisposableSigner(
+            client,
+            reporter,
+            state,
+            'signers.create-secondary',
+            secondaryEmail,
+            randomLabel('SDK Integration Signer Secondary'),
+        );
+        await reporter.step('signers.list', async () => {
+            const result = await client.signers.list({ 'per-page': 10 });
+            assertArray(result.data);
+        });
+        if (firstSigner.ok) {
+            await reporter.step('signers.get', async () => {
+                const signer = await client.signers.get(firstSigner.value.id);
+                assertCondition(signer.id === firstSigner.value.id);
+            });
+            await reporter.step('signers.find-by-email-primary', async () => {
+                const signer = await client.signers.findByEmail(primaryEmail);
+                assertCondition(signer?.id === firstSigner.value.id);
+            });
+            await reporter.step('signers.update', async () => {
+                const signer = await client.signers.update(firstSigner.value.id, {
+                    full_name: randomLabel('SDK Integration Signer Updated'),
+                });
+                assertCondition(signer.id === firstSigner.value.id);
+            });
+        } else {
+            reporter.skip('signers.get', 'signer fixture was not created');
+            reporter.skip('signers.find-by-email-primary', 'signer fixture was not created');
+            reporter.skip('signers.update', 'signer fixture was not created');
+        }
+        if (secondSigner.ok) {
+            await reporter.step('signers.find-by-email-secondary', async () => {
+                const signer = await client.signers.findByEmail(secondaryEmail);
+                assertCondition(signer?.id === secondSigner.value.id);
+            });
+        } else {
+            reporter.skip('signers.find-by-email-secondary', 'signer fixture was not created');
+        }
+
+        const uploadName = randomLabel('sdk-integration-document');
+        const documentUploaded = await reporter.step('documents.upload', async () => {
+            const document = await client.documents.upload(
+                { buffer: pdf, fileName: 'sdk-integration-audit.pdf' },
+                { name: uploadName, metadata: { source: 'sdk-integration-audit' } },
+            );
+            assertId(document.id);
+            state.documents.add(document.id);
+            return document;
+        });
+
+        let readyDocument: IDocumentDetailsResponse | undefined;
+        if (documentUploaded.ok) {
+            const documentId = documentUploaded.value.id;
+            const ready = await reporter.step('documents.wait-until-ready', async () => {
+                const document = await client.documents.waitUntilReady(documentId, {
+                    maxWaitMs: 120_000,
+                    pollIntervalMs: 2_000,
+                });
+                assertCondition(document.pages.length > 0);
+                return document;
+            });
+            if (ready.ok) readyDocument = ready.value;
+
+            await reporter.step('documents.details', async () => {
+                const document = await client.documents.details(documentId);
+                assertCondition(document.id === documentId);
+            });
+            await reporter.step('documents.get-alias', async () => {
+                const document = await client.documents.get(documentId);
+                assertCondition(document.id === documentId);
+            });
+            await reporter.step('documents.list', async () => {
+                const result = await client.documents.list({ 'per-page': 10 });
+                assertArray(result.data);
+            });
+            await reporter.step('documents.search-before-rename', async () => {
+                const result = await client.documents.search({ search: uploadName, 'per-page': 10 });
+                assertArray(result.data);
+            });
+
+            if (ready.ok) {
+                const renamed = randomLabel('sdk-integration-document-renamed');
+                await reporter.step('documents.rename', async () => {
+                    const document = await client.documents.rename(documentId, renamed);
+                    assertCondition(document.id === documentId);
+                });
+                await reporter.step('documents.search-after-rename', async () => {
+                    const result = await client.documents.search({ search: renamed, 'per-page': 10 });
+                    assertArray(result.data);
+                });
+                await reporter.step('documents.thumbnail', async () => {
+                    assertBuffer(await client.documents.thumbnail(documentId));
+                });
+                const firstPage = ready.value.pages[0];
+                if (firstPage) {
+                    await reporter.step('documents.page-download', async () => {
+                        assertBuffer(await client.documents.downloadPage(documentId, firstPage.id));
+                    });
+                } else {
+                    reporter.skip('documents.page-download', 'rendered page fixture not available');
+                }
+            } else {
+                reporter.skip('documents.rename', 'document did not reach a ready state');
+                reporter.skip('documents.search-after-rename', 'document was not renamed');
+                reporter.skip('documents.thumbnail', 'document did not reach a ready state');
+                reporter.skip('documents.page-download', 'rendered page fixture not available');
+            }
+
+            await reporter.step('documents.download-original', async () => {
+                assertBuffer(await client.documents.download(documentId, 'original'));
+            });
+            reporter.skip('documents.download-certificated', 'unsigned document has no final artifact');
+            reporter.skip('documents.download-certificate-page', 'unsigned document has no certificate page');
+            reporter.skip('documents.download-bundle', 'unsigned document has no signed bundle');
+            await reporter.step('documents.activities', async () => {
+                assertArray(await client.documents.activities(documentId));
+            });
+            await runDocumentTagSuite(client, reporter, documentId, firstTag, secondTag);
+        } else {
+            reporter.skip('documents.dependent-suite', 'document fixture was not uploaded');
+        }
+
+        await deleteTrackedField(client, reporter, state, fieldCreated);
+        await deleteTrackedTag(client, reporter, state, firstTag, 'tags.delete-primary');
+        await deleteTrackedTag(client, reporter, state, secondTag, 'tags.delete-secondary');
+
+        const availableSigners = [firstSigner, secondSigner]
+            .filter((result): result is { ok: true; value: { id: string; email: string } } => result.ok)
+            .map((result) => result.value);
+        if (documentUploaded.ok && readyDocument && availableSigners.length > 0) {
+            await runAssignmentSuite(
+                client,
+                reporter,
+                documentUploaded.value.id,
+                availableSigners,
+            );
+        } else {
+            reporter.skip('assignments.mutable-suite', 'ready document or signer fixture was unavailable');
+        }
+
+        if (documentUploaded.ok) {
+            const documentId = documentUploaded.value.id;
+            await reporter.step('documents.public', async () => {
+                const document = await client.documents.getPublic(documentId);
+                assertCondition(document.id === documentId);
+            });
+            for (const signer of availableSigners) {
+                await reporter.step('documents.send-token-email', async () => {
+                    await client.documents.sendToken(documentId, signer.email);
+                });
+            }
+            await reporter.step('documents.signing-progress', async () => {
+                const progress = await client.documents.getSigningProgress(documentId);
+                assertCondition(progress.total >= progress.signed && progress.pending >= 0);
+            });
+            await reporter.step('documents.is-fully-signed', async () => {
+                assertCondition(typeof (await client.documents.isFullySigned(documentId)) === 'boolean');
+            });
+            await reporter.step('documents.verify-generated-hash', async () => {
+                const hash = createHash('sha1').update(pdf).digest('hex').toUpperCase();
+                const verification = await client.documents.verify(hash);
+                assertCondition(typeof verification.is_valid === 'boolean');
+            });
+            await deleteTrackedDocument(client, reporter, state, documentId, 'documents.delete');
+        }
+
+        await runTemplateSuite(
+            client,
+            reporter,
+            state,
+            pdf,
+            availableSigners[0]?.id,
+        );
+
+        await finishDisposableWebhook(client, reporter, state);
+
+        if (firstSigner.ok) {
+            await deleteTrackedSigner(client, reporter, state, firstSigner.value.id, 'signers.delete-primary');
+        }
+        if (secondSigner.ok) {
+            await deleteTrackedSigner(client, reporter, state, secondSigner.value.id, 'signers.delete-secondary');
+        }
+    } finally {
+        await cleanupSandbox(rootClient, reporter, state);
+    }
+}
+
+async function configureDisposableWebhook(
+    config: AuditConfig,
+    client: AssinafyClient,
+    reporter: Reporter,
+    state: SandboxState,
+    notificationEmail: string,
+): Promise<void> {
+    if (config.webhookUrl) {
+        const registered = await reporter.step('webhooks.register', async () => {
+            const subscription = await client.webhooks.register({
+                url: config.webhookUrl!,
+                email: notificationEmail,
+                events: ['document_ready', 'document_prepared', 'document_processing_failed'],
+                is_active: true,
+            });
+            assertCondition(subscription.is_active === true);
+        });
+        state.webhookActive = registered.ok;
+    } else {
+        reporter.skip('webhooks.register', 'webhook fixture URL not supplied');
+    }
+
+    await reporter.step('webhooks.get', async () => {
+        await client.webhooks.get();
+    });
+    await reporter.step('webhooks.dispatches-initial', async () => {
+        const result = await client.webhooks.listDispatches({ 'per-page': 10 });
+        assertArray(result.data);
+    });
+}
+
+async function finishDisposableWebhook(
+    client: AssinafyClient,
+    reporter: Reporter,
+    state: SandboxState,
+): Promise<void> {
+    const dispatches = await reporter.step('webhooks.dispatches-after-events', async () => {
+        const deadline = Date.now() + DISPATCH_WAIT_MS;
+        let result = await client.webhooks.listDispatches({ 'per-page': 10 });
+        while (result.data.length === 0 && state.webhookActive && Date.now() < deadline) {
+            await delay(2_000);
+            result = await client.webhooks.listDispatches({ 'per-page': 10 });
+        }
+        const data = result.data;
+        assertArray(data);
+        return data;
+    });
+
+    const dispatch = dispatches.ok ? dispatches.value[0] : undefined;
+    if (dispatch) {
+        await reporter.step('webhooks.retry-dispatch', async () => {
+            const retried = await client.webhooks.retryDispatch(dispatch.id);
+            assertId(retried.id);
+            assertCondition(typeof retried.delivered === 'boolean');
+        });
+    } else {
+        reporter.skip('webhooks.retry-dispatch', 'no disposable dispatch fixture exists');
+    }
+
+    if (state.webhookActive) {
+        const inactive = await reporter.step('webhooks.inactivate', async () => {
+            const subscription = await client.webhooks.inactivate();
+            assertCondition(subscription.is_active === false);
+        });
+        if (inactive.ok) state.webhookActive = false;
+    } else {
+        reporter.skip('webhooks.inactivate', 'active disposable subscription does not exist');
+    }
+}
+
+async function createDisposableSigner(
+    client: AssinafyClient,
+    reporter: Reporter,
+    state: SandboxState,
+    label: string,
+    email: string,
+    fullName: string,
+): Promise<StepResult<{ id: string; email: string }>> {
+    return reporter.step(label, async () => {
+        const signer = await client.signers.create({ full_name: fullName, email });
+        assertId(signer.id);
+        state.signers.add(signer.id);
+        return { id: signer.id, email };
+    });
+}
+
+async function runDocumentTagSuite(
+    client: AssinafyClient,
+    reporter: Reporter,
+    documentId: string,
+    firstTag: StepResult<{ id: string }>,
+    secondTag: StepResult<{ id: string }>,
+): Promise<void> {
+    await reporter.step('documents.tags-list', async () => {
+        assertArray(await client.documents.listTags(documentId));
+    });
+    if (!firstTag.ok) {
+        reporter.skip('documents.tags-replace', 'tag fixture was not created');
+        reporter.skip('documents.tags-add', 'tag fixture was not created');
+        reporter.skip('documents.tags-detach', 'tag fixture was not created');
+        return;
+    }
+
+    await reporter.step('documents.tags-replace', async () => {
+        assertArray(await client.documents.replaceTags(documentId, [firstTag.value.id]));
+    });
+    if (secondTag.ok) {
+        await reporter.step('documents.tags-add', async () => {
+            assertArray(await client.documents.addTags(documentId, [secondTag.value.id]));
+        });
+    } else {
+        reporter.skip('documents.tags-add', 'second tag fixture was not created');
+    }
+    await reporter.step('documents.tags-detach', async () => {
+        await client.documents.detachTag(documentId, firstTag.value.id);
+    });
+    await reporter.step('documents.tags-clear', async () => {
+        assertArray(await client.documents.replaceTags(documentId, []));
+    });
+}
+
+async function runAssignmentSuite(
+    client: AssinafyClient,
+    reporter: Reporter,
+    documentId: string,
+    signers: Array<{ id: string; email: string }>,
+): Promise<void> {
+    const signerPayload: NonNullable<ICreateAssignmentPayload['signers']> = signers.map(
+        (signer) => ({
+            id: signer.id,
+            verification_method: 'Email',
+            notification_methods: ['Email'],
+            step: 1,
+        }),
+    );
+    const payload: ICreateAssignmentPayload = {
+        method: 'virtual',
+        signers: signerPayload,
+        message: 'SDK integration audit notification',
+    };
+
+    await reporter.step('assignments.estimate-cost', async () => {
+        const estimate = await client.assignments.estimateCost(documentId, {
+            method: 'virtual',
+            signers: signers.map(() => ({
+                verification_method: 'Email',
+                notification_methods: ['Email'],
+            })),
+        });
+        assertCondition(typeof estimate.total_credits === 'number');
+    });
+    const assignment = await reporter.step('assignments.create', async () => {
+        const created = await client.assignments.create(documentId, payload);
+        assertId(created.id);
+        return created;
+    });
+    await reporter.step('assignments.list', async () => {
+        const result = await client.assignments.list({ 'per-page': 10 });
+        assertArray(result.data);
+    });
+    if (!assignment.ok) {
+        reporter.skip('signer-documents.download-public-original', 'assignment fixture was not created');
+        reporter.skip('assignments.reset-expiration', 'assignment fixture was not created');
+        reporter.skip('assignments.estimate-resend-cost', 'assignment fixture was not created');
+        reporter.skip('assignments.resend-notification', 'assignment fixture was not created');
+        reporter.skip('assignments.whatsapp-history', 'assignment fixture was not created');
+        return;
+    }
+
+    const signer = signers[0];
+    assertCondition(signer);
+    await reporter.step('signer-documents.download-public-original', async () => {
+        assertBuffer(await client.signerDocuments.download(signer.id, documentId, 'original'));
+    });
+    await reporter.step('assignments.reset-expiration', async () => {
+        const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1_000).toISOString();
+        const updated = await client.assignments.resetExpiration(
+            documentId,
+            assignment.value.id,
+            expiresAt,
+        );
+        assertCondition(updated.id === assignment.value.id);
+    });
+    await reporter.step('assignments.estimate-resend-cost', async () => {
+        await client.assignments.estimateResendCost(documentId, assignment.value.id, signer.id);
+    });
+    await reporter.step('assignments.resend-notification', async () => {
+        const response = await client.assignments.resendNotification(
+            documentId,
+            assignment.value.id,
+            signer.id,
+        );
+        assertCondition(typeof response.is_sent === 'boolean');
+    });
+    await reporter.step('assignments.whatsapp-history', async () => {
+        assertArray(
+            await client.assignments.listWhatsAppNotifications(documentId, assignment.value.id),
+        );
+    });
+}
+
+async function runTemplateSuite(
+    client: AssinafyClient,
+    reporter: Reporter,
+    state: SandboxState,
+    pdf: Buffer,
+    signerId: string | undefined,
+): Promise<void> {
+    const created = await reporter.step('templates.extension-create', async () => {
+        const template = await client.templates.create(
+            { buffer: pdf, fileName: 'sdk-integration-template.pdf' },
+            { name: randomLabel('sdk-integration-template') },
+        );
+        assertId(template.id);
+        state.templates.add(template.id);
+        return template;
+    });
+    await reporter.step('templates.extension-list', async () => {
+        const result = await client.templates.list({ 'per-page': 10 });
+        assertArray(result.data);
+    });
+
+    let prepared: ITemplateDetailsResponse | undefined;
+    if (created.ok) {
+        const ready = await reporter.step('templates.extension-get-ready', async () =>
+            waitForTemplate(client, created.value.id),
+        );
+        if (ready.ok) prepared = ready.value;
+        await reporter.step('templates.extension-update', async () => {
+            const template = await client.templates.update(created.value.id, {
+                name: randomLabel('sdk-integration-template-updated'),
+                message: 'SDK integration audit template',
+            });
+            assertCondition(template.id === created.value.id);
+        });
+
+        const page = prepared?.pages?.[0];
+        if (page) {
+            await reporter.step('templates.extension-page-download', async () => {
+                assertBuffer(await client.templates.downloadPage(created.value.id, page.id));
+            });
+        } else {
+            reporter.skip('templates.extension-page-download', 'rendered template page not available');
+        }
+    } else {
+        reporter.skip('templates.extension-get-ready', 'template fixture was not created');
+        reporter.skip('templates.extension-update', 'template fixture was not created');
+        reporter.skip('templates.extension-page-download', 'template fixture was not created');
+    }
+
+    const freshRoleId = prepared?.roles?.[0]?.id;
+    const fixtureTemplateId = created.ok ? created.value.id : undefined;
+    const fixtureRoleId = freshRoleId;
+    if (!fixtureTemplateId || !fixtureRoleId || !signerId) {
+        reporter.skip('templates.documents.estimate-cost', 'template role or signer fixture unavailable');
+        reporter.skip('templates.documents.create', 'template role or signer fixture unavailable');
+    } else {
+        const signers = [
+            {
+                role_id: fixtureRoleId,
+                id: signerId,
+                verification_method: 'Email',
+                notification_methods: ['Email'],
+            },
+        ];
+        await reporter.step('templates.documents.estimate-cost', async () => {
+            const estimate = await client.documents.estimateCostFromTemplate(
+                fixtureTemplateId,
+                [{
+                    role_id: fixtureRoleId,
+                    verification_method: 'Email',
+                    notification_methods: ['Email'],
+                }],
+            );
+            assertCondition(typeof estimate.total_credits === 'number');
+        });
+        const document = await reporter.step('templates.documents.create', async () => {
+            const result = await client.documents.createFromTemplate(
+                fixtureTemplateId,
+                signers,
+                {
+                    name: randomLabel('sdk-integration-from-template'),
+                    message: 'SDK integration audit template document',
+                },
+            );
+            assertId(result.id);
+            state.documents.add(result.id);
+            return result;
+        });
+        if (document.ok) {
+            await reporter.step('templates.documents.get', async () => {
+                const result = await client.documents.details(document.value.id);
+                assertCondition(result.id === document.value.id);
+            });
+            await deleteTrackedDocument(
+                client,
+                reporter,
+                state,
+                document.value.id,
+                'templates.documents.delete',
+                {
+                    skipStatusCode: 400,
+                    skipReason: 'template assignment prevents direct deletion; workspace cleanup remains',
+                },
+            );
+        } else {
+            reporter.skip('templates.documents.get', 'template document was not created');
+            reporter.skip('templates.documents.delete', 'template document was not created');
+        }
+    }
+
+    if (created.ok) {
+        await deleteTrackedTemplate(
+            client,
+            reporter,
+            state,
+            created.value.id,
+            'templates.extension-delete',
+        );
+    }
+}
+
+async function waitForTemplate(
+    client: AssinafyClient,
+    templateId: string,
+): Promise<ITemplateDetailsResponse> {
+    const deadline = Date.now() + TEMPLATE_WAIT_MS;
+    do {
+        const template = await client.templates.get(templateId);
+        const status = template.status.toLowerCase();
+        if (status === 'ready') return template;
+        if (status === 'failed') throw new AuditAssertionError();
+        await delay(2_000);
+    } while (Date.now() < deadline);
+    throw new AuditAssertionError();
+}
+
+async function deleteTrackedDocument(
+    client: AssinafyClient,
+    reporter: Reporter,
+    state: SandboxState,
+    documentId: string,
+    label: string,
+    options?: { skipStatusCode: number; skipReason: string },
+): Promise<void> {
+    const operation = async () => client.documents.delete(documentId);
+    const deleted = options
+        ? await reporter.stepWithKnownApiStatusSkip(
+            label,
+            options.skipStatusCode,
+            options.skipReason,
+            operation,
+        )
+        : await reporter.step(label, operation);
+    if (deleted.ok) state.documents.delete(documentId);
+}
+
+async function deleteTrackedTemplate(
+    client: AssinafyClient,
+    reporter: Reporter,
+    state: SandboxState,
+    templateId: string,
+    label: string,
+): Promise<void> {
+    const deleted = await reporter.step(label, async () => client.templates.delete(templateId));
+    if (deleted.ok) state.templates.delete(templateId);
+}
+
+async function deleteTrackedTag(
+    client: AssinafyClient,
+    reporter: Reporter,
+    state: SandboxState,
+    tag: StepResult<{ id: string }>,
+    label: string,
+): Promise<void> {
+    if (!tag.ok) {
+        reporter.skip(label, 'tag fixture was not created');
+        return;
+    }
+    const deleted = await reporter.step(label, async () => client.tags.delete(tag.value.id));
+    if (deleted.ok) state.tags.delete(tag.value.id);
+}
+
+async function deleteTrackedField(
+    client: AssinafyClient,
+    reporter: Reporter,
+    state: SandboxState,
+    field: StepResult<{ id: string }>,
+): Promise<void> {
+    if (!field.ok) {
+        reporter.skip('fields.delete', 'field fixture was not created');
+        return;
+    }
+    const deleted = await reporter.step('fields.delete', async () =>
+        client.fields.delete(field.value.id),
+    );
+    if (deleted.ok) state.fields.delete(field.value.id);
+}
+
+async function deleteTrackedSigner(
+    client: AssinafyClient,
+    reporter: Reporter,
+    state: SandboxState,
+    signerId: string,
+    label: string,
+): Promise<void> {
+    const deleted = await reporter.step(label, async () => client.signers.delete(signerId));
+    if (deleted.ok) state.signers.delete(signerId);
+}
+
+async function cleanupSandbox(
+    rootClient: AssinafyClient,
+    reporter: Reporter,
+    state: SandboxState,
+): Promise<void> {
+    const client = state.client;
+    if (client) {
+        if (state.webhookActive) {
+            const inactive = await reporter.step('cleanup.webhooks.inactivate', async () => {
+                await client.webhooks.inactivate();
+            });
+            if (inactive.ok) state.webhookActive = false;
+        }
+        for (const documentId of [...state.documents]) {
+            await deleteTrackedDocument(
+                client,
+                reporter,
+                state,
+                documentId,
+                'cleanup.documents.delete',
+                {
+                    skipStatusCode: 400,
+                    skipReason: 'active assignment requires final workspace force-delete',
+                },
+            );
+        }
+        for (const templateId of [...state.templates]) {
+            await deleteTrackedTemplate(
+                client,
+                reporter,
+                state,
+                templateId,
+                'cleanup.templates.delete',
+            );
+        }
+        for (const tagId of [...state.tags]) {
+            const deleted = await reporter.step('cleanup.tags.force-delete', async () =>
+                client.tags.delete(tagId, { force: true }),
+            );
+            if (deleted.ok) state.tags.delete(tagId);
+        }
+        for (const fieldId of [...state.fields]) {
+            const deleted = await reporter.step('cleanup.fields.delete', async () =>
+                client.fields.delete(fieldId),
+            );
+            if (deleted.ok) state.fields.delete(fieldId);
+        }
+        for (const signerId of [...state.signers]) {
+            await deleteTrackedSigner(
+                client,
+                reporter,
+                state,
+                signerId,
+                'cleanup.signers.delete',
+            );
+        }
+    }
+
+    if (state.workspaceId) {
+        const workspaceId = state.workspaceId;
+        const deleted = await reporter.step('workspaces.delete-disposable-force', async () =>
+            rootClient.workspaces.delete(workspaceId, { force: true }),
+        );
+        if (deleted.ok) state.workspaceId = undefined;
     }
 }
 
 async function main(): Promise<void> {
-    await run('workspaces.list', async () => {
-        const { data } = await client.workspaces.list();
-        return `${data.length} workspaces`;
-    });
-
-    await run('workspaces.get(default)', async () => {
-        const ws = await client.workspaces.get(accountId);
-        return `workspace ${ws.name} (${ws.id})`;
-    });
-
-    await run('documents.statuses', async () => {
-        const statuses = await client.documents.statuses();
-        return `${statuses.length} statuses, first=${statuses[0]?.code ?? '?'}`;
-    });
-
-    await run('documents.list', async () => {
-        const { data, meta } = await client.documents.list({ per_page: 5 });
-        return `${data.length} docs (total ${meta?.total ?? '?'})`;
-    });
-
-    await run('signers.list', async () => {
-        const { data, meta } = await client.signers.list({ per_page: 5 });
-        return `${data.length} signers (total ${meta?.total ?? '?'})`;
-    });
-
-    await run('templates.list', async () => {
-        const { data, meta } = await client.templates.list({ per_page: 5 });
-        return `${data.length} templates (total ${meta?.total ?? '?'})`;
-    });
-
-    await run('webhooks.listEventTypes', async () => {
-        const types = await client.webhooks.listEventTypes();
-        return `${types.length} event types`;
-    });
-
-    await run('webhooks.get (may be null)', async () => {
-        const sub = await client.webhooks.get();
-        return sub ? `subscription url=${sub.url}, active=${sub.is_active}` : 'no subscription';
-    });
-
-    await run('webhooks.listDispatches', async () => {
-        const { data, meta } = await client.webhooks.listDispatches({ 'per-page': 3 });
-        return `${data.length} dispatches (total ${meta?.total ?? '?'})`;
-    });
-
-    await run('fields.list', async () => {
-        const fields = await client.fields.list();
-        return `${fields.length} field definitions`;
-    });
-
-    await run('fields.listTypes', async () => {
-        const types = await client.fields.listTypes();
-        return `${types.length} field types`;
-    });
-
-    await run('tags.list', async () => {
-        const tags = await client.tags.list();
-        return `${tags.length} tags`;
-    });
-
-    await run('documents.verify (bogus hash)', async () => {
-        const result = await client.documents.verify(
-            'FE32EDDADE7CBDDCBB934E7402047450B0E59C02',
-        );
-        return `is_valid=${(result as Record<string, unknown>)['is_valid'] ?? '?'}`;
-    });
-
-    // Auth/users self-info
-    await run('users.getApiKey (masked)', async () => {
-        const r = await client.auth.getApiKey();
-        return r === null
-            ? 'no key generated yet'
-            : `masked=${String(r['api_key'] ?? '?')}`;
-    });
-
-    if (writeMode) {
-        const email = `sdk-smoke-${Date.now()}@example.com`;
-        let signerId = '';
-
-        await run('signers.create (write)', async () => {
-            const s = await client.signers.create({
-                full_name: 'SDK Smoke Test',
-                email,
-                whatsapp_phone_number: '+5548999990000',
-                cpf: '123.456.789-09',
-            });
-            signerId = s.id;
-            return `created ${s.id}`;
-        });
-
-        let tagId = '';
-        await run('tags.create (write)', async () => {
-            const t = await client.tags.create({ name: `smoke-${Date.now()}`, color: 'ff8800' });
-            tagId = t.id;
-            return `created ${t.id}`;
-        });
-
-        await run('tags.update (write)', async () => {
-            const t = await client.tags.update(tagId, { color: '112233' });
-            return `color=${t.color}`;
-        });
-
-        await run('tags.delete (write)', async () => {
-            await client.tags.delete(tagId, { force: true });
-            return 'deleted';
-        });
-
-        await run('signers.findByEmail', async () => {
-            const s = await client.signers.findByEmail(email);
-            return s ? `found ${s.id}` : 'not found';
-        });
-
-        await run('signers.get', async () => {
-            const s = await client.signers.get(signerId);
-            return `name=${s.full_name}`;
-        });
-
-        await run('signers.update', async () => {
-            const s = await client.signers.update(signerId, { full_name: 'SDK Smoke Test Updated' });
-            return `name=${s.full_name}`;
-        });
-
-        await run('signers.delete', async () => {
-            await client.signers.delete(signerId);
-            return 'deleted';
-        });
-    }
-
-    if (uploadMode) {
-        const pdfPath = process.env.SAMPLE_PDF ?? '/tmp/test-doc.pdf';
-        const buf = await fs.readFile(pdfPath);
-        let documentId = '';
-
-        await run('documents.upload', async () => {
-            const d = await client.documents.upload({ buffer: buf, fileName: path.basename(pdfPath) });
-            documentId = d.id;
-            return `uploaded ${d.id} status=${d.status}`;
-        });
-
-        await run('documents.details', async () => {
-            const d = await client.documents.details(documentId);
-            return `name=${d.name} status=${d.status}`;
-        });
-
-        await run('documents.activities', async () => {
-            const acts = await client.documents.activities(documentId);
-            return `${acts.length} activities`;
-        });
-
-        await run('documents.waitUntilReady', async () => {
-            const d = await client.documents.waitUntilReady(documentId, { maxWaitMs: 60_000, pollIntervalMs: 2_000 });
-            return `status=${d.status}`;
-        });
-
-        await run('assignments.estimateCost (email)', async () => {
-            const r = await client.assignments.estimateCost(documentId, {
-                method: 'virtual',
-                signers: [{}],
-            });
-            return `credits=${(r as Record<string, unknown>)['total_credits'] ?? '?'}`;
-        });
-
-        await run('documents.delete', async () => {
-            await client.documents.delete(documentId);
-            return 'deleted';
-        });
-
-        // Template lifecycle (create → get → update → downloadPage → delete)
-        let templateId = '';
-        await run('templates.create', async () => {
-            const t = await client.templates.create(
-                { buffer: buf, fileName: path.basename(pdfPath) },
-                { name: `smoke-tmpl-${Date.now()}` },
-            );
-            templateId = t.id;
-            return `created ${t.id} status=${t.status}`;
-        });
-
-        await run('templates.get (poll until Ready)', async () => {
-            let t = await client.templates.get(templateId);
-            for (let i = 0; i < 15 && t.status !== 'Ready'; i++) {
-                await new Promise((r) => setTimeout(r, 2_000));
-                t = await client.templates.get(templateId);
-            }
-            return `status=${t.status} pages=${t.pages?.length ?? 0}`;
-        });
-
-        await run('templates.update', async () => {
-            const t = await client.templates.update(templateId, { name: 'smoke-tmpl-renamed' });
-            return `name=${t.name}`;
-        });
-
-        await run('templates.delete', async () => {
-            await client.templates.delete(templateId);
-            return 'deleted';
-        });
-    }
-
-    console.log('\n----- summary -----');
-    const passed = results.filter((r) => r.ok).length;
-    console.log(`${passed}/${results.length} passed`);
-    if (passed !== results.length) {
+    let config: AuditConfig;
+    try {
+        config = loadConfig();
+    } catch (error) {
+        console.error(`FAIL startup (${safeFailure(error)})`);
         process.exitCode = 1;
+        return;
     }
+
+    const reporter = new Reporter();
+    const client = new AssinafyClient({
+        apiKey: config.apiKey,
+        accountId: config.accountId,
+        baseUrl: config.baseUrl,
+    });
+
+    await runGlobalReads(config, client, reporter);
+    if (config.fullAudit) {
+        await runFullSandboxAudit(config, client, reporter);
+    } else {
+        await runReadOnlyAccountAudit(config, client, reporter);
+    }
+
+    if (!reporter.finish()) process.exitCode = 1;
 }
 
-main().catch((err) => {
-    console.error('Unhandled error:', err);
-    process.exit(1);
+void main().catch((error: unknown) => {
+    console.error(`FAIL fatal (${safeFailure(error)})`);
+    process.exitCode = 1;
 });

@@ -1,0 +1,55 @@
+# The canonical package gate needs both Bun and real Node/npm: attw's `--pack`
+# mode shells out to `npm pack`. Start from the current Node LTS image and add
+# the exact Bun version used by package.json and GitHub Actions.
+image: node:24-bookworm-slim
+
+stages:
+  - verify
+
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH
+    - if: $CI_COMMIT_TAG
+
+default:
+  interruptible: true
+  timeout: 20 minutes
+  cache:
+    key:
+      files:
+        - bun.lock
+    paths:
+      - .bun-cache/
+      - .npm-cache/
+  before_script:
+    # npm 11 blocks unapproved dependency lifecycle scripts by default. Bun's
+    # package uses its postinstall to select the platform binary, so allow only
+    # that named package instead of enabling install scripts globally.
+    - npm install --global --allow-scripts=bun bun@1.3.14
+    - bun --version
+    - node --version
+    - npm --version
+    - bun install --frozen-lockfile
+
+variables:
+  BUN_INSTALL_CACHE_DIR: "$CI_PROJECT_DIR/.bun-cache"
+  NPM_CONFIG_CACHE: "$CI_PROJECT_DIR/.npm-cache"
+
+# GitLab is the canonical repository. Require this job in protected-branch rules
+# before merging changes intended for the mirror; GitHub repeats the gates after
+# synchronization as an independent check.
+verify:
+  stage: verify
+  script:
+    - bun run typecheck
+    - bun run lint
+    - bun run test:coverage
+    - bun run audit
+    - bun run build
+    - bun run lint:pkg
+  artifacts:
+    when: always
+    expire_in: 1 week
+    paths:
+      - dist/

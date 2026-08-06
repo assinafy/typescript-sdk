@@ -5,42 +5,124 @@ import { ValidationError } from '../errors';
 /** Maximum upload size accepted by the API (hard limit, 25 MB). */
 export const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
 
-/** Input for an upload: either an on-disk file or an in-memory buffer. */
-export type DocumentUploadSource =
+/** Input for a file upload: either an on-disk file or an in-memory buffer. */
+export type FileUploadSource =
     | { filePath: string; fileName?: string }
     | { buffer: Buffer; fileName: string };
 
+/** Input accepted by PDF document/template uploads. */
+export type DocumentUploadSource = FileUploadSource;
+
 /** Resolve an upload source into a `{ buffer, fileName }` pair. */
 export async function loadSource(
-    source: DocumentUploadSource,
+    source: FileUploadSource,
+    options: { maxBytes?: number } = {},
 ): Promise<{ buffer: Buffer; fileName: string }> {
+    if (!source || typeof source !== 'object') {
+        throw new ValidationError('Upload source is required');
+    }
     if ('buffer' in source) {
-        if (!source.fileName) {
+        if (!Buffer.isBuffer(source.buffer)) {
+            throw new ValidationError('buffer must be a Node Buffer');
+        }
+        if (typeof source.fileName !== 'string' || !source.fileName.trim()) {
             throw new ValidationError('fileName is required when uploading a Buffer');
+        }
+        if (options.maxBytes !== undefined && source.buffer.byteLength > options.maxBytes) {
+            throw fileTooLarge(source.buffer.byteLength, options.maxBytes);
         }
         return { buffer: source.buffer, fileName: source.fileName };
     }
-    if (!source.filePath) {
+    if (typeof source.filePath !== 'string' || !source.filePath.trim()) {
         throw new ValidationError('filePath is required');
     }
-    const buffer = await fs.readFile(source.filePath);
+    if (
+        source.fileName !== undefined &&
+        (typeof source.fileName !== 'string' || !source.fileName.trim())
+    ) {
+        throw new ValidationError('fileName cannot be empty');
+    }
+
+    let fileSize: number;
+    try {
+        const stats = await fs.stat(source.filePath);
+        if (!stats.isFile()) {
+            throw new ValidationError('Upload path must reference a regular file', {
+                filePath: source.filePath,
+            });
+        }
+        fileSize = stats.size;
+    } catch (error) {
+        if (error instanceof ValidationError) throw error;
+        throw new ValidationError('Unable to access upload file', {
+            filePath: source.filePath,
+            reason: error instanceof Error ? error.message : String(error),
+        });
+    }
+
+    if (options.maxBytes !== undefined && fileSize > options.maxBytes) {
+        throw fileTooLarge(fileSize, options.maxBytes);
+    }
+
+    let buffer: Buffer;
+    try {
+        buffer = await fs.readFile(source.filePath);
+    } catch (error) {
+        throw new ValidationError('Unable to read upload file', {
+            filePath: source.filePath,
+            reason: error instanceof Error ? error.message : String(error),
+        });
+    }
     return { buffer, fileName: source.fileName ?? path.basename(source.filePath) };
+}
+
+/** Reject an empty upload before making a network request. */
+export function validateFileNotEmpty(buffer: Buffer, fileName: string): void {
+    if (!Buffer.isBuffer(buffer) || buffer.byteLength === 0) {
+        throw new ValidationError('File buffer is empty', { fileName });
+    }
 }
 
 /** Validate an upload buffer: non-empty, `.pdf`, within the size limit. */
 export function validateUpload(buffer: Buffer, fileName: string): void {
-    if (!buffer || buffer.byteLength === 0) {
-        throw new ValidationError('File buffer is empty', { fileName });
-    }
+    validateFileNotEmpty(buffer, fileName);
     if (!fileName.toLowerCase().endsWith('.pdf')) {
         throw new ValidationError('Only PDF files are supported', { fileName });
     }
     if (buffer.byteLength > MAX_UPLOAD_BYTES) {
-        throw new ValidationError('File size exceeds maximum allowed (25MB)', {
-            fileSize: buffer.byteLength,
-            maxSize: MAX_UPLOAD_BYTES,
-        });
+        throw fileTooLarge(buffer.byteLength, MAX_UPLOAD_BYTES);
     }
+    if (buffer.byteLength < 5 || !buffer.subarray(0, 5).equals(Buffer.from('%PDF-'))) {
+        throw new ValidationError('File content is not a valid PDF', { fileName });
+    }
+}
+
+function fileTooLarge(fileSize: number, maxSize: number): ValidationError {
+    return new ValidationError(`File size exceeds maximum allowed (${formatMegabytes(maxSize)})`, {
+        fileSize,
+        maxSize,
+    });
+}
+
+function formatMegabytes(bytes: number): string {
+    const megabytes = bytes / (1024 * 1024);
+    return `${Number.isInteger(megabytes) ? megabytes : megabytes.toFixed(2)}MB`;
+}
+
+/** Build a one-part multipart body without copying the Buffer's bytes. */
+export function buildFileForm(
+    buffer: Buffer,
+    fileName: string,
+    contentType: string,
+): FormData {
+    const form = new FormData();
+    const view = new Uint8Array(
+        buffer.buffer as ArrayBuffer,
+        buffer.byteOffset,
+        buffer.byteLength,
+    );
+    form.append('file', new Blob([view], { type: contentType }), fileName);
+    return form;
 }
 
 /**
@@ -75,22 +157,10 @@ export function buildUploadForm(
     fileName: string,
     options: { name?: string; metadata?: Record<string, unknown> } = {},
 ): FormData {
-    const form = new FormData();
-    // Copy-free view over the Buffer's own slice of its underlying ArrayBuffer.
-    // Node pools small Buffers, so byteOffset/byteLength are required to avoid
-    // sending a neighbouring allocation's bytes.
-    //
-    // The cast narrows `ArrayBufferLike` to `ArrayBuffer`: a Buffer from
-    // fs.readFile or Buffer.from is never SharedArrayBuffer-backed, but the
-    // declared type admits it and `BlobPart` does not. Slicing instead would
-    // satisfy the checker by copying the whole file — up to 25 MB per upload.
-    const view = new Uint8Array(
-        buffer.buffer as ArrayBuffer,
-        buffer.byteOffset,
-        buffer.byteLength,
-    );
     const partName = options.name === undefined ? fileName : toUploadFileName(options.name);
-    form.append('file', new Blob([view], { type: 'application/pdf' }), partName);
+    // `buildFileForm` deliberately preserves the Buffer window instead of
+    // copying its backing allocation (which may be a pooled Buffer).
+    const form = buildFileForm(buffer, partName, 'application/pdf');
     if (options.metadata) {
         form.append('metadata', JSON.stringify(options.metadata));
     }

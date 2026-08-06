@@ -52,20 +52,26 @@ export interface AssinafyClientOptions {
     /** Assinafy API key. Preferred authentication method (sends `X-Api-Key` header). */
     apiKey?: string;
     /**
-     * Legacy access token. If provided (and `apiKey` is not), the client will send
-     * `Authorization: Bearer <token>` instead. Kept for backwards compatibility.
+     * Access token. If provided (and `apiKey` is not), the client will send
+     * `Authorization: Bearer <token>` instead.
      */
     token?: string;
     /** Default account (workspace) ID applied to account-scoped endpoints. */
     accountId?: string;
     /** Override the API base URL. Defaults to https://api.assinafy.com.br/v1. */
     baseUrl?: string;
-    /** Secret used to verify webhook payload signatures (HMAC-SHA256). */
+    /**
+     * Secret for an opt-in HMAC-SHA256 convention implemented by your own
+     * gateway. The public Assinafy contract does not currently define a
+     * platform webhook-signature header or shared-secret exchange.
+     */
     webhookSecret?: string;
     /** Request timeout in milliseconds. Defaults to 30_000. */
     timeout?: number;
     /**
      * Max automatic retries on HTTP 429 (rate limit), honoring `Retry-After`.
+     * Automatic retries are limited to idempotent GET, HEAD, OPTIONS, PUT, and
+     * DELETE requests, plus requests carrying an explicit `Idempotency-Key`.
      * Defaults to `2`. Set to `0` to disable retrying.
      */
     maxRetries?: number;
@@ -76,17 +82,18 @@ export interface AssinafyClientOptions {
 /**
  * Payload for creating a signer.
  *
- * `email` is optional: the API accepts a signer with only a
- * `whatsapp_phone_number`. At least one of the two must be supplied.
+ * The official schema requires only `full_name`. Contact fields are optional;
+ * name-only signers cannot receive a signing notification until updated.
  */
 export interface ICreateSignerPayload {
     full_name: string;
     email?: string;
     whatsapp_phone_number?: string;
-    /** PHP SDK compatibility alias for `whatsapp_phone_number`. */
+    /** Compatibility alias normalized to `whatsapp_phone_number` before sending. */
     phone?: string;
-    /** Brazilian tax ID (CPF). Non-digits are stripped before sending. */
+    /** Unverified request extension. Brazilian CPF; non-digits are stripped. */
     cpf?: string;
+    /** Unverified request extension retained for existing integrations. */
     metadata?: Record<string, unknown>;
 }
 
@@ -95,9 +102,9 @@ export interface IUpdateSignerPayload {
     full_name?: string;
     email?: string;
     whatsapp_phone_number?: string;
-    /** PHP SDK compatibility alias for `whatsapp_phone_number`. */
+    /** Compatibility alias normalized to `whatsapp_phone_number` before sending. */
     phone?: string;
-    /** Brazilian tax ID (CPF). Non-digits are stripped before sending. */
+    /** Unverified request extension. Brazilian CPF; non-digits are stripped. */
     cpf?: string;
 }
 
@@ -118,7 +125,60 @@ export interface ISigner {
     has_signature?: boolean;
     /** Only returned by `GET /signers/self`. */
     has_initial?: boolean;
+    /** Only returned by `GET /signers/self`. */
+    is_signature_reusable?: boolean;
     metadata?: Record<string, unknown>;
+}
+
+/** Signer profile returned by the signer-code-authenticated `GET /signers/self`. */
+export interface ISignerSelf extends ISigner {
+    has_signature: boolean;
+    has_initial: boolean;
+    is_signature_reusable: boolean;
+}
+
+/** Official identity fields accepted by the signer `confirm-data` operation. */
+export interface IConfirmSignerDataPayload {
+    /** Signer's full name as it should appear on the signed document. */
+    full_name?: string;
+    email?: string;
+    /** Government-issued identifier recorded with the signature. */
+    government_id?: string;
+}
+
+/**
+ * Compatibility input retained for integrations written against older
+ * Assinafy deployments. Neither extra property belongs to the current
+ * `confirm-data` request schema.
+ */
+export interface ILegacyConfirmSignerDataPayload extends IConfirmSignerDataPayload {
+    /**
+     * @deprecated Unverified legacy field. Prefer updating the account signer
+     * record before starting the signing flow.
+     */
+    whatsapp_phone_number?: string;
+    /**
+     * @deprecated Unverified legacy pass-through. It does not replace the
+     * official `acceptTerms()` operation and must not be treated as proof of
+     * legal consent.
+     */
+    has_accepted_terms?: boolean;
+}
+
+/** Official options for uploading the PNG signature image described by OpenAPI. */
+export interface IUploadSignatureOptions {
+    imageType?: 'signature' | 'initial';
+    /** Persist this image so it is reused on future documents. */
+    reuse?: boolean;
+}
+
+/** Source-compatible options for older deployments that accepted other media types. */
+export interface ILegacyUploadSignatureOptions extends IUploadSignatureOptions {
+    /**
+     * @deprecated The current API contract accepts only `image/png`. Non-PNG
+     * values are retained as an unverified compatibility escape hatch.
+     */
+    contentType?: string;
 }
 
 export type ICreateSignerResponse = ISigner;
@@ -165,8 +225,7 @@ export interface ICreateAssignmentPayload {
     method?: AssignmentMethod;
     /**
      * List of signers. Each entry may be a signer id string, or an object with
-     * `id` / `signer_id`. For cost estimation, entries may omit the ID and
-     * specify only `verification_method` / `notification_methods`.
+     * `id` / `signer_id`.
      *
      * The SDK normalises them to the docs-sanctioned `signers: [{ ... }]`
      * shape before sending.
@@ -194,18 +253,65 @@ export interface ICreateAssignmentPayload {
      */
     copy_receivers?: string[];
     /** Field placement entries used when `method` is `collect`. */
-    entries?: unknown[];
+    entries?: IAssignmentEntry[];
+}
+
+/**
+ * A field-placement entry for a `collect`-method assignment: one page and the
+ * per-signer fields positioned on it.
+ */
+export interface IAssignmentEntry {
+    page_id: string;
+    fields: Array<{
+        signer_id: string;
+        field_id: string;
+        /**
+         * Opaque, server-defined placement settings (position, size, …). Left
+         * loosely typed: the spec models it as a bare object and the live API
+         * returns an unstable shape (an empty array on assignment items).
+         */
+        display_settings?: Record<string, unknown>;
+    }>;
+}
+
+/** Channel descriptor accepted by assignment cost estimation. */
+export interface IAssignmentCostSigner {
+    verification_method?: AssignmentVerificationMethod;
+    notification_methods?: AssignmentNotificationMethod[];
+}
+
+/**
+ * Official request body for
+ * `POST /documents/{documentId}/assignments/estimate-cost`.
+ */
+export interface IEstimateAssignmentCostPayload {
+    method?: AssignmentMethod;
+    /** Required for `virtual`; `{}` prices the default Email channel. */
+    signers?: IAssignmentCostSigner[];
+    /** Required for `collect`; signer descriptors are optional in that mode. */
+    entries?: IAssignmentEntry[];
 }
 
 /** A signer as embedded inside an assignment (richer than the bare {@link ISigner}). */
 export interface IAssignmentSigner extends ISigner {
-    completed: boolean;
-    notification_history: unknown[];
-    verification_method: AssignmentVerificationMethod;
-    notification_methods: AssignmentNotificationMethod[];
+    /** Only present in account-owner contexts; omitted from signer-code responses. */
+    completed?: boolean | null;
+    notification_history: INotificationHistoryEntry[] | null;
+    verification_method: AssignmentVerificationMethod | null;
+    notification_methods: AssignmentNotificationMethod[] | null;
     /** 1-based signing order. See {@link SignerReference.step}. */
-    step: number;
-    notified: boolean;
+    step: number | null;
+    notified: boolean | null;
+}
+
+/** Per-channel notification delivery history embedded in an assignment signer. */
+export interface INotificationHistoryEntry {
+    event: string;
+    status: 'sent' | 'failed';
+    error_code: string | null;
+    error_message: string | null;
+    sent_at: string | null;
+    failed_at: string | null;
 }
 
 /** A placed field/item within an assignment (one row per signer × field). */
@@ -219,8 +325,9 @@ export interface IAssignmentItem {
         download_url: string;
     } | null;
     signer: ISigner;
-    field: IFieldDefinition;
-    value: string | null;
+    field: IFieldDefinition | null;
+    /** Captured field value; its wire type depends on the field definition. */
+    value: unknown | null;
     completed?: boolean;
     [key: string]: unknown;
 }
@@ -233,9 +340,10 @@ export interface IAssignment {
     method: AssignmentMethod;
     expires_at?: string | null;
     expiration?: string;
-    message?: string;
+    message?: string | null;
     signers: IAssignmentSigner[];
-    copy_receivers?: string[];
+    /** Expanded copy-receiver objects returned by the API. */
+    copy_receivers?: Array<Record<string, unknown>>;
     items?: IAssignmentItem[];
     summary?: {
         signer_count: number;
@@ -249,9 +357,9 @@ export interface IAssignment {
 export type ICreateAssignmentResponse = IAssignment;
 
 export interface IResendEmailResponse {
-    is_sent?: boolean;
-    document_id?: string;
-    signer_id?: string;
+    is_sent: boolean;
+    document_id: string;
+    signer_id: string;
 }
 
 /**
@@ -279,25 +387,39 @@ export interface ICostEstimate {
     message: string | null;
 }
 
-/** Cost estimate returned by `assignments.estimateResendCost`. */
-export interface IResendCostEstimate {
+/**
+ * Legacy resend-cost payload still returned by some Assinafy environments.
+ *
+ * The current OpenAPI contract declares {@link ICostEstimate} for this route,
+ * while the sandbox has also returned this smaller, resend-specific shape.
+ * The SDK models both wire formats instead of promising fields that may be
+ * absent at runtime.
+ */
+export interface ILegacyResendCostEstimate {
     total: number;
     breakdown: Array<{ code: string; name: string; cost: number }>;
     credit_balance: number;
     has_sufficient_credits: boolean;
 }
 
+/** Cost estimate returned by `assignments.estimateResendCost`. */
+export type IResendCostEstimate = ICostEstimate | ILegacyResendCostEstimate;
+
 /** Webhook payload envelope. */
 export interface IWebhookPayload {
+    /** Internal activity id; use it as an idempotency/deduplication key. */
     id?: number;
-    event?: string;
+    event?: WebhookEventType | AnyString;
     type?: string;
     message?: string | null;
     payload?: Record<string, unknown> | null;
     origin?: Record<string, unknown> | null;
+    /** Unix timestamp in seconds. */
+    created_at?: number;
     subject?: Record<string, unknown>;
     object?: Record<string, unknown>;
     account_id?: string;
+    /** Legacy envelope accepted by the verifier for backwards compatibility. */
     data?: {
         document_uuid?: string;
         document_id?: string;
@@ -414,6 +536,8 @@ export interface IDocumentUploadResponse {
         bundle?: string;
         thumbnail?: string;
     };
+    /** Public signing-portal URL for the document (always returned by the upload endpoint). */
+    signing_url?: string;
     /** Empty (`[]`) on fresh upload (status `uploaded`); populated once `metadata_ready`. */
     pages: Array<{
         id: string;
@@ -428,7 +552,8 @@ export interface IDocumentUploadResponse {
     updated_at: string;
     is_closed: boolean;
     decline_reason: string | null;
-    declined_by: string | null;
+    /** The signer who declined, once one has (matches the sibling document response types); `null` otherwise. */
+    declined_by: ISigner | null;
 }
 
 /** Detailed document response. */
@@ -466,8 +591,8 @@ export interface IDocumentActivity {
     id: number;
     event: string;
     message: string;
-    /** Event-specific payload snapshot. Object for most events, occasionally `[]`. */
-    payload?: Record<string, unknown> | unknown[];
+    /** Event-specific payload snapshot. Object for most events, occasionally `[]` or `null`. */
+    payload?: Record<string, unknown> | unknown[] | null;
     /** Request origin (`ip` / `user-agent`) when available; `null` for system events. */
     origin: { ip?: string; 'user-agent'?: string } | string | null;
     created_at: string;
@@ -491,42 +616,103 @@ export interface IListParams {
     [key: string]: string | number | boolean | undefined;
 }
 
-/** Workspace creation payload. */
+/**
+ * Workspace creation payload.
+ *
+ * Colours are persisted and echoed back on the workspace object. Unlike tags —
+ * which accept a leading `#` and strip it — the account endpoints require an
+ * **exactly 6-character hex string with NO leading `#`** (`'ff0066'`, not
+ * `'#ff0066'`); a 7-character `#`-prefixed value is rejected with `400`
+ * ("Primary Color" deve conter 6 caracteres). Verified live against the API.
+ */
 export interface ICreateWorkspacePayload {
     name: string;
+    /** Who signers see as the notification sender (`User` is the API default). */
+    notification_sender_type?: NotificationSenderType;
+    /** 6-char hex, no leading `#` (e.g. `'ff0066'`). */
     primary_color?: string;
+    /** 6-char hex, no leading `#` (e.g. `'0066ff'`). */
     secondary_color?: string;
 }
 
+/** Workspace update payload. Colours follow the same 6-char-no-`#` rule as {@link ICreateWorkspacePayload}. */
 export interface IUpdateWorkspacePayload {
     name?: string;
+    /** Who signers see as the notification sender. */
+    notification_sender_type?: NotificationSenderType;
+    /** 6-char hex, no leading `#`. */
     primary_color?: string | null;
+    /** 6-char hex, no leading `#`. */
     secondary_color?: string | null;
 }
 
 export interface IWorkspaceResponse {
+    resource?: string;
     id: string;
     name: string;
     primary_color?: string | null;
     secondary_color?: string | null;
+    notification_sender_type?: NotificationSenderType;
+    roles?: string[];
+    is_delete_allowed?: boolean;
     created_at: string;
 }
 
-export interface IWorkspaceListItem {
-    id: string;
-    name: string;
+/** Notification sender identity accepted by account create/update operations. */
+export type NotificationSenderType = 'User' | 'Account';
+
+export interface IWorkspaceListItem extends IWorkspaceResponse {
     is_delete_allowed: boolean;
     roles: string[];
-    created_at: string;
 }
 
 export type IWorkspaceListResponse = PaginatedResult<IWorkspaceListItem>;
+
+/** Branding returned by `GET /accounts/{accountId}/theme`. */
+export interface IAccountTheme {
+    account_name: string;
+    /** Six-character hex colour without a leading `#`. */
+    primary_color: string;
+    secondary_color: string | null;
+    /** Absolute URL of the account logo. */
+    logo: string;
+}
+
+/** Granularity accepted by account/user document-statistics endpoints. */
+export type DocumentStatsGranularity = 'monthly' | 'daily';
+
+/** Query for account/user document-statistics endpoints. */
+export interface IDocumentStatsParams {
+    /** Defaults to `monthly`. */
+    granularity?: DocumentStatsGranularity;
+    /** Target `YYYY-MM`; required when `granularity` is `daily`. */
+    month?: string;
+}
+
+/** One zero-filled document-funnel KPI period. */
+export interface IDocumentStatsRow {
+    /** `YYYY-MM` for monthly results or `YYYY-MM-DD` for daily results. */
+    period: string;
+    documents_uploaded: number;
+    documents_sent: number;
+    signature_requests: number;
+    signature_requests_email: number;
+    signature_requests_whatsapp: number;
+    signature_requests_viewed: number;
+    signature_requests_completed: number;
+    documents_certified: number;
+}
 
 /** Webhook subscription payload. */
 export interface IWebhookRegisterPayload {
     url: string;
     email: string;
-    events?: WebhookEventType[] | string[];
+    /**
+     * Events to subscribe to. Known {@link WebhookEventType} literals are
+     * suggested in editors while any server-controlled string is still accepted
+     * (via {@link AnyString}), matching the open-enum convention used elsewhere.
+     */
+    events?: (WebhookEventType | AnyString)[];
     is_active?: boolean;
 }
 
@@ -536,11 +722,11 @@ export interface IWebhookRegisterPayload {
  * `{ events, is_active, url, email, updated_at }` (no `id` / `created_at`).
  */
 export interface IWebhookSubscription {
-    url: string;
-    email: string;
+    url: string | null;
+    email: string | null;
     events: string[];
     is_active: boolean;
-    updated_at?: string;
+    updated_at?: string | null;
 }
 
 export interface IWebhookEventTypeInfo {
@@ -549,6 +735,7 @@ export interface IWebhookEventTypeInfo {
 }
 
 export interface IWebhookDispatch {
+    resource?: string;
     id: string;
     event: WebhookEventType | AnyString;
     activity_id: number;
@@ -573,7 +760,14 @@ export interface IWebhookDispatchListParams extends IListParams {
 
 /** Shape of the high-level `uploadAndRequestSignatures` helper result. */
 export interface IUploadAndRequestSignaturesResult {
-    document: IDocumentUploadResponse;
+    /**
+     * The document. When `waitForReady` is enabled (the default) this is the
+     * fully-processed {@link IDocumentDetailsResponse} re-fetched after the
+     * assignment is created — so `status`, `pages` and the embedded `assignment`
+     * are current. When `waitForReady` is `false` it is the raw
+     * {@link IDocumentUploadResponse} upload snapshot (`status: 'uploaded'`).
+     */
+    document: IDocumentUploadResponse | IDocumentDetailsResponse;
     assignment: IAssignment;
     signer_ids: string[];
 }
@@ -617,10 +811,9 @@ export interface ITemplateListItem {
     status: string;
     /**
      * Rendered pages, each with a `download_url`. Empty until the template
-     * finishes processing (`status: 'Ready'`).
-     *
-     * The list endpoint does return `pages` — contrary to what
-     * `templates.get`'s documentation implies.
+     * finishes processing (`status: 'Ready'`). Both the list and get endpoints
+     * return `pages`, so there is no need to fetch a template again just to read
+     * them.
      */
     pages?: IPage[];
     roles?: ITemplateRole[];
@@ -663,7 +856,19 @@ export interface IPage {
     /** Absolute URL of the page's JPEG rendering. */
     download_url?: string;
     /** Fields positioned on this page. Present on templates; absent on documents. */
-    fields?: unknown[];
+    fields?: ITemplateFieldPlacement[];
+}
+
+/** A field placement returned on a rendered template page. */
+export interface ITemplateFieldPlacement {
+    id?: string;
+    field_id?: string;
+    role_id?: string;
+    label?: string;
+    /** Opaque rendering metadata; the current schema intentionally leaves it untyped. */
+    display_settings?: unknown;
+    created_at?: string;
+    updated_at?: string;
 }
 
 export interface ITemplateDetailsResponse {
@@ -695,12 +900,22 @@ export interface ITemplateSigner {
     step?: number;
 }
 
+/**
+ * Role/channel descriptor used only for template cost estimation. The official
+ * schema intentionally omits signer `id` and sequential-signing `step`.
+ */
+export interface ITemplateCostSigner {
+    role_id: string;
+    verification_method?: string;
+    notification_methods?: string[];
+}
+
 /** Options for creating a document from a template. */
 export interface ICreateDocumentFromTemplateOptions {
     name?: string;
     message?: string;
     expires_at?: string;
-    editor_fields?: unknown[];
+    editor_fields?: Array<{ field_id: string; value: string }>;
     /**
      * Tag names to attach to the new document. Names that don't exist yet are
      * auto-created; the template's default-document-tags are always merged in.
@@ -721,32 +936,54 @@ export interface IDocumentStatusInfo {
 }
 
 /** Item returned by `GET /public/documents/{id}`. */
-export interface IPublicDocumentInfo {
+export interface IPublicDocumentInfo
+    extends Partial<Omit<IDocumentDetailsResponse, 'id' | 'name'>> {
     resource?: string;
     id: string;
     name: string;
+    /** Observed legacy/public response field; not present in the current schema. */
     page_count?: string | number;
+    /** Observed legacy/public response field; not present in the current schema. */
     created_by?: string;
     [key: string]: unknown;
+}
+
+/** Result returned by public document signature-hash verification. */
+export interface IDocumentVerification {
+    hash: string;
+    id: string | null;
+    status: DocumentStatus | AnyString | null;
+    page_count: string | null;
+    signer_count: string | null;
+    completed_count: number | null;
+    completed_at: string | null;
+    verified_at: string;
+    is_valid: boolean;
+    message: string;
 }
 
 /** Channel accepted by the `send-token` endpoint. */
 export type SendTokenChannel = 'email' | 'whatsapp' | AnyString;
 
 /** Authentication: login response (also returned by social login). */
+/** Authenticated user profile returned by login and `users.getCurrent()`. */
+export interface IAuthenticatedUser {
+    id: string;
+    name: string;
+    email: string;
+    telephone: string | null;
+    government_id: string | null;
+    is_email_verified: boolean;
+    has_accepted_terms: boolean;
+    /** Live compatibility field; absent from the current OpenAPI `AuthUser` schema. */
+    is_password_set?: boolean;
+    created_at: string;
+    to_be_deleted_at: string | null;
+}
+
 export interface ILoginResponse {
     access_token: string;
-    user: {
-        id: string;
-        name: string;
-        email: string;
-        telephone?: string;
-        government_id?: string;
-        is_email_verified?: boolean;
-        has_accepted_terms?: boolean;
-        created_at?: string;
-        to_be_deleted_at?: string | null;
-    };
+    user: IAuthenticatedUser;
     accounts: Array<{
         id: string;
         name: string;
@@ -758,11 +995,11 @@ export interface ILoginResponse {
 
 /** Authentication: API key payload returned by `POST /users/api-keys`. */
 export interface IApiKeyResponse {
-    api_key: string;
+    api_key: string | null;
 }
 
-/** Authentication: masked API key returned by `GET /users/api-keys` (or null when never generated). */
-export type IMaskedApiKeyResponse = { api_key: string } | null;
+/** Authentication: masked API key returned by `GET /users/api-keys`. */
+export type IMaskedApiKeyResponse = { api_key: string | null } | null;
 
 /** Field definition object. */
 export interface IFieldDefinition {
@@ -783,16 +1020,19 @@ export interface IFieldDefinition {
 export interface ICreateFieldPayload {
     type: string;
     name: string;
-    regex?: string;
+    regex?: string | null;
     is_required?: boolean;
+    /** Live compatibility extension; absent from the current create schema. */
     is_active?: boolean;
 }
 
 /** Payload for updating a field definition. */
 export interface IUpdateFieldPayload {
+    /** Live compatibility extension; absent from the current update schema. */
     type?: string;
     name?: string;
     regex?: string | null;
+    /** Live compatibility extension; absent from the current update schema. */
     is_required?: boolean;
     is_active?: boolean;
 }

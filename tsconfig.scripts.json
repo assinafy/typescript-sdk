@@ -1,0 +1,9 @@
+{
+    "// note": "Typechecks the src/ tree together with the scripts/ (live-smoke, quick-probe), which import the SDK and would otherwise bit-rot. The base tsconfig pins rootDir to ./src, so it is relaxed here to cover both trees.",
+    "extends": "./tsconfig.json",
+    "compilerOptions": {
+        "rootDir": "."
+    },
+    "include": ["src/**/*", "scripts/**/*"],
+    "exclude": ["node_modules", "dist", "**/*.test.ts"]
+}

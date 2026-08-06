@@ -1,4 +1,7 @@
 import { describe, test, expect } from 'bun:test';
+import { promises as fs } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { buildUploadForm, validateUpload, loadSource, MAX_UPLOAD_BYTES } from './upload';
 import { ValidationError } from '../errors';
 
@@ -63,15 +66,16 @@ describe('validateUpload', () => {
         expect(() => validateUpload(Buffer.alloc(0), 'a.pdf')).toThrow(ValidationError);
     });
 
-    test('rejects a non-PDF extension, case-insensitively accepting .PDF', () => {
-        expect(() => validateUpload(Buffer.from('x'), 'a.docx')).toThrow(ValidationError);
-        expect(() => validateUpload(Buffer.from('x'), 'a.PDF')).not.toThrow();
+    test('requires both a PDF extension and PDF magic bytes', () => {
+        expect(() => validateUpload(Buffer.from('%PDF-1.4'), 'a.docx')).toThrow(ValidationError);
+        expect(() => validateUpload(Buffer.from('not-a-pdf'), 'a.PDF')).toThrow(ValidationError);
+        expect(() => validateUpload(Buffer.from('%PDF-1.7'), 'a.PDF')).not.toThrow();
     });
 
     test('rejects a file over the API’s 25 MB hard limit but accepts one exactly at it', () => {
         expect(MAX_UPLOAD_BYTES).toBe(25 * 1024 * 1024);
-        expect(() => validateUpload(Buffer.alloc(MAX_UPLOAD_BYTES + 1), 'a.pdf')).toThrow(ValidationError);
-        expect(() => validateUpload(Buffer.alloc(MAX_UPLOAD_BYTES), 'a.pdf')).not.toThrow();
+        expect(() => validateUpload(pdfBuffer(MAX_UPLOAD_BYTES + 1), 'a.pdf')).toThrow(ValidationError);
+        expect(() => validateUpload(pdfBuffer(MAX_UPLOAD_BYTES), 'a.pdf')).not.toThrow();
     });
 });
 
@@ -84,4 +88,47 @@ describe('loadSource', () => {
     test('requires a non-empty filePath', async () => {
         await expect(loadSource({ filePath: '' })).rejects.toThrow(ValidationError);
     });
+
+    test('normalizes inaccessible and non-file paths into ValidationError', async () => {
+        await expect(loadSource({ filePath: '/definitely/missing/assinafy.pdf' })).rejects.toThrow(
+            'Unable to access upload file',
+        );
+
+        const directory = await fs.mkdtemp(path.join(tmpdir(), 'assinafy-upload-dir-'));
+        try {
+            await expect(loadSource({ filePath: directory })).rejects.toThrow(
+                'Upload path must reference a regular file',
+            );
+        } finally {
+            await fs.rm(directory, { recursive: true, force: true });
+        }
+    });
+
+    test('rejects an oversized disk file from stat before attempting to read it', async () => {
+        const directory = await fs.mkdtemp(path.join(tmpdir(), 'assinafy-upload-size-'));
+        const filePath = path.join(directory, 'large.pdf');
+        try {
+            await fs.writeFile(filePath, '%PDF-1.7');
+            await fs.truncate(filePath, MAX_UPLOAD_BYTES + 1);
+            await expect(loadSource({ filePath }, { maxBytes: MAX_UPLOAD_BYTES })).rejects.toThrow(
+                'File size exceeds maximum allowed (25MB)',
+            );
+        } finally {
+            await fs.rm(directory, { recursive: true, force: true });
+        }
+    });
+
+    test('applies a size limit only when the caller supplies one', async () => {
+        const source = { buffer: Buffer.from('ab'), fileName: 'logo.png' };
+        await expect(loadSource(source)).resolves.toEqual(source);
+        await expect(loadSource(source, { maxBytes: 1 })).rejects.toThrow(
+            'File size exceeds maximum allowed',
+        );
+    });
 });
+
+function pdfBuffer(size: number): Buffer {
+    const buffer = Buffer.alloc(size);
+    buffer.write('%PDF-');
+    return buffer;
+}

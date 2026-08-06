@@ -1,0 +1,20 @@
+# Dependabot keeps the SHA-pinned GitHub Actions and Bun dependencies current.
+# Pinning actions to a commit SHA is the supply-chain hardening step; Dependabot
+# is its complement — it opens PRs that bump the pin (updating the trailing
+# `# vX` comment too) so pinned actions don't silently rot.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      github-actions:
+        patterns:
+          - '*'
+
+  - package-ecosystem: bun
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5

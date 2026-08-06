@@ -16,29 +16,132 @@ import { BaseResource } from './base';
  * `replaceTags`, `addTags`, `detachTag`).
  */
 export class TagResource extends BaseResource {
-    /** List the workspace's tags, ordered alphabetically. Optional case-insensitive `search`. */
+    /**
+     * List the workspace's tags (`GET /accounts/{accountId}/tags`).
+     *
+     * Tags come back ordered alphabetically by name. Pass an optional
+     * case-insensitive `search` substring to filter by name.
+     *
+     * @param params - Optional filters. `search` matches tag names
+     * case-insensitively (substring).
+     * @param accountId - Override the client's default account ID.
+     * @returns The matching tags (list items carry no `resource` field):
+     * ```jsonc
+     * [
+     *   {
+     *     "id": "103aa221874346e6b3de41688526",
+     *     "name": "Contracts",
+     *     "color": "ff8800",              // 6-char hex, no leading '#'
+     *     "created_at": "2026-07-18T19:03:45Z",
+     *     "updated_at": "2026-07-18T19:03:45Z"
+     *   },
+     *   {
+     *     "id": "103aa252123d3bf1843a317ee0e6",
+     *     "name": "Invoices",
+     *     "color": null,                  // no color set
+     *     "created_at": "2026-07-18T19:09:03Z",
+     *     "updated_at": "2026-07-18T19:09:03Z"
+     *   }
+     * ]
+     * ```
+     * @throws {ValidationError} If no account ID is available.
+     * @throws {ApiError} If the API rejects the request.
+     *
+     * @example
+     * ```ts
+     * const all = await client.tags.list();
+     * const contracts = await client.tags.list({ search: 'contract' });
+     * ```
+     */
     async list(params: { search?: string } = {}, accountId?: string): Promise<ITag[]> {
         const id = this.accountId(accountId);
         return this.call('Failed to list tags', () =>
-            this.http.get(`/accounts/${id}/tags`, {
+            this.http.get(`/accounts/${this.pathSegment(id, 'Account ID')}/tags`, {
                 params: cleanListParams(params as Record<string, unknown>),
             }),
         );
     }
 
-    /** Create a tag. Throws `ApiError` (409) if the name already exists (case-insensitive). */
+    /**
+     * Create a tag (`POST /accounts/{accountId}/tags`).
+     *
+     * `color` is an optional 6-char hex string; the API accepts it **with or
+     * without** a leading `#` and always stores it **without** — `'#ff8800'`
+     * and `'ff8800'` both persist as `'ff8800'` (verified live). Omit `color`
+     * (or pass `null`) for no color.
+     *
+     * @param payload - `name` (required) and optional `color`.
+     * @param accountId - Override the client's default account ID.
+     * @returns The created tag:
+     * ```jsonc
+     * {
+     *   "resource": "tag",
+     *   "id": "103ad216fdc641c8f0465678c813",
+     *   "name": "Contracts",
+     *   "color": "ff8800",
+     *   "created_at": "2026-07-19T17:24:46Z",
+     *   "updated_at": "2026-07-19T17:24:46Z"
+     * }
+     * ```
+     * @throws {ValidationError} If `name` is empty, or no account ID is available.
+     * @throws {ApiError} `409` if a tag with the same name already exists
+     * (case-insensitive).
+     *
+     * @example
+     * ```ts
+     * const tag = await client.tags.create({ name: 'Contracts', color: '#ff8800' });
+     * // → tag.color === 'ff8800'  (the leading '#' is stripped by the API)
+     * ```
+     */
     async create(payload: ICreateTagPayload, accountId?: string): Promise<ITag> {
         if (!payload.name) throw new ValidationError('Tag name is required');
         const id = this.accountId(accountId);
         return this.call('Failed to create tag', () =>
-            this.http.post(`/accounts/${id}/tags`, cleanParams({ ...payload })),
+            this.http.post(
+                `/accounts/${this.pathSegment(id, 'Account ID')}/tags`,
+                cleanParams({ ...payload }),
+            ),
         );
     }
 
     /**
-     * Update a tag's name and/or color. Omit a field to leave it unchanged;
-     * pass `color: null` to clear the color. Throws `ApiError` (409) if another
-     * tag already uses the new name.
+     * Update a tag's name and/or color (`PUT /accounts/{accountId}/tags/{tagId}`).
+     *
+     * Omit a field to leave it unchanged. Pass `color: null` to clear the color
+     * — that `null` is sent in the request body as the documented "clear color"
+     * signal (an omitted `color` is not sent at all). As with {@link create}, a
+     * leading `#` on `color` is accepted and stripped by the API
+     * (`'#112233'` → `'112233'`).
+     *
+     * @param tagId - The tag to update.
+     * @param payload - `name` and/or `color`. `color: null` clears the color;
+     * omit a field to leave it unchanged.
+     * @param accountId - Override the client's default account ID.
+     * @returns The updated tag:
+     * ```jsonc
+     * {
+     *   "resource": "tag",
+     *   "id": "103ad216fdc641c8f0465678c813",
+     *   "name": "Contracts",
+     *   "color": "112233",
+     *   "created_at": "2026-07-19T17:24:46Z",
+     *   "updated_at": "2026-07-19T17:24:47Z"
+     * }
+     * ```
+     * @throws {ValidationError} If `tagId` is missing, or no account ID is available.
+     * @throws {ApiError} `404` if the tag does not exist; `409` if another tag
+     * already uses the new name.
+     *
+     * @example
+     * ```ts
+     * // rename + recolor
+     * await client.tags.update('103ad216fdc641c8f0465678c813', {
+     *   name: 'Signed contracts',
+     *   color: '112233',
+     * });
+     * // clear the color, keep the name
+     * await client.tags.update('103ad216fdc641c8f0465678c813', { color: null });
+     * ```
      */
     async update(tagId: string, payload: IUpdateTagPayload, accountId?: string): Promise<ITag> {
         const id = this.accountId(accountId);
@@ -48,13 +151,35 @@ export class TagResource extends BaseResource {
         if (payload.name !== undefined) body['name'] = payload.name;
         if ('color' in payload) body['color'] = payload.color;
         return this.call('Failed to update tag', () =>
-            this.http.put(`/accounts/${id}/tags/${tid}`, body),
+            this.http.put(
+                `/accounts/${this.pathSegment(id, 'Account ID')}/tags/${this.pathSegment(tid, 'Tag ID')}`,
+                body,
+            ),
         );
     }
 
     /**
-     * Delete a tag. By default fails with `ApiError` (409) if the tag is still
-     * attached to anything; pass `{ force: true }` to detach everywhere first.
+     * Delete a tag (`DELETE /accounts/{accountId}/tags/{tagId}`).
+     *
+     * By default the API returns `409` if the tag is still attached to any
+     * document or template. Pass `{ force: true }` to detach it everywhere
+     * first — that adds a `?force=true` query param. Resolves to `void` on
+     * success (the endpoint's `{ "deleted": true }` body is discarded).
+     *
+     * @param tagId - The tag to delete.
+     * @param options - `force` to detach-and-delete when the tag is still in
+     * use, and `accountId` to override the client's default account ID.
+     * @returns Nothing; resolves once the tag is deleted.
+     * @throws {ValidationError} If `tagId` is missing, or no account ID is available.
+     * @throws {ApiError} `404` if the tag does not exist; `409` if the tag is
+     * still in use and `force` was not set.
+     *
+     * @example
+     * ```ts
+     * await client.tags.delete('103ad216fdc641c8f0465678c813');
+     * // detach from every document/template, then delete
+     * await client.tags.delete('103ad216fdc641c8f0465678c813', { force: true });
+     * ```
      */
     async delete(
         tagId: string,
@@ -64,7 +189,10 @@ export class TagResource extends BaseResource {
         const tid = this.requireId(tagId, 'Tag ID');
         const params = options.force ? { force: 'true' } : undefined;
         return this.callVoid('Failed to delete tag', () =>
-            this.http.delete(`/accounts/${id}/tags/${tid}`, { params }),
+            this.http.delete(
+                `/accounts/${this.pathSegment(id, 'Account ID')}/tags/${this.pathSegment(tid, 'Tag ID')}`,
+                { params },
+            ),
         );
     }
 }

@@ -64,4 +64,51 @@ describe('FieldsResource', () => {
         await fields.listTypes();
         expect(calls[0]).toEqual({ method: 'GET', url: '/field-types', config: undefined });
     });
+
+    test('get fetches /accounts/{id}/fields/{fieldId}', async () => {
+        const { http, calls } = mockHttp();
+        const fields = new FieldsResource(http, 'acc');
+        await fields.get('f1');
+        expect(calls[0]).toEqual({ method: 'GET', url: '/accounts/acc/fields/f1', config: undefined });
+    });
+
+    test('update PUTs body to /accounts/{id}/fields/{fieldId}', async () => {
+        const { http, calls } = mockHttp();
+        const fields = new FieldsResource(http, 'acc');
+        await fields.update('f1', { name: 'Updated', is_active: false });
+        expect(calls[0]).toEqual({
+            method: 'PUT',
+            url: '/accounts/acc/fields/f1',
+            body: { name: 'Updated', is_active: false },
+        });
+    });
+
+    test('delete hits /accounts/{id}/fields/{fieldId}', async () => {
+        const { http, calls } = mockHttp();
+        const fields = new FieldsResource(http, 'acc');
+        await fields.delete('f1');
+        expect(calls[0]).toEqual({ method: 'DELETE', url: '/accounts/acc/fields/f1' });
+    });
+
+    test('validateMultiple POSTs entries body with signer-access-code param', async () => {
+        const { http, calls } = mockHttp();
+        const fields = new FieldsResource(http, 'acc');
+        const entries = [
+            { field_id: 'f1', value: '123.456.789-09' },
+            { field_id: 'f2', value: 'Jane Doe' },
+        ];
+        await fields.validateMultiple(entries, { signerAccessCode: 'code-2' });
+        expect(calls[0]?.method).toBe('POST');
+        expect(calls[0]?.url).toBe('/accounts/acc/fields/validate-multiple');
+        expect(calls[0]?.body).toEqual(entries);
+        expect(calls[0]?.config).toEqual({ params: { 'signer-access-code': 'code-2' } });
+    });
+
+    test('validateMultiple omits params when no signer access code', async () => {
+        const { http, calls } = mockHttp();
+        const fields = new FieldsResource(http, 'acc');
+        await fields.validateMultiple([{ field_id: 'f1', value: 'x' }]);
+        expect(calls[0]?.url).toBe('/accounts/acc/fields/validate-multiple');
+        expect(calls[0]?.config).toEqual({ params: undefined });
+    });
 });

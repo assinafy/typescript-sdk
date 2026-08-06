@@ -1,0 +1,8 @@
+[test]
+# Keep production-source coverage from silently regressing. Bun reports line and
+# function coverage for this SDK; test files themselves are excluded.
+coverageSkipTestFiles = true
+# Bun enforces detailed thresholds for each loaded production file. This keeps
+# every file above a meaningful floor while the full suite remains >98% lines
+# and >96% functions overall.
+coverageThreshold = { lines = 0.85, functions = 0.80 }
