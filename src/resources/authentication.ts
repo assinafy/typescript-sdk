@@ -6,11 +6,9 @@ import type {
     Logger,
 } from '../types';
 import { ValidationError } from '../errors';
-import { assertNonEmptyString, assertRecord } from '../utils';
+import { assertEmail, assertNonEmptyString, assertRecord } from '../utils';
 import { BaseResource } from './base';
 import { withoutCredentials } from '../support/transport';
-
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 /**
  * Authentication endpoints (login, social login, password management) and
@@ -486,11 +484,5 @@ export class AuthenticationResource extends BaseResource {
             url.searchParams.set(key, value);
         }
         return url.toString();
-    }
-}
-
-function assertEmail(value: unknown): asserts value is string {
-    if (typeof value !== 'string' || !EMAIL_RE.test(value)) {
-        throw new ValidationError('email must be a valid email address');
     }
 }

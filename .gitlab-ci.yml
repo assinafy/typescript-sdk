@@ -26,10 +26,14 @@ default:
       - .bun-cache/
       - .npm-cache/
   before_script:
+    # Read the Bun version from package.json's `packageManager` field so it has
+    # one source of truth. GitHub Actions' setup-bun reads the same field, so
+    # both CIs move together when it is bumped.
+    - BUN_VERSION="$(node -p "require('./package.json').packageManager.split('@').pop()")"
     # npm 11 blocks unapproved dependency lifecycle scripts by default. Bun's
     # package uses its postinstall to select the platform binary, so allow only
     # that named package instead of enabling install scripts globally.
-    - npm install --global --allow-scripts=bun bun@1.4.0
+    - npm install --global --allow-scripts=bun "bun@${BUN_VERSION}"
     - bun --version
     - node --version
     - npm --version

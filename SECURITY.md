@@ -44,8 +44,10 @@ opportunity to upgrade.
   authentication, and signer-access-code flows use an auth-free transport so
   configured account credentials are not sent to public endpoints.
 - Consumers must use HTTPS endpoints and protect all SDK configuration as
-  secrets. Debug logging and error telemetry must be reviewed for response data
-  before being enabled in production.
+  secrets. The client enforces this: a `baseUrl` using plaintext `http` is
+  rejected unless its host is loopback, so a credential cannot be sent in the
+  clear to a remote host. Debug logging and error telemetry must be reviewed
+  for response data before being enabled in production.
 - The webhook HMAC helper is an opt-in utility, not proof of an official
   Assinafy signing contract. Confirm the header, algorithm, encoding, and secret
   delivery mechanism with Assinafy before enforcing it. See

@@ -43,7 +43,8 @@ export function handleAssinafyResponse<T>(response: unknown): T {
  * `message` field and reports the generic "API request failed", discarding what
  * the server actually said (e.g. "Artefato não está disponível.").
  *
- * Returns the parsed JSON when the body is JSON, the raw string when it is not,
+ * Returns the parsed JSON when the body is JSON, the raw string when it is not
+ * (so {@link ApiError.fromResponse} applies its single unstructured-body rule),
  * and the value untouched when it was never binary.
  */
 function decodeBinaryErrorBody(data: unknown): unknown {
@@ -62,7 +63,7 @@ function decodeBinaryErrorBody(data: unknown): unknown {
         return JSON.parse(text);
     } catch {
         // Not JSON (an HTML error page, say) — keep the text so it is not lost.
-        return text.length > 0 ? { message: text } : null;
+        return text.length > 0 ? text : null;
     }
 }
 
@@ -202,6 +203,39 @@ function redactSensitiveErrorText(message: string): string {
         .replace(SENSITIVE_ERROR_VALUE_RE, '$1[REDACTED]')
         .replace(/(https?:\/\/)[^/@\s]+:[^/@\s]+@/gi, '$1[REDACTED]@');
 }
+
+/**
+ * Shape check used at every public boundary that accepts an email address.
+ *
+ * Deliberately permissive — the API is the authority on which addresses it
+ * accepts, so this only rejects values that cannot be an address at all
+ * (missing `@`, missing dot in the domain, embedded whitespace). Defined once
+ * here because five resources need the same rule.
+ */
+export function isEmail(value: unknown): value is string {
+    return typeof value === 'string' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(value);
+}
+
+/** Require a syntactically plausible email address at a public boundary. */
+export function assertEmail(value: unknown, label = 'email'): asserts value is string {
+    if (!isEmail(value)) {
+        throw new ValidationError(`${label} must be a valid email address`, { [label]: value });
+    }
+}
+
+/** E.164 check for `whatsapp_phone_number`: `+` then 2–15 digits, no leading zero. */
+export function isE164PhoneNumber(value: unknown): value is string {
+    return typeof value === 'string' && /^\+[1-9]\d{1,14}$/u.test(value);
+}
+
+/**
+ * Largest page the list endpoints actually return.
+ *
+ * The API silently clamps `per-page` to this value rather than rejecting a
+ * larger one, so a caller asking for 100 receives 50 and no error. Methods that
+ * need "as many rows as one request can give" pin this instead of guessing.
+ */
+export const MAX_LIST_PAGE_SIZE = 50;
 
 /** Assert that caller-supplied JSON input is a non-array object. */
 export function assertRecord(

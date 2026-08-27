@@ -58,6 +58,29 @@ method counters. Notification counters are not mutually exclusive.
 are mutually exclusive and sum to `signature_requests`. Older unsuffixed email
 and WhatsApp counters remain optional.
 
+## List pagination
+
+Two behaviours of the list endpoints are silent rather than loud, so neither
+surfaces as an error a caller could react to:
+
+- Only the hyphenated `per-page` is read. `per_page` is accepted and discarded,
+  and the response falls back to the default of 20 rows. The SDK normalizes
+  `per_page` to `per-page` on every list method, and an explicit `per-page`
+  wins if both are supplied.
+- `per-page` is clamped to **50**. A request for 100 returns 50 rows with a
+  `200`, so page-size arithmetic based on the requested value is wrong by half.
+  That maximum is exported as `MAX_LIST_PAGE_SIZE`.
+
+```ts
+import { MAX_LIST_PAGE_SIZE } from '@assinafy/sdk';
+
+const { data, meta } = await client.documents.list({ 'per-page': MAX_LIST_PAGE_SIZE });
+// meta is read from the X-Pagination-* response headers, so it reports the
+// page size the server actually applied — prefer it over the requested value.
+```
+
+`signers.findByEmail()` pins this maximum for its single lookup request.
+
 ## Assignment list account context
 
 `GET /v1/assignments` requires the workspace in the camel-case `accountId`

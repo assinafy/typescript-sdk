@@ -20,13 +20,13 @@ const client = new AssinafyClient({
 });
 
 async function main(): Promise<void> {
-    const docs = await client.documents.list({ per_page: 1 });
+    const docs = await client.documents.list({ 'per-page': 1 });
     console.log('documents.list →', docs.data.length, 'documents');
 
-    const signers = await client.signers.list({ per_page: 1 });
+    const signers = await client.signers.list({ 'per-page': 1 });
     console.log('signers.list →', signers.data.length, 'signers');
 
-    const templates = await client.templates.list({ per_page: 1 });
+    const templates = await client.templates.list({ 'per-page': 1 });
     console.log('templates.list →', templates.data.length, 'templates');
 
     const eventTypes = await client.webhooks.listEventTypes();

@@ -1,5 +1,6 @@
 import { describe, test, expect } from 'bun:test';
 import {
+    assertEmail,
     assertRecord,
     assertDateTime,
     assertNonEmptyString,
@@ -7,6 +8,9 @@ import {
     cleanParams,
     createSafeLogger,
     handleAssinafyResponse,
+    isE164PhoneNumber,
+    isEmail,
+    MAX_LIST_PAGE_SIZE,
     serializeJsonRecord,
     toSdkError,
 } from './utils';
@@ -338,5 +342,95 @@ describe('toSdkError binary error bodies', () => {
     test('leaves an ordinary JSON error body untouched', () => {
         const err = toSdkError(axiosErr(400, { message: 'Plain JSON' }), 'Failed');
         expect(err.message).toBe('Plain JSON');
+    });
+
+    // A gateway or proxy in front of the API answers with text/plain or HTML,
+    // not the Assinafy JSON envelope. That body is the only explanation of the
+    // failure, so reporting the generic fallback instead throws it away.
+    test('keeps a plain-text (non-binary) error body as the message', () => {
+        const err = toSdkError(axiosErr(504, 'upstream request timeout'), 'Failed');
+        expect(err.message).toBe('upstream request timeout');
+    });
+
+    test('collapses whitespace and caps an oversized unstructured body', () => {
+        const html = `<html>\n  <body>${'x'.repeat(900)}</body>\n</html>`;
+        const err = toSdkError(axiosErr(502, html), 'Failed');
+
+        expect(err.message).toHaveLength(501); // 500 characters plus the ellipsis
+        expect(err.message.endsWith('…')).toBe(true);
+        expect(err.message).not.toContain('\n');
+        // The untruncated body is still available for programmatic inspection.
+        expect((err as ApiError).responseData).toBe(html);
+    });
+
+    test('falls back when an unstructured body is only whitespace', () => {
+        const err = toSdkError(axiosErr(500, '   \n  '), 'Failed');
+        expect(err.message).toBe('API request failed');
+    });
+});
+
+// These three replaced five copies of the email pattern and two of the E.164
+// pattern across the resource files. They are the single definition of what
+// counts as a contact value at a public boundary, so pin the behaviour here.
+describe('shared contact validation', () => {
+    test('isEmail accepts plausible addresses', () => {
+        for (const value of [
+            'ana@example.com',
+            'ana.souza+tag@sub.example.co.uk',
+            "o'brien@example.com",
+        ]) {
+            expect(isEmail(value)).toBe(true);
+        }
+    });
+
+    test('isEmail rejects values that cannot be an address', () => {
+        for (const value of [
+            'ana',                 // no @
+            'ana@example',         // no dot in the domain
+            'ana @example.com',    // embedded whitespace
+            '@example.com',        // no local part
+            'ana@@example.com',    // @ in the domain
+            '',
+            42,
+            null,
+            undefined,
+            { toString: () => 'ana@example.com' },
+        ]) {
+            expect(isEmail(value)).toBe(false);
+        }
+    });
+
+    test('assertEmail throws a labelled ValidationError', () => {
+        expect(() => assertEmail('ana@example.com')).not.toThrow();
+        expect(() => assertEmail('nope')).toThrow(ValidationError);
+        try {
+            assertEmail('nope', 'recipient');
+        } catch (err) {
+            expect((err as ValidationError).message).toBe('recipient must be a valid email address');
+            expect((err as ValidationError).errors).toEqual({ recipient: 'nope' });
+        }
+    });
+
+    test('isE164PhoneNumber enforces + then 2-15 digits with no leading zero', () => {
+        for (const value of ['+5511999998888', '+12', '+123456789012345']) {
+            expect(isE164PhoneNumber(value)).toBe(true);
+        }
+        for (const value of [
+            '5511999998888',        // no +
+            '+0511999998888',       // leading zero
+            '+1',                   // too short
+            '+1234567890123456',    // 16 digits, too long
+            '+55 11 99999-8888',    // punctuation
+            '',
+            null,
+        ]) {
+            expect(isE164PhoneNumber(value)).toBe(false);
+        }
+    });
+
+    test('MAX_LIST_PAGE_SIZE is the page size the server actually honours', () => {
+        // Larger values are clamped silently rather than rejected, so this
+        // constant is the only way a caller can size a page correctly.
+        expect(MAX_LIST_PAGE_SIZE).toBe(50);
     });
 });

@@ -7,6 +7,102 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.2.0] - 2026-08-27
+
+### Security
+
+- **`baseUrl` now requires `https` for any remote host.** Every request on the
+  authenticated transport carries the caller's `X-Api-Key` or bearer token, so
+  a plaintext `http://` base URL put a long-lived credential on the wire in
+  cleartext. `http` remains accepted when the host is loopback (`localhost`,
+  the `127.0.0.0/8` block, or `::1`) so local mock servers and the packed
+  consumer smoke test keep working; anything else is rejected with a
+  `ValidationError` at construction time. `SECURITY.md` already required HTTPS
+  endpoints — the client now enforces it rather than trusting configuration.
+  - Callers pointing at a remote `http://` host must switch to `https://`.
+
+### Fixed
+
+- **`signers.findByEmail()` requested 100 rows per page and received 50.** The
+  API clamps `per-page` to 50 and answers `200`, so the lookup scanned half the
+  window its documentation claimed. It now pins the real maximum, and the
+  method and `signers.list()` documentation state the clamp instead of naming
+  100 as the API maximum. `documents.list()` carried the same incorrect claim.
+- **Unstructured error bodies were reported as the generic "API request
+  failed".** A gateway or proxy in front of the API answers with `text/plain`
+  or HTML rather than the Assinafy JSON envelope. `ApiError.fromResponse()`
+  only read `message`/`error` off an object, so exactly the failures with no
+  structured body to explain them lost their only explanation. A non-JSON body
+  is now used as the message, with whitespace collapsed and the text capped at
+  500 characters; the untouched body remains on `ApiError.responseData`.
+
+### Added
+
+- **`MAX_LIST_PAGE_SIZE`** — the largest page any list endpoint returns (50).
+  Exported so callers can size pagination loops against the value the server
+  actually honours rather than the one they request.
+
+### Changed
+
+- The email and E.164 phone-number patterns had five and two copies across the
+  resource files. They are now `isEmail()`, `assertEmail()`, and
+  `isE164PhoneNumber()` in `src/utils.ts`, so the accepted shape of a contact
+  value is defined in one place. Validation behaviour and error messages are
+  unchanged.
+- `decodeBinaryErrorBody()` returns a non-JSON binary body as a string instead
+  of wrapping it in `{ message }`, so both unstructured-body paths converge on
+  the single rule in `ApiError.fromResponse()`.
+- GitLab CI reads the Bun version from `package.json`'s `packageManager` field
+  instead of repeating the literal, matching how GitHub Actions' `setup-bun`
+  resolves it. Both CIs now move together when that field is bumped.
+- README gained a contents map linking the setup, end-to-end workflow, and
+  per-resource sections; list examples use the `per-page` spelling the API
+  reads and document the page-size clamp.
+
+## [2.1.2] - 2026-08-26
+
+### Added
+
+- `SDK_USER_AGENT` — every transport, including public and signer-access-code
+  requests, now identifies itself as `Assinafy-Typescript-SDK/v<VERSION>`.
+- `scripts/node-consumer-smoke.mjs`, exercised by CI and the release workflow:
+  it installs the packed tarball into an isolated consumer and drives the real
+  Node HTTP, auth, and multipart paths through both CJS and ESM entrypoints.
+- A manual **Sandbox integration** workflow with `read-only` and
+  `disposable-full` modes, gated on a protected environment.
+
+### Security
+
+- Requests on the authenticated transport are pinned to the configured API
+  origin. A cross-origin URL is rejected before dispatch, and `Authorization`
+  and `X-Api-Key` are marked redirect-sensitive so the redirect stack strips
+  them.
+- Cross-origin redirects are blocked unless they are a `GET`/`HEAD` to an
+  `https` target whose source URL carries no sensitive query parameter.
+- Public, login, and signer-access-code flows run on a transport whose
+  credential headers are removed at construction, so a configured API key
+  cannot reach a public endpoint.
+- `AxiosError` is no longer attached as an SDK error `cause`. It retains the
+  full request config, including credentials and body, which error reporters
+  commonly serialize. Transport failures now carry a sanitized cause with
+  credential-shaped values redacted from the message.
+- Caller-supplied loggers receive an allowlist of numeric operational counters
+  only. Logger exceptions and rejected promises are swallowed so telemetry
+  cannot change request semantics.
+
+### Fixed
+
+- `AssinafyClient.create()` no longer let its options bag override the
+  `apiKey`/`accountId` passed positionally, and it rejects missing or malformed
+  credentials instead of constructing an unusable client.
+- Constructor options are validated up front: a non-object bag, a blank
+  credential, or an invalid `timeout`/`maxRetries` throws `ValidationError`.
+- `uploadAndRequestSignatures()` validates every signer before uploading, so an
+  invalid later signer no longer leaves an orphaned document behind, and it no
+  longer waits for `metadata_ready` before creating a virtual assignment.
+- HTTP 429 replay is limited to `GET`, `HEAD`, `OPTIONS`, and `DELETE`, with
+  `GET /sign` excluded because that read records a signer view.
+
 ## [2.1.1] - 2026-08-06
 
 Maintenance only. The published `dist/` is byte-identical to 2.1.0; no runtime,
@@ -457,7 +553,9 @@ fields (`cpf`, `whatsapp_phone_number`) with the PHP SDK and n8n node.
 - High-level `uploadAndRequestSignatures` helper on `AssinafyClient`.
 - `PaginatedResult<T>` with parsed `X-Pagination-*` header meta.
 
-[Unreleased]: https://github.com/assinafy/typescript-sdk/compare/v2.1.1...HEAD
+[Unreleased]: https://github.com/assinafy/typescript-sdk/compare/v2.2.0...HEAD
+[2.2.0]: https://github.com/assinafy/typescript-sdk/compare/v2.1.2...v2.2.0
+[2.1.2]: https://github.com/assinafy/typescript-sdk/compare/v2.1.1...v2.1.2
 [2.1.1]: https://github.com/assinafy/typescript-sdk/compare/v2.1.0...v2.1.1
 [2.1.0]: https://github.com/assinafy/typescript-sdk/compare/v2.0.0...v2.1.0
 [2.0.0]: https://github.com/assinafy/typescript-sdk/releases/tag/v2.0.0

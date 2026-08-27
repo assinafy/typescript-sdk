@@ -1,6 +1,7 @@
 import { describe, test, expect, beforeEach } from 'bun:test';
 import { SignerResource } from './signers';
 import { ApiError, ValidationError } from '../errors';
+import { MAX_LIST_PAGE_SIZE } from '../utils';
 import type { AxiosInstance } from 'axios';
 
 describe('SignerResource', () => {
@@ -248,7 +249,11 @@ describe('SignerResource', () => {
         const resource = new SignerResource(trackingAxios, 'acc');
         const result = await resource.findByEmail('john@example.com');
         expect(result?.id).toBe('1');
-        expect(params).toEqual({ search: 'john@example.com', 'per-page': 100 });
+        // The server silently clamps `per-page` to 50 instead of rejecting a
+        // larger value, so asking for more only makes the scanned window look
+        // wider than it is. Pin the real maximum.
+        expect(params).toEqual({ search: 'john@example.com', 'per-page': MAX_LIST_PAGE_SIZE });
+        expect(MAX_LIST_PAGE_SIZE).toBe(50);
     });
 
     test('findByEmail returns null when the list request 404s', async () => {

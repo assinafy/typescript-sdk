@@ -7,10 +7,15 @@ import type {
     ISignerListParams,
 } from '../types';
 import { ApiError, ValidationError } from '../errors';
-import { cleanListParams, cleanParams, serializeJsonRecord } from '../utils';
+import {
+    cleanListParams,
+    cleanParams,
+    isE164PhoneNumber,
+    isEmail,
+    MAX_LIST_PAGE_SIZE,
+    serializeJsonRecord,
+} from '../utils';
 import { BaseResource } from './base';
-
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export class SignerResource extends BaseResource {
     /**
@@ -148,7 +153,8 @@ export class SignerResource extends BaseResource {
      * Pagination info (if any) is attached in `meta`.
      *
      * @param params - `page`, `per-page`, and `search` (matches `full_name` or
-     * `email`). The API maximum is 100 items per page.
+     * `email`). The server clamps `per-page` to {@link MAX_LIST_PAGE_SIZE}
+     * (50); a larger value is not rejected, it is silently reduced.
      * @param accountId - Override the client's default account ID.
      * @returns The matching signers, with pagination in `meta`. Each item:
      * ```jsonc
@@ -262,10 +268,10 @@ export class SignerResource extends BaseResource {
      * `search` is a substring match across signer fields, so the result is
      * re-filtered here for an exact, case-insensitive email match.
      *
-     * Page size is pinned to the API's maximum of 100.
-     * An exact address realistically matches one signer, but a search term that
-     * matched more than 100 could in principle miss one — the API exposes no
-     * exact-email filter to rule that out.
+     * Page size is pinned to {@link MAX_LIST_PAGE_SIZE}, the largest page the
+     * server actually returns. An exact address realistically matches one
+     * signer, but a search term that matched more than that could in principle
+     * miss one — the API exposes no exact-email filter to rule that out.
      *
      * A `404` from the underlying list is treated as "no match" and mapped to
      * `null`; any other {@link ApiError} propagates.
@@ -295,7 +301,10 @@ export class SignerResource extends BaseResource {
     async findByEmail(email: string, accountId?: string): Promise<ISigner | null> {
         this.assertEmail(email);
         try {
-            const { data } = await this.list({ search: email, 'per-page': 100 }, accountId);
+            const { data } = await this.list(
+                { search: email, 'per-page': MAX_LIST_PAGE_SIZE },
+                accountId,
+            );
             const lower = email.toLowerCase();
             return data.find((s) => (s.email ?? '').toLowerCase() === lower) ?? null;
         } catch (err) {
@@ -307,7 +316,7 @@ export class SignerResource extends BaseResource {
     }
 
     private assertEmail(email: string): void {
-        if (!email || !EMAIL_RE.test(email)) {
+        if (!isEmail(email)) {
             throw new ValidationError('Invalid email address', { email });
         }
     }
@@ -322,10 +331,7 @@ export function validateCreateSignerPayload(payload: ICreateSignerPayload): void
         throw new ValidationError('full_name is required');
     }
     const phone = payload.whatsapp_phone_number ?? payload.phone;
-    if (
-        payload.email !== undefined &&
-        (typeof payload.email !== 'string' || !EMAIL_RE.test(payload.email))
-    ) {
+    if (payload.email !== undefined && !isEmail(payload.email)) {
         throw new ValidationError('Invalid email address', { email: payload.email });
     }
     validateOptionalPhone(phone);
@@ -356,10 +362,7 @@ export function validateUpdateSignerPayload(payload: IUpdateSignerPayload): void
     ) {
         throw new ValidationError('full_name cannot be empty');
     }
-    if (
-        payload.email !== undefined &&
-        (typeof payload.email !== 'string' || !EMAIL_RE.test(payload.email))
-    ) {
+    if (payload.email !== undefined && !isEmail(payload.email)) {
         throw new ValidationError('Invalid email address', { email: payload.email });
     }
 
@@ -378,7 +381,7 @@ function validateOptionalDigits(value: string | undefined, field: 'cpf' | 'gover
 
 function validateOptionalPhone(value: string | undefined): void {
     if (value === undefined) return;
-    if (typeof value !== 'string' || !/^\+[1-9]\d{1,14}$/u.test(value)) {
+    if (!isE164PhoneNumber(value)) {
         throw new ValidationError('whatsapp_phone_number must use E.164 format');
     }
 }

@@ -45,6 +45,8 @@ jobs:
         with:
           node-version: 24
           package-manager-cache: false
+      # No `bun-version`: setup-bun v2 reads package.json's `packageManager`
+      # field, keeping the pinned Bun version in one place.
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
       - run: bun install --frozen-lockfile
       - name: Check required secret configuration

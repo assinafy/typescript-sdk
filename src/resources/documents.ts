@@ -30,6 +30,7 @@ import {
     assertNonEmptyString,
     assertRecord,
     cleanListParams,
+    isEmail,
 } from '../utils';
 import { BaseResource } from './base';
 import type { DocumentUploadSource } from './upload';
@@ -60,8 +61,6 @@ const FAILED_STATUSES: ReadonlySet<DocumentStatus | string> = new Set([
     'rejected_by_user',
     'expired',
 ]);
-
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 /** Options accepted by {@link DocumentResource.upload}. */
 export interface IDocumentUploadOptions {
@@ -176,7 +175,8 @@ export class DocumentResource extends BaseResource {
      * @param params - Filters and pagination: `status`; `method` (`virtual` or
      * `collect`); `tags` (comma-separated IDs, all of which must match);
      * `search` (document name, signer name, or signer email); `sort` (`name` or
-     * `updated_at`); `page`; and `per-page` (maximum 100).
+     * `updated_at`); `page`; and `per-page` (the server clamps this to 50
+     * rather than rejecting a larger value).
      * @param accountId - Override the client's default account ID.
      * @returns Matching documents, with pagination in `meta`. Each item:
      * ```jsonc
@@ -1165,7 +1165,7 @@ export class DocumentResource extends BaseResource {
         const id = this.requireId(documentId, 'Document ID');
         assertNonEmptyString(recipient, 'recipient');
         if (channel !== undefined) assertNonEmptyString(channel, 'channel');
-        if (channel === undefined && !EMAIL_RE.test(recipient)) {
+        if (channel === undefined && !isEmail(recipient)) {
             throw new ValidationError('recipient must be a valid email address');
         }
         const path = `/public/documents/${this.pathSegment(id, 'Document ID')}/send-token`;

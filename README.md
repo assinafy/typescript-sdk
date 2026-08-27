@@ -13,6 +13,37 @@ See [API coverage](docs/API_COVERAGE.md) for the operation map and
 [compatibility notes](docs/COMPATIBILITY.md) for deployment-specific request
 and response variants.
 
+## Contents
+
+This document runs from setup to a complete signature workflow, then to
+per-resource detail. Read it in order the first time; use it as a reference
+afterwards.
+
+**Getting set up** — [Requirements](#requirements) ·
+[Installation](#installation) · [Quick start](#quick-start) ·
+[Authentication](#authentication) · [Configuration](#configuration)
+([rate limiting](#rate-limiting), [factories](#factories)) ·
+[Endpoint coverage](#endpoint-coverage)
+
+**The end-to-end flow** — [Document lifecycle](#document-lifecycle):
+[upload](#1-upload-the-pdf) → [signers](#2-create-or-reuse-the-email-signers) →
+[price and request signatures](#3-price-then-request-signatures) →
+[the signer's side](#4-complete-the-email-signer-flow) →
+[completion and artifacts](#5-observe-completion-and-download-artifacts)
+
+**Per-resource detail** — [Resource reference](#resource-reference):
+[documents](#documents) · [signers](#signers) · [assignments](#assignments) ·
+[paid signing branches](#paid-signing-branches) · [templates](#templates) ·
+[tags](#tags) · [workspaces](#workspaces) ·
+[field definitions](#field-definitions) ·
+[auth and API keys](#authentication--api-key-management) ·
+[the current user](#authenticated-user) · [webhooks](#webhooks)
+([verification](#webhook-verification)) ·
+[signer-side endpoints](#signer-side-endpoints)
+
+**Everything else** — [High-level helper](#high-level-helper) ·
+[Errors](#errors) · [Development](#development) · [License](#license)
+
 ## Requirements
 
 - Node.js 22+ for the built-in `FormData` / `Blob` APIs used by uploads. Packed
@@ -105,7 +136,7 @@ installed package version. The exact value is also exported as
 | `apiKey`        | string   | —                                       | Preferred credential (sent as `X-Api-Key`).   |
 | `token`         | string   | —                                       | Access token (sent as `Authorization: Bearer`). |
 | `accountId`     | string   | —                                       | Default workspace/account ID.                  |
-| `baseUrl`       | string   | `https://api.assinafy.com.br/v1`        | Absolute HTTP(S) API base without credentials, query, or fragment. |
+| `baseUrl`       | string   | `https://api.assinafy.com.br/v1`        | Absolute API base without credentials, query, or fragment. Must be `https` unless the host is loopback. |
 | `webhookSecret` | string   | —                                       | Opt-in HMAC secret used by `WebhookVerifier`; see its [contract caveat](docs/COMPATIBILITY.md#webhook-signature-verification-is-not-in-the-openapi-contract). |
 | `timeout`       | number   | `30000`                                 | Request timeout in milliseconds.               |
 | `maxRetries`    | number   | `2`                                     | Auto-retries eligible HTTP 429 responses, honoring `Retry-After`. `0` disables. |
@@ -441,7 +472,7 @@ const doc = await client.documents.upload(
 await client.documents.upload({ buffer, fileName: 'contract.pdf' });
 
 // List → { data: IDocumentListItem[], meta?: { current_page, per_page, total, last_page } }
-const { data, meta } = await client.documents.list({ page: 1, per_page: 20, sort: 'updated_at' });
+const { data, meta } = await client.documents.list({ page: 1, 'per-page': 20, sort: 'updated_at' });
 
 // Search is the lightweight alternative to list: same item shape, but the API
 // skips the expanded `assignment`/`pages`. Prefer it for name lookups.
@@ -501,7 +532,17 @@ account authentication as their download operations. Prefer
 credential and returns a `Buffer`. `bundle` contains `original`, `certificated`,
 and `certificate-page`, plus `pades` when available.
 
-List endpoints return `{ data, meta }` where `meta` is populated from the `X-Pagination-*` headers returned by the API.
+List endpoints return `{ data, meta }`, where `meta` is populated from the
+`X-Pagination-*` response headers. Two API behaviours are worth knowing because
+both are silent rather than errors:
+
+- Only the hyphenated `per-page` is read. `per_page` is accepted and ignored,
+  falling back to 20 rows — so the SDK rewrites `per_page` to `per-page` on
+  every list method, and an explicit `per-page` wins when both are given.
+- `per-page` is clamped to **50**. Asking for 100 returns 50 rows with a `200`.
+  The exported `MAX_LIST_PAGE_SIZE` constant is that ceiling; page through with
+  `page` rather than requesting a larger page, and trust `meta.per_page` over
+  the value you asked for.
 
 ### Signers
 
@@ -525,7 +566,7 @@ await client.signers.create({
 });
 
 await client.signers.get(signerId);
-await client.signers.list({ page: 1, per_page: 50, search: 'john' });
+await client.signers.list({ page: 1, 'per-page': 50, search: 'john' });
 await client.signers.update(signerId, {
   full_name: 'Johnny Doe',
   government_id: '390.533.447-05', // official update field; sent as digits
@@ -718,7 +759,7 @@ const created = await client.templates.create(
 //   pages: [], tags: [], created_at: '2026-…', updated_at: '2026-…'
 // }
 
-const { data, meta } = await client.templates.list({ search: 'NDA', per_page: 20 });
+const { data, meta } = await client.templates.list({ search: 'NDA', 'per-page': 20 });
 const template = await client.templates.get(created.id);   // includes pages[] + default_document_tags
 await client.templates.update(created.id, { name: 'NDA v2', message: 'Please sign' });
 const firstPage = template.pages?.[0];
@@ -1053,7 +1094,7 @@ await client.signerDocuments.self(accessCode);
 await client.signerDocuments.verifyEmail({ signerAccessCode: accessCode, verificationCode: '123456' });
 
 await client.signerDocuments.getCurrent(signerId, accessCode);
-const { data } = await client.signerDocuments.list(signerId, accessCode, { per_page: 20 });
+const { data } = await client.signerDocuments.list(signerId, accessCode, { 'per-page': 20 });
 // Signer-side counterpart of documents.search(), authorised by the access code.
 const found = await client.signerDocuments.search(signerId, accessCode, 'invoice');
 await client.signerDocuments.download(signerId, documentId, 'original');

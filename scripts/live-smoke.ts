@@ -27,9 +27,9 @@ import {
     type ITemplateDetailsResponse,
     type ITemplateSigner,
 } from '../src';
+import { isEmail } from '../src/utils';
 
 const SANDBOX_HOST = 'sandbox.assinafy.com.br';
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const TEMPLATE_WAIT_MS = 90_000;
 const DISPATCH_WAIT_MS = 20_000;
 // The sandbox allows 120 requests/minute; leave headroom for polling calls.
@@ -210,7 +210,7 @@ function loadConfig(): AuditConfig {
         throw new AuditConfigurationError();
     }
     for (const email of [primaryEmail, secondaryEmail]) {
-        if (email !== undefined && !EMAIL_RE.test(email)) throw new AuditConfigurationError();
+        if (email !== undefined && !isEmail(email)) throw new AuditConfigurationError();
     }
 
     const webhookUrl = optionalEnv('ASSINAFY_TEST_WEBHOOK_URL');
@@ -221,7 +221,7 @@ function loadConfig(): AuditConfig {
     if ((loginEmail === undefined) !== (loginPassword === undefined)) {
         throw new AuditConfigurationError();
     }
-    if (loginEmail !== undefined && !EMAIL_RE.test(loginEmail)) {
+    if (loginEmail !== undefined && !isEmail(loginEmail)) {
         throw new AuditConfigurationError();
     }
 

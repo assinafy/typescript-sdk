@@ -16,12 +16,16 @@ import type {
     SignatureImageType,
 } from '../types';
 import { ValidationError } from '../errors';
-import { assertDocumentArtifactName, assertRecord, cleanListParams, cleanParams } from '../utils';
+import {
+    assertDocumentArtifactName,
+    assertRecord,
+    cleanListParams,
+    cleanParams,
+    isE164PhoneNumber,
+    isEmail,
+} from '../utils';
 import { BaseResource } from './base';
 import { withoutCredentials } from '../support/transport';
-
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const E164_RE = /^\+[1-9]\d{1,14}$/u;
 
 /**
  * Signer-side endpoints for custom signing UIs. Most calls authenticate with
@@ -865,16 +869,12 @@ function validateConfirmDataPayload(payload: ILegacyConfirmSignerDataPayload): v
             throw new ValidationError(`${key} must be a string`);
         }
     }
-    if (
-        payload.email !== undefined
-        && (typeof payload.email !== 'string' || !EMAIL_RE.test(payload.email))
-    ) {
+    if (payload.email !== undefined && !isEmail(payload.email)) {
         throw new ValidationError('email must be a valid email address');
     }
     if (
         payload.whatsapp_phone_number !== undefined
-        && (typeof payload.whatsapp_phone_number !== 'string'
-            || !E164_RE.test(payload.whatsapp_phone_number))
+        && !isE164PhoneNumber(payload.whatsapp_phone_number)
     ) {
         throw new ValidationError('whatsapp_phone_number must use E.164 format');
     }

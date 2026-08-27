@@ -112,7 +112,7 @@ describe('AssinafyClient', () => {
         ).publicHttp;
         const expected = `Assinafy-Typescript-SDK/v${packageJson.version}`;
 
-        expect(packageJson.version).toBe('2.1.2');
+        expect(packageJson.version).toBe('2.2.0');
         expect(authenticated['User-Agent']).toBe(expected);
         expect(publicHttp.defaults.headers['User-Agent']).toBe(expected);
     });
@@ -173,6 +173,34 @@ describe('AssinafyClient', () => {
     test('canonicalizes dot segments in a custom baseUrl', () => {
         const client = new AssinafyClient({ baseUrl: 'https://example.com/api/../v1/' });
         expect(client.getAxiosInstance().defaults.baseURL).toBe('https://example.com/v1');
+    });
+
+    // Every request on the credentialed transport carries `X-Api-Key` or a
+    // Bearer token, so plaintext HTTP to a remote host would leak a long-lived
+    // credential. Loopback stays allowed so local mock servers still work.
+    test('allows plaintext http only for loopback hosts', () => {
+        for (const baseUrl of [
+            'http://localhost:3000/v1',
+            'http://127.0.0.1:3000/v1',
+            'http://127.0.0.53/v1',
+            // The URL parser canonicalizes shorthand/hex/decimal IPv4 forms, so
+            // these reach the guard already normalized to 127.0.0.1.
+            'http://127.1/v1',
+            'http://2130706433/v1',
+            'http://[::1]:3000/v1',
+        ]) {
+            expect(() => new AssinafyClient({ apiKey: 'k', baseUrl })).not.toThrow();
+        }
+
+        for (const baseUrl of [
+            'http://api.assinafy.com.br/v1',
+            'http://192.168.1.10/v1',
+            // Anchored so a loopback-looking prefix on an attacker domain fails.
+            'http://localhost.evil.example/v1',
+            'http://127.0.0.1.evil.example/v1',
+        ]) {
+            expect(() => new AssinafyClient({ apiKey: 'k', baseUrl })).toThrow(ValidationError);
+        }
     });
 
     test('allows same-origin absolute requests and rejects cross-origin dispatch', async () => {

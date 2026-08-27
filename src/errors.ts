@@ -1,3 +1,23 @@
+/** Used when a failure response carries nothing that explains it. */
+const FALLBACK_MESSAGE = 'API request failed';
+
+/** Upper bound on an `Error.message` lifted out of an unstructured body. */
+const MAX_MESSAGE_LENGTH = 500;
+
+/**
+ * Keep an unstructured error body readable in logs.
+ *
+ * An HTML error page is a legitimate response body but a terrible
+ * `Error.message`, so collapse its whitespace and cap the length. The untouched
+ * body always remains on {@link ApiError.responseData}.
+ */
+function summarize(text: string): string {
+    const collapsed = text.replaceAll(/\s+/gu, ' ');
+    return collapsed.length > MAX_MESSAGE_LENGTH
+        ? `${collapsed.slice(0, MAX_MESSAGE_LENGTH)}…`
+        : collapsed;
+}
+
 /** Base class for all Assinafy SDK errors. */
 export class AssinafyError extends Error {
     public readonly context: Record<string, unknown>;
@@ -45,9 +65,14 @@ export class ApiError extends AssinafyError {
      * Convert a status/body pair into an {@link ApiError}.
      *
      * @param statusCode - Non-success HTTP response status.
-     * @param responseData - Parsed API body. String `message` takes priority,
-     * followed by string `error`, then the stable fallback message.
-     * @returns An `ApiError` retaining the original response body.
+     * @param responseData - API body. For a JSON object, string `message` takes
+     * priority, followed by string `error`. A non-JSON body (a proxy's
+     * `text/plain` or HTML error page) is used verbatim rather than discarded —
+     * otherwise the only failures reported as the generic fallback would be the
+     * ones with no structured body to explain them. Anything else falls back to
+     * the stable message.
+     * @returns An `ApiError` retaining the original response body in
+     * {@link ApiError.responseData}; `message` is truncated for legibility.
      *
      * @example
      * ```ts
@@ -56,6 +81,10 @@ export class ApiError extends AssinafyError {
      * ```
      */
     static fromResponse(statusCode: number, responseData: unknown): ApiError {
+        if (typeof responseData === 'string') {
+            const text = responseData.trim();
+            return new ApiError(text ? summarize(text) : FALLBACK_MESSAGE, statusCode, responseData);
+        }
         const data = (responseData ?? {}) as Record<string, unknown>;
         const rawMessage = data['message'];
         const rawError = data['error'];
@@ -64,7 +93,7 @@ export class ApiError extends AssinafyError {
                 ? rawMessage
                 : typeof rawError === 'string'
                     ? rawError
-                    : 'API request failed';
+                    : FALLBACK_MESSAGE;
         return new ApiError(message, statusCode, responseData);
     }
 }

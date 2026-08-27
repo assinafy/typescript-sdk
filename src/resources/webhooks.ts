@@ -8,7 +8,7 @@ import type {
     WebhookEventType,
 } from '../types';
 import { ValidationError } from '../errors';
-import { cleanListParams } from '../utils';
+import { cleanListParams, isEmail } from '../utils';
 import { BaseResource } from './base';
 
 /**
@@ -22,8 +22,6 @@ export const DEFAULT_WEBHOOK_EVENTS: readonly WebhookEventType[] = Object.freeze
     'signer_rejected_document',
     'document_processing_failed',
 ]);
-
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export class WebhookResource extends BaseResource {
     /**
@@ -80,7 +78,7 @@ export class WebhookResource extends BaseResource {
             throw new ValidationError('Webhook subscription payload is required');
         }
         validateWebhookUrl(payload.url);
-        if (!payload.email || !EMAIL_RE.test(payload.email)) {
+        if (!isEmail(payload.email)) {
             throw new ValidationError('Webhook email must be a valid email address', {
                 email: payload.email,
             });

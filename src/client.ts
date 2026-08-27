@@ -587,10 +587,30 @@ function normaliseBaseUrl(raw: string): string {
     if (url.protocol !== 'https:' && url.protocol !== 'http:') {
         throw new ValidationError('baseUrl must use http or https');
     }
+    // Every request on this transport carries the caller's `X-Api-Key` or
+    // Bearer token, so plaintext HTTP to a remote host would put a
+    // long-lived credential on the wire. Loopback stays allowed because that
+    // is how local mock servers and the packed-consumer smoke test are driven.
+    if (url.protocol === 'http:' && !isLoopbackHost(url.hostname)) {
+        throw new ValidationError(
+            'baseUrl must use https for a remote host; http is only allowed for localhost',
+        );
+    }
     if (url.username || url.password || raw.includes('?') || raw.includes('#')) {
         throw new ValidationError('baseUrl must not contain credentials, a query, or a fragment');
     }
     return url.href.replace(/\/+$/, '');
+}
+
+function isLoopbackHost(hostname: string): boolean {
+    // `URL` keeps IPv6 hosts bracketed and lowercases the host already.
+    const host = hostname.replace(/^\[|\]$/gu, '');
+    return (
+        host === 'localhost'
+        || host === '::1'
+        // The whole 127.0.0.0/8 block is loopback, not just 127.0.0.1.
+        || /^127(?:\.\d{1,3}){3}$/u.test(host)
+    );
 }
 
 type RetryableConfig = InternalAxiosRequestConfig & { _retryCount?: number };
