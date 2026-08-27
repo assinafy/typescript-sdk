@@ -1,6 +1,6 @@
-import type { ICreateTagPayload, ITag, IUpdateTagPayload } from '../types';
+import type { ICreateTagPayload, IDeleteTagResponse, ITag, IUpdateTagPayload } from '../types';
 import { ValidationError } from '../errors';
-import { cleanListParams, cleanParams } from '../utils';
+import { assertNonEmptyString, assertRecord, cleanListParams } from '../utils';
 import { BaseResource } from './base';
 
 /**
@@ -54,10 +54,14 @@ export class TagResource extends BaseResource {
      * ```
      */
     async list(params: { search?: string } = {}, accountId?: string): Promise<ITag[]> {
+        assertRecord(params, 'tag list parameters');
+        if (params.search !== undefined && typeof params.search !== 'string') {
+            throw new ValidationError('search must be a string');
+        }
         const id = this.accountId(accountId);
         return this.call('Failed to list tags', () =>
             this.http.get(`/accounts/${this.pathSegment(id, 'Account ID')}/tags`, {
-                params: cleanListParams(params as Record<string, unknown>),
+                params: cleanListParams({ search: params.search }),
             }),
         );
     }
@@ -67,10 +71,11 @@ export class TagResource extends BaseResource {
      *
      * `color` is an optional 6-char hex string; the API accepts it **with or
      * without** a leading `#` and always stores it **without** — `'#ff8800'`
-     * and `'ff8800'` both persist as `'ff8800'` (verified live). Omit `color`
+     * and `'ff8800'` both persist as `'ff8800'`. Omit `color`
      * (or pass `null`) for no color.
      *
-     * @param payload - `name` (required) and optional `color`.
+     * @param payload - `name` (required, max 64 characters; trimmed with
+     * internal whitespace collapsed) and optional `color`.
      * @param accountId - Override the client's default account ID.
      * @returns The created tag:
      * ```jsonc
@@ -83,7 +88,8 @@ export class TagResource extends BaseResource {
      *   "updated_at": "2026-07-19T17:24:46Z"
      * }
      * ```
-     * @throws {ValidationError} If `name` is empty, or no account ID is available.
+     * @throws {ValidationError} If `payload` is not an object, `name` is empty,
+     * or no account ID is available.
      * @throws {ApiError} `409` if a tag with the same name already exists
      * (case-insensitive).
      *
@@ -94,12 +100,16 @@ export class TagResource extends BaseResource {
      * ```
      */
     async create(payload: ICreateTagPayload, accountId?: string): Promise<ITag> {
-        if (!payload.name) throw new ValidationError('Tag name is required');
+        assertRecord(payload, 'tag payload');
+        assertNonEmptyString(payload.name, 'Tag name');
+        validateTagColor(payload.color);
         const id = this.accountId(accountId);
+        const body: ICreateTagPayload = { name: payload.name };
+        if (payload.color !== undefined) body.color = payload.color;
         return this.call('Failed to create tag', () =>
             this.http.post(
                 `/accounts/${this.pathSegment(id, 'Account ID')}/tags`,
-                cleanParams({ ...payload }),
+                body,
             ),
         );
     }
@@ -128,7 +138,8 @@ export class TagResource extends BaseResource {
      *   "updated_at": "2026-07-19T17:24:47Z"
      * }
      * ```
-     * @throws {ValidationError} If `tagId` is missing, or no account ID is available.
+     * @throws {ValidationError} If `payload` is not an object, `tagId` is
+     * missing, or no account ID is available.
      * @throws {ApiError} `404` if the tag does not exist; `409` if another tag
      * already uses the new name.
      *
@@ -144,6 +155,9 @@ export class TagResource extends BaseResource {
      * ```
      */
     async update(tagId: string, payload: IUpdateTagPayload, accountId?: string): Promise<ITag> {
+        assertRecord(payload, 'tag payload');
+        if (payload.name !== undefined) assertNonEmptyString(payload.name, 'Tag name');
+        validateTagColor(payload.color);
         const id = this.accountId(accountId);
         const tid = this.requireId(tagId, 'Tag ID');
         // Don't strip `color: null` — null is the documented "clear color" signal.
@@ -163,20 +177,19 @@ export class TagResource extends BaseResource {
      *
      * By default the API returns `409` if the tag is still attached to any
      * document or template. Pass `{ force: true }` to detach it everywhere
-     * first — that adds a `?force=true` query param. Resolves to `void` on
-     * success (the endpoint's `{ "deleted": true }` body is discarded).
+     * first — that adds a `?force=true` query param.
      *
      * @param tagId - The tag to delete.
      * @param options - `force` to detach-and-delete when the tag is still in
      * use, and `accountId` to override the client's default account ID.
-     * @returns Nothing; resolves once the tag is deleted.
+     * @returns `{ deleted: true }` when the tag was deleted.
      * @throws {ValidationError} If `tagId` is missing, or no account ID is available.
      * @throws {ApiError} `404` if the tag does not exist; `409` if the tag is
      * still in use and `force` was not set.
      *
      * @example
      * ```ts
-     * await client.tags.delete('103ad216fdc641c8f0465678c813');
+     * const { deleted } = await client.tags.delete('103ad216fdc641c8f0465678c813');
      * // detach from every document/template, then delete
      * await client.tags.delete('103ad216fdc641c8f0465678c813', { force: true });
      * ```
@@ -184,15 +197,31 @@ export class TagResource extends BaseResource {
     async delete(
         tagId: string,
         options: { force?: boolean; accountId?: string } = {},
-    ): Promise<void> {
+    ): Promise<IDeleteTagResponse> {
+        assertRecord(options, 'tag delete options');
+        if (options.force !== undefined && typeof options.force !== 'boolean') {
+            throw new ValidationError('force must be a boolean');
+        }
         const id = this.accountId(options.accountId);
         const tid = this.requireId(tagId, 'Tag ID');
         const params = options.force ? { force: 'true' } : undefined;
-        return this.callVoid('Failed to delete tag', () =>
+        return this.call('Failed to delete tag', () =>
             this.http.delete(
                 `/accounts/${this.pathSegment(id, 'Account ID')}/tags/${this.pathSegment(tid, 'Tag ID')}`,
                 { params },
             ),
+        );
+    }
+}
+
+function validateTagColor(value: unknown): void {
+    if (
+        value !== undefined
+        && value !== null
+        && (typeof value !== 'string' || !/^#?[0-9a-fA-F]{6}$/.test(value))
+    ) {
+        throw new ValidationError(
+            'color must be six hexadecimal characters with an optional leading #, or null',
         );
     }
 }

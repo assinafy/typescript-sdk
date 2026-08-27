@@ -31,6 +31,10 @@ const EVENT_TYPES = [
         id: 'document_ready',
         description: 'Triggered when a document is ready',
     },
+    {
+        id: 'future_event_added_by_server',
+        description: 'A future event unknown to this SDK release',
+    },
 ];
 
 const DISPATCH = {
@@ -129,6 +133,44 @@ describe('WebhookResource', () => {
         expect(result).toEqual({ ...body, updated_at: SUBSCRIPTION.updated_at });
         expect(Object.isFrozen(DEFAULT_WEBHOOK_EVENTS)).toBe(true);
         expect((calls[0]?.body as { events: string[] }).events).not.toBe(DEFAULT_WEBHOOK_EVENTS);
+    });
+
+    test('register rejects malformed payload, events, and activation state before dispatch', async () => {
+        const { http, calls } = mockHttp();
+        const resource = new WebhookResource(http, 'account-1');
+
+        await expect(resource.register(null as never)).rejects.toThrow(ValidationError);
+        await expect(resource.register('invalid' as never)).rejects.toThrow(ValidationError);
+        await expect(
+            resource.register({
+                url: 'https://example.com/webhook',
+                email: 'ops@example.com',
+                events: 'document_ready' as never,
+            }),
+        ).rejects.toThrow(ValidationError);
+        await expect(
+            resource.register({
+                url: 'https://example.com/webhook',
+                email: 'ops@example.com',
+                events: ['document_ready', '   '],
+            }),
+        ).rejects.toThrow(ValidationError);
+        await expect(
+            resource.register({
+                url: 'https://example.com/webhook',
+                email: 'ops@example.com',
+                events: [123] as never,
+            }),
+        ).rejects.toThrow(ValidationError);
+        await expect(
+            resource.register({
+                url: 'https://example.com/webhook',
+                email: 'ops@example.com',
+                is_active: 'yes' as never,
+            }),
+        ).rejects.toThrow(ValidationError);
+
+        expect(calls).toHaveLength(0);
     });
 
     test('register treats an empty event list as omitted', async () => {
@@ -247,7 +289,7 @@ describe('WebhookResource', () => {
         expect(result).toEqual({ ...SUBSCRIPTION, is_active: false });
     });
 
-    test('listEventTypes GETs the global catalog and returns it', async () => {
+    test('listEventTypes passes through the dynamic global catalog in server order', async () => {
         const { http, calls } = mockHttp();
         const resource = new WebhookResource(http);
 
@@ -257,6 +299,7 @@ describe('WebhookResource', () => {
             { method: 'GET', url: '/webhooks/event-types', config: undefined },
         ]);
         expect(result).toEqual(EVENT_TYPES);
+        expect(result[1]?.id).toBe('future_event_added_by_server');
     });
 
     test('listDispatches cleans query params and returns data with pagination', async () => {
@@ -273,6 +316,7 @@ describe('WebhookResource', () => {
             from: undefined,
         } as unknown as Parameters<WebhookResource['listDispatches']>[0];
         const result = await resource.listDispatches(dirtyParams, 'override-account');
+        const defaultResult = await resource.listDispatches();
 
         expect(calls).toEqual([
             {
@@ -287,6 +331,11 @@ describe('WebhookResource', () => {
                     },
                 },
             },
+            {
+                method: 'GET',
+                url: '/accounts/default-account/webhooks',
+                config: { params: {} },
+            },
         ]);
         expect(result).toEqual({
             data: [DISPATCH],
@@ -297,6 +346,7 @@ describe('WebhookResource', () => {
                 last_page: 2,
             },
         });
+        expect(defaultResult).toEqual(result);
     });
 
     test('retryDispatch validates, POSTs the retry route, and returns the dispatch', async () => {

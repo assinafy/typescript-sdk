@@ -68,6 +68,21 @@ function mockHttp(): { http: AxiosInstance; calls: Array<{ method: string; url: 
 }
 
 describe('SignerDocumentsResource', () => {
+    test('rejects malformed payload and option objects before requesting', async () => {
+        const { http, calls } = mockHttp();
+        const resource = new SignerDocumentsResource(http);
+        const requests = [
+            () => resource.verifyEmail(null as never),
+            () => resource.confirmData('doc-1', 'code', null as never),
+            () => resource.uploadSignature('code', Buffer.from([1]), null as never),
+        ];
+
+        for (const request of requests) {
+            await expect(request()).rejects.toBeInstanceOf(ValidationError);
+        }
+        expect(calls).toHaveLength(0);
+    });
+
     test('getCurrent requires both IDs', async () => {
         const { http } = mockHttp();
         const r = new SignerDocumentsResource(http);
@@ -149,6 +164,9 @@ describe('SignerDocumentsResource.search', () => {
         const res = new SignerDocumentsResource(http);
         await expect(res.search('', 'code')).rejects.toThrow(ValidationError);
         await expect(res.search('signer-1', '')).rejects.toThrow(ValidationError);
+        await expect(res.search('signer-1', 'code', 42 as never)).rejects.toThrow(
+            ValidationError,
+        );
         expect(calls.length).toBe(0);
     });
 });
@@ -217,6 +235,15 @@ describe('SignerDocumentsResource — signer-access-code query auth', () => {
         expect(result).toEqual(signerSelfResponse);
     });
 
+    test('self accepts the older sandbox response without signature-state flags', async () => {
+        const http = {
+            get: async () => ({ status: 200, data: { status: 200, data: signerResponse } }),
+        } as unknown as AxiosInstance;
+        const result: ISignerSelf = await new SignerDocumentsResource(http).self('code-xyz');
+        expect(result.id).toBe('signer-1');
+        expect(result.has_signature).toBeUndefined();
+    });
+
     test('self requires the access code', async () => {
         const { http, calls } = mockHttp();
         await expect(new SignerDocumentsResource(http).self('')).rejects.toThrow(ValidationError);
@@ -245,7 +272,7 @@ describe('SignerDocumentsResource — signer-access-code query auth', () => {
         expect(result).toEqual(signerResponse);
     });
 
-    test('confirmData preserves deprecated legacy fields without claiming terms acceptance', async () => {
+    test('confirmData sends the documented terms flag and legacy WhatsApp field', async () => {
         const { http, calls } = mockHttp();
         await new SignerDocumentsResource(http).confirmData('doc-1', 'code-xyz', {
             full_name: 'Example Signer',
@@ -275,6 +302,25 @@ describe('SignerDocumentsResource — signer-access-code query auth', () => {
         const r = new SignerDocumentsResource(http);
         await expect(r.confirmData('', 'code', {})).rejects.toThrow(ValidationError);
         await expect(r.confirmData('doc-1', '', {})).rejects.toThrow(ValidationError);
+    });
+
+    test('confirmData rejects malformed optional identity values before requesting', async () => {
+        const { http, calls } = mockHttp();
+        const r = new SignerDocumentsResource(http);
+        const payloads = [
+            { full_name: 42 },
+            { email: 'not-an-email' },
+            { government_id: 42 },
+            { whatsapp_phone_number: 'not-e164' },
+            { has_accepted_terms: 'true' },
+        ];
+
+        for (const payload of payloads) {
+            await expect(
+                r.confirmData('doc-1', 'code-xyz', payload as never),
+            ).rejects.toBeInstanceOf(ValidationError);
+        }
+        expect(calls).toHaveLength(0);
     });
 
     test('uploadSignature sends the official raw PNG body with type + reuse params', async () => {
@@ -310,6 +356,18 @@ describe('SignerDocumentsResource — signer-access-code query auth', () => {
         });
     });
 
+    test('uploadSignature rejects malformed options before requesting', async () => {
+        const { http, calls } = mockHttp();
+        const r = new SignerDocumentsResource(http);
+        await expect(
+            r.uploadSignature('code-xyz', Buffer.from([1]), { contentType: ' ' }),
+        ).rejects.toBeInstanceOf(ValidationError);
+        await expect(
+            r.uploadSignature('code-xyz', Buffer.from([1]), { contentType: 42 } as never),
+        ).rejects.toBeInstanceOf(ValidationError);
+        expect(calls).toHaveLength(0);
+    });
+
     test('uploadSignature rejects an empty buffer', async () => {
         const { http } = mockHttp();
         await expect(
@@ -322,12 +380,25 @@ describe('SignerDocumentsResource — signer-access-code query auth', () => {
         const buf = await new SignerDocumentsResource(http).download(
             'signer-1',
             'doc-1',
-            'original',
+            'pades',
         );
         expect(calls[0]?.method).toBe('GET');
-        expect(calls[0]?.url).toBe('/signers/signer-1/documents/doc-1/download/original');
+        expect(calls[0]?.url).toBe('/signers/signer-1/documents/doc-1/download/pades');
         expect(calls[0]?.config).toEqual({ responseType: 'arraybuffer' });
         expect(buf).toBeInstanceOf(Buffer);
+    });
+
+    test('download rejects an unsupported artifact before requesting', async () => {
+        const { http, calls } = mockHttp();
+
+        await expect(
+            new SignerDocumentsResource(http).download(
+                'signer-1',
+                'doc-1',
+                'unsupported' as never,
+            ),
+        ).rejects.toBeInstanceOf(ValidationError);
+        expect(calls).toHaveLength(0);
     });
 
     test('download retains the optional legacy access-code query', async () => {
@@ -364,6 +435,19 @@ describe('SignerDocumentsResource — signer-access-code query auth', () => {
             params: { 'signer-access-code': 'code-xyz' },
         });
         expect(buf).toBeInstanceOf(Buffer);
+    });
+
+    test('forwards non-empty server-defined signature image categories', async () => {
+        const { http, calls } = mockHttp();
+        const resource = new SignerDocumentsResource(http);
+
+        await resource.uploadSignature('code-xyz', Buffer.from([1]), {
+            imageType: 'stamp',
+        });
+        await resource.downloadSignature('code-xyz', 'stamp');
+
+        expect(calls[0]?.config).toMatchObject({ params: { type: 'stamp' } });
+        expect(calls[1]?.url).toBe('/signature/stamp');
     });
 
     test('getAssignment GETs /sign and forwards has_accepted_terms=true', async () => {
@@ -450,7 +534,13 @@ describe('SignerDocumentsResource — signer-access-code query auth', () => {
 
     test('sign POSTs the entries array with the code as a query param', async () => {
         const { http, calls } = mockHttp();
-        const entries = [{ itemId: 'i1', fieldId: 'f1', pageId: 'p1', value: 'Bill' }];
+        const entries = [{
+            itemId: 'i1',
+            fieldId: 'f1',
+            pageId: 'p1',
+            value: 'Bill',
+            internal_secret: 'do-not-send',
+        }];
         const result: Record<string, unknown> = await new SignerDocumentsResource(http).sign(
             'doc-1',
             'asg-1',
@@ -459,9 +549,66 @@ describe('SignerDocumentsResource — signer-access-code query auth', () => {
         );
         expect(calls[0]?.method).toBe('POST');
         expect(calls[0]?.url).toBe('/documents/doc-1/assignments/asg-1');
-        expect(calls[0]?.body).toEqual(entries);
+        expect(calls[0]?.body).toEqual([
+            { itemId: 'i1', fieldId: 'f1', pageId: 'p1', value: 'Bill' },
+        ]);
         expect(paramsOf(calls[0])).toEqual({ 'signer-access-code': 'code-xyz' });
         expect(result).toEqual({ signed: true });
+    });
+
+    test('bulk and field signing reject malformed entries before requesting', async () => {
+        const { http, calls } = mockHttp();
+        const resource = new SignerDocumentsResource(http);
+
+        await expect(resource.signMultiple([''], 'code-xyz')).rejects.toBeInstanceOf(
+            ValidationError,
+        );
+        await expect(
+            resource.declineMultiple([null as never], 'reason', 'code-xyz'),
+        ).rejects.toBeInstanceOf(ValidationError);
+        await expect(
+            resource.declineMultiple(['doc-1'], ' ' as never, 'code-xyz'),
+        ).rejects.toBeInstanceOf(ValidationError);
+        await expect(
+            resource.sign('doc-1', 'asg-1', 'code-xyz', [
+                { itemId: '', fieldId: 'f1', pageId: 'p1', value: 'x' },
+            ]),
+        ).rejects.toBeInstanceOf(ValidationError);
+        await expect(
+            resource.sign('doc-1', 'asg-1', 'code-xyz', [null as never]),
+        ).rejects.toBeInstanceOf(ValidationError);
+        expect(calls).toHaveLength(0);
+    });
+
+    test('legal-consent and signature options require exact runtime types', async () => {
+        const { http, calls } = mockHttp();
+        const resource = new SignerDocumentsResource(http);
+
+        await expect(
+            resource.confirmData('doc-1', 'code-xyz', {
+                has_accepted_terms: 'false' as never,
+            }),
+        ).rejects.toBeInstanceOf(ValidationError);
+        await expect(
+            resource.uploadSignature('code-xyz', Buffer.from([1]), {
+                reuse: 'false' as never,
+            }),
+        ).rejects.toBeInstanceOf(ValidationError);
+        await expect(
+            resource.uploadSignature('code-xyz', Buffer.from([1]), {
+                imageType: '' as never,
+            }),
+        ).rejects.toBeInstanceOf(ValidationError);
+        await expect(
+            resource.downloadSignature('code-xyz', '' as never),
+        ).rejects.toBeInstanceOf(ValidationError);
+        await expect(
+            resource.getAssignment('code-xyz', 'false' as never),
+        ).rejects.toBeInstanceOf(ValidationError);
+        await expect(
+            resource.decline('doc-1', 'asg-1', 'code-xyz', ' '),
+        ).rejects.toBeInstanceOf(ValidationError);
+        expect(calls).toHaveLength(0);
     });
 
     test('decline PUTs the reject endpoint with decline_reason and the code as a query param', async () => {

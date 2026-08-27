@@ -1,4 +1,4 @@
-// ESLint 9 flat config.
+// ESLint flat config.
 import js from '@eslint/js';
 import tseslint from 'typescript-eslint';
 

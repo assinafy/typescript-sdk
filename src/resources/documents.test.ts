@@ -1,7 +1,7 @@
 import { describe, test, expect, beforeEach } from 'bun:test';
 import { DocumentResource } from './documents';
 import { ApiError, ValidationError } from '../errors';
-import type { AxiosInstance } from 'axios';
+import axios, { type AxiosInstance } from 'axios';
 
 describe('DocumentResource', () => {
     let mockAxios: AxiosInstance;
@@ -63,6 +63,27 @@ describe('DocumentResource', () => {
         await expect(docs.addTags('doc1', [])).rejects.toThrow(ValidationError);
     });
 
+    test('tag mutations reject blank or non-string IDs before requesting', async () => {
+        let calls = 0;
+        const ax = {
+            post: async () => {
+                calls++;
+                return { status: 200 };
+            },
+            put: async () => {
+                calls++;
+                return { status: 200 };
+            },
+        } as unknown as AxiosInstance;
+        const resource = new DocumentResource(ax, 'acc');
+
+        await expect(resource.replaceTags('doc1', [''])).rejects.toBeInstanceOf(ValidationError);
+        await expect(resource.addTags('doc1', [null as never])).rejects.toBeInstanceOf(
+            ValidationError,
+        );
+        expect(calls).toBe(0);
+    });
+
     test('detachTag DELETEs the document/tag pair', async () => {
         let url = '';
         const ax = {
@@ -72,8 +93,9 @@ describe('DocumentResource', () => {
                 return { status: 200, data: { status: 200, data: { detached: true } } };
             },
         } as unknown as AxiosInstance;
-        await new DocumentResource(ax, 'acc').detachTag('doc1', 'tag1');
+        const result = await new DocumentResource(ax, 'acc').detachTag('doc1', 'tag1');
         expect(url).toBe('/accounts/acc/documents/doc1/tags/tag1');
+        expect(result).toEqual({ detached: true });
     });
 
     test('download validates the document id', async () => {
@@ -223,6 +245,7 @@ describe('DocumentResource.rename', () => {
         const docs = new DocumentResource(ax, 'acc');
         await expect(docs.rename('', 'New.pdf')).rejects.toThrow(ValidationError);
         await expect(docs.rename('doc-1', '')).rejects.toThrow(ValidationError);
+        await expect(docs.rename('doc-1', 'a'.repeat(256))).rejects.toThrow(ValidationError);
         expect(called).toBe(false);
     });
 });
@@ -374,7 +397,12 @@ describe('DocumentResource.createFromTemplate', () => {
             },
         } as unknown as AxiosInstance;
         const signers = [
-            { role_id: 'role1', id: 'signer1', verification_method: 'Email', notification_methods: ['Email'] },
+            {
+                role_id: 'role1',
+                id: 'signer1',
+                verification_method: 'DigitalCertificate' as const,
+                internal_secret: 'do-not-send',
+            },
         ];
         await new DocumentResource(ax, 'acc').createFromTemplate(
             'tmpl1',
@@ -382,11 +410,28 @@ describe('DocumentResource.createFromTemplate', () => {
             {
                 name: 'My Contract',
                 message: 'Please sign',
+                editor_fields: [
+                    { field_id: 'field-1', value: 'Approved', internal_secret: 'do-not-send' },
+                ],
+                tags: ['agreements'],
                 signers: [{ role_id: 'attacker', id: 'attacker' }],
+                internal_secret: 'do-not-send',
             } as never,
         );
         expect(url).toBe('/accounts/acc/templates/tmpl1/documents');
-        expect(body).toEqual({ signers, name: 'My Contract', message: 'Please sign' });
+        expect(body).toEqual({
+            signers: [
+                {
+                    role_id: 'role1',
+                    id: 'signer1',
+                    verification_method: 'DigitalCertificate',
+                },
+            ],
+            name: 'My Contract',
+            message: 'Please sign',
+            editor_fields: [{ field_id: 'field-1', value: 'Approved' }],
+            tags: ['agreements'],
+        });
     });
 
     test('validates the template id before any request', async () => {
@@ -402,6 +447,93 @@ describe('DocumentResource.createFromTemplate', () => {
         );
         expect(called).toBe(false);
     });
+
+    test('rejects invalid template signer channels before requesting', async () => {
+        let called = false;
+        const ax = {
+            post: async () => {
+                called = true;
+                return { status: 200 };
+            },
+        } as unknown as AxiosInstance;
+        await expect(
+            new DocumentResource(ax, 'acc').createFromTemplate('tmpl1', [
+                { role_id: 'role1', id: 'signer1', verification_method: 'SMS' as never },
+            ]),
+        ).rejects.toBeInstanceOf(ValidationError);
+        expect(called).toBe(false);
+    });
+
+    test('rejects invalid template notification and signing-order collections', async () => {
+        const resource = new DocumentResource({} as AxiosInstance, 'acc');
+        const invalid = [
+            [
+                {
+                    role_id: 'role1',
+                    id: 'signer1',
+                    notification_methods: ['Email', 'Whatsapp'],
+                },
+            ],
+            [
+                { role_id: 'role1', id: 'signer1', step: 1 },
+                { role_id: 'role2', id: 'signer2' },
+            ],
+            [
+                { role_id: 'role1', id: 'signer1', step: 1 },
+                { role_id: 'role2', id: 'signer2', step: 3 },
+            ],
+            [
+                {
+                    role_id: 'role1',
+                    id: 'signer1',
+                    step: 1,
+                    verification_method: 'DigitalCertificate',
+                },
+                { role_id: 'role2', id: 'signer2', step: 1 },
+            ],
+        ];
+
+        for (const signers of invalid) {
+            await expect(
+                resource.createFromTemplate('tmpl1', signers as never),
+            ).rejects.toBeInstanceOf(ValidationError);
+        }
+        await expect(
+            resource.createFromTemplate(
+                'tmpl1',
+                [{ role_id: 'role1', id: 'signer1' }],
+                { expires_at: 'not-a-date' },
+            ),
+        ).rejects.toBeInstanceOf(ValidationError);
+        await expect(
+            resource.createFromTemplate(
+                'tmpl1',
+                [{ role_id: 'role1', id: 'signer1' }],
+                { editor_fields: [null] } as never,
+            ),
+        ).rejects.toBeInstanceOf(ValidationError);
+        await expect(
+            resource.createFromTemplate(
+                'tmpl1',
+                [{ role_id: 'role1', id: 'signer1' }],
+                { tags: [''] },
+            ),
+        ).rejects.toBeInstanceOf(ValidationError);
+        await expect(
+            resource.createFromTemplate(
+                'tmpl1',
+                [{ role_id: 'role1', id: 'signer1' }],
+                { name: 42 } as never,
+            ),
+        ).rejects.toBeInstanceOf(ValidationError);
+        await expect(
+            resource.createFromTemplate(
+                'tmpl1',
+                [{ role_id: 'role1', id: 'signer1' }],
+                { message: {} } as never,
+            ),
+        ).rejects.toBeInstanceOf(ValidationError);
+    });
 });
 
 describe('DocumentResource.estimateCostFromTemplate', () => {
@@ -415,7 +547,9 @@ describe('DocumentResource.estimateCostFromTemplate', () => {
                 return { status: 200, data: { status: 200, data: { total_credits: 1 } } };
             },
         } as unknown as AxiosInstance;
-        const signers = [{ role_id: 'role1', verification_method: 'Email' }];
+        const signers = [
+            { role_id: 'role1', verification_method: 'DigitalCertificate' as const },
+        ];
         await new DocumentResource(ax, 'acc').estimateCostFromTemplate('tmpl1', signers);
         expect(url).toBe('/accounts/acc/templates/tmpl1/documents/estimate-cost');
         expect(body).toEqual({ signers });
@@ -492,11 +626,16 @@ describe('DocumentResource public request contracts', () => {
         const resource = new DocumentResource(http, 'acc');
 
         expect(await resource.download('doc-1')).toEqual(Buffer.from(bytes));
+        expect(await resource.download('doc-1', 'pades')).toEqual(Buffer.from(bytes));
         expect(await resource.thumbnail('doc-1')).toEqual(Buffer.from(bytes));
         expect(await resource.downloadPage('doc-1', 'page-1')).toEqual(Buffer.from(bytes));
         expect(calls).toEqual([
             {
                 url: '/documents/doc-1/download/certificated',
+                config: { responseType: 'arraybuffer' },
+            },
+            {
+                url: '/documents/doc-1/download/pades',
                 config: { responseType: 'arraybuffer' },
             },
             {
@@ -508,6 +647,21 @@ describe('DocumentResource public request contracts', () => {
                 config: { responseType: 'arraybuffer' },
             },
         ]);
+    });
+
+    test('download rejects an unsupported artifact before requesting', async () => {
+        let calls = 0;
+        const http = {
+            get: async () => {
+                calls++;
+                return { status: 200, data: new ArrayBuffer(0) };
+            },
+        } as unknown as AxiosInstance;
+
+        await expect(
+            new DocumentResource(http, 'acc').download('doc-1', 'unsupported' as never),
+        ).rejects.toBeInstanceOf(ValidationError);
+        expect(calls).toBe(0);
     });
 
     test('activities unwraps entries and normalises null to an empty array', async () => {
@@ -628,27 +782,53 @@ describe('DocumentResource public request contracts', () => {
         expect(whatsappResult).toBeUndefined();
     });
 
-    test('sendToken retries the legacy body only for channel/recipient validation errors', async () => {
-        const bodies: unknown[] = [];
+    test('sendToken rejects malformed recipient and channel values before requesting', async () => {
+        let calls = 0;
         const http = {
-            put: async (_url: string, body: unknown) => {
-                bodies.push(body);
-                if (bodies.length === 1) {
-                    throw new ApiError('The recipient field is required.', 422, {
-                        errors: { channel: ['required'] },
-                    });
-                }
+            put: async () => {
+                calls++;
                 return { status: 200, data: { status: 200, message: '' } };
             },
         } as unknown as AxiosInstance;
+        const resource = new DocumentResource(http, 'acc');
 
+        await expect(resource.sendToken('doc-1', 42 as never)).rejects.toBeInstanceOf(
+            ValidationError,
+        );
+        await expect(resource.sendToken('doc-1', 'not-an-email')).rejects.toBeInstanceOf(
+            ValidationError,
+        );
         await expect(
-            new DocumentResource(http, 'acc').sendToken('doc-1', 'signer@example.com'),
-        ).resolves.toBeUndefined();
-        expect(bodies).toEqual([
-            { email: 'signer@example.com' },
-            { recipient: 'signer@example.com', channel: 'email' },
-        ]);
+            resource.sendToken('doc-1', 'signer@example.com', ' ' as never),
+        ).rejects.toBeInstanceOf(ValidationError);
+        await expect(
+            resource.sendToken('doc-1', 'signer@example.com', 42 as never),
+        ).rejects.toBeInstanceOf(ValidationError);
+        expect(calls).toBe(0);
+    });
+
+    test('sendToken retries the legacy body only for channel/recipient validation errors', async () => {
+        for (const error of [
+            new ApiError('Bad request.', 422, { errors: { channel: ['required'] } }),
+            new ApiError('É obrigatório informar o channel.', 400),
+        ]) {
+            const bodies: unknown[] = [];
+            const http = {
+                put: async (_url: string, body: unknown) => {
+                    bodies.push(body);
+                    if (bodies.length === 1) throw error;
+                    return { status: 200, data: { status: 200, message: '' } };
+                },
+            } as unknown as AxiosInstance;
+
+            await expect(
+                new DocumentResource(http, 'acc').sendToken('doc-1', 'signer@example.com'),
+            ).resolves.toBeUndefined();
+            expect(bodies).toEqual([
+                { email: 'signer@example.com' },
+                { recipient: 'signer@example.com', channel: 'email' },
+            ]);
+        }
     });
 
     test('sendToken does not mask an unrelated API validation error', async () => {
@@ -662,7 +842,25 @@ describe('DocumentResource public request contracts', () => {
         } as unknown as AxiosInstance;
 
         await expect(
-            new DocumentResource(http, 'acc').sendToken('doc-1', 'invalid'),
+            new DocumentResource(http, 'acc').sendToken('doc-1', 'valid@example.com'),
+        ).rejects.toBe(error);
+        expect(calls).toBe(1);
+    });
+
+    test('sendToken does not replay keyword-containing delivery errors', async () => {
+        const error = new ApiError('Recipient is rate limited and already notified.', 422, {
+            reason: 'recipient channel exhausted',
+        });
+        let calls = 0;
+        const http = {
+            put: async () => {
+                calls++;
+                throw error;
+            },
+        } as unknown as AxiosInstance;
+
+        await expect(
+            new DocumentResource(http, 'acc').sendToken('doc-1', 'signer@example.com'),
         ).rejects.toBe(error);
         expect(calls).toBe(1);
     });
@@ -697,11 +895,55 @@ describe('DocumentResource public request contracts', () => {
         );
         await expect(
             resource.waitUntilReady('doc-1', { pollIntervalMs: Number.POSITIVE_INFINITY }),
-        ).rejects.toThrow(/pollIntervalMs must be a finite, non-negative number/);
+        ).rejects.toThrow(/pollIntervalMs must be a finite, positive number/);
+        await expect(resource.waitUntilReady('doc-1', { pollIntervalMs: 0 })).rejects.toThrow(
+            /pollIntervalMs must be a finite, positive number/,
+        );
         await expect(resource.waitUntilReady('doc-1', { maxWaitMs: Number.NaN })).rejects.toThrow(
             /maxWaitMs must be a finite, non-negative number/,
         );
         expect(called).toBe(false);
+    });
+
+    test('waitUntilReady never sleeps past the remaining timeout budget', async () => {
+        let calls = 0;
+        const http = {
+            get: async () => {
+                calls++;
+                return envelope({ status: 'metadata_processing' });
+            },
+        } as unknown as AxiosInstance;
+        const startedAt = Date.now();
+        await expect(
+            new DocumentResource(http, 'acc').waitUntilReady('doc-1', {
+                maxWaitMs: 20,
+                pollIntervalMs: 10_000,
+            }),
+        ).rejects.toThrow('Timeout waiting for document to be ready');
+        expect(Date.now() - startedAt).toBeLessThan(500);
+        expect(calls).toBe(1);
+    });
+
+    test('waitUntilReady bounds an in-flight details request to the remaining budget', async () => {
+        const http = {
+            get: async (_url: string, config?: { signal?: AbortSignal }) =>
+                new Promise((_resolve, reject) => {
+                    config?.signal?.addEventListener(
+                        'abort',
+                        () => reject(new axios.CanceledError('wait budget elapsed')),
+                        { once: true },
+                    );
+                }),
+        } as unknown as AxiosInstance;
+        const startedAt = Date.now();
+
+        await expect(
+            new DocumentResource(http, 'acc').waitUntilReady('doc-1', {
+                maxWaitMs: 20,
+                pollIntervalMs: 10_000,
+            }),
+        ).rejects.toThrow('Timeout waiting for document to be ready');
+        expect(Date.now() - startedAt).toBeLessThan(500);
     });
 
     test('encodes public document IDs as a single path segment', async () => {

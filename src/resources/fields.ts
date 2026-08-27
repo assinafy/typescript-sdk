@@ -3,11 +3,12 @@ import type {
     IFieldDefinition,
     IFieldType,
     IFieldValidateMultipleEntry,
-    IFieldValidationResult,
+    IFieldValidationMultipleResult,
+    IFieldValidationResponse,
     IUpdateFieldPayload,
 } from '../types';
 import { ValidationError } from '../errors';
-import { cleanListParams } from '../utils';
+import { assertNonEmptyString, assertRecord, cleanListParams } from '../utils';
 import { BaseResource } from './base';
 
 /**
@@ -30,7 +31,7 @@ export class FieldsResource extends BaseResource {
      * @param payload - The field to create. `type` and `name` are required;
      *   `type` must be one of the platform field types (see
      *   {@link FieldsResource.listTypes}); `regex` may be a string or `null`,
-     *   and `is_required` is optional. `is_active` is a tested live extension.
+     *   and `is_required` is optional. `is_active` is a compatibility extension.
      * @param accountId - Override the client's default account ID.
      * @returns The created field definition. Response shape:
      * ```jsonc
@@ -62,11 +63,17 @@ export class FieldsResource extends BaseResource {
      * ```
      */
     async create(payload: ICreateFieldPayload, accountId?: string): Promise<IFieldDefinition> {
-        if (!payload.type) throw new ValidationError('field type is required');
-        if (!payload.name) throw new ValidationError('field name is required');
+        assertRecord(payload, 'field payload');
+        assertNonEmptyString(payload.type, 'field type');
+        assertNonEmptyString(payload.name, 'field name');
+        validateFieldPayload(payload);
         const id = this.accountId(accountId);
+        const body: ICreateFieldPayload = { type: payload.type, name: payload.name };
+        if (payload.regex !== undefined) body.regex = payload.regex;
+        if (payload.is_required !== undefined) body.is_required = payload.is_required;
+        if (payload.is_active !== undefined) body.is_active = payload.is_active;
         return this.call('Failed to create field definition', () =>
-            this.http.post(`/accounts/${this.pathSegment(id, 'Account ID')}/fields`, payload),
+            this.http.post(`/accounts/${this.pathSegment(id, 'Account ID')}/fields`, body),
         );
     }
 
@@ -107,10 +114,19 @@ export class FieldsResource extends BaseResource {
         params: { include_inactive?: boolean; include_standard?: boolean } = {},
         accountId?: string,
     ): Promise<IFieldDefinition[]> {
+        assertRecord(params, 'field list parameters');
+        for (const key of ['include_inactive', 'include_standard'] as const) {
+            if (params[key] !== undefined && typeof params[key] !== 'boolean') {
+                throw new ValidationError(`${key} must be a boolean`);
+            }
+        }
         const id = this.accountId(accountId);
         return this.call('Failed to list field definitions', () =>
             this.http.get(`/accounts/${this.pathSegment(id, 'Account ID')}/fields`, {
-                params: cleanListParams(params as Record<string, unknown>),
+                params: cleanListParams({
+                    include_inactive: params.include_inactive,
+                    include_standard: params.include_standard,
+                }),
             }),
         );
     }
@@ -160,9 +176,8 @@ export class FieldsResource extends BaseResource {
      * (`PUT /accounts/{accountId}/fields/{fieldId}`).
      *
      * @param fieldId - The field definition to update.
-     * @param payload - Official fields are `name`, nullable `regex`, and
-     * `is_active`. The sandbox also accepts `type` and `is_required` as live
-     * compatibility extensions.
+     * @param payload - Fields are `name`, nullable `regex`, and `is_active`;
+     * `type` and `is_required` are compatibility extensions.
      * @param accountId - Override the client's default account ID.
      * @returns The updated field definition. Response shape:
      * ```jsonc
@@ -196,12 +211,22 @@ export class FieldsResource extends BaseResource {
         payload: IUpdateFieldPayload,
         accountId?: string,
     ): Promise<IFieldDefinition> {
+        assertRecord(payload, 'field payload');
+        if (payload.type !== undefined) assertNonEmptyString(payload.type, 'field type');
+        if (payload.name !== undefined) assertNonEmptyString(payload.name, 'field name');
+        validateFieldPayload(payload);
         const id = this.accountId(accountId);
         const fid = this.requireId(fieldId, 'Field ID');
+        const body: IUpdateFieldPayload = {};
+        if (payload.type !== undefined) body.type = payload.type;
+        if (payload.name !== undefined) body.name = payload.name;
+        if (payload.regex !== undefined) body.regex = payload.regex;
+        if (payload.is_required !== undefined) body.is_required = payload.is_required;
+        if (payload.is_active !== undefined) body.is_active = payload.is_active;
         return this.call('Failed to update field definition', () =>
             this.http.put(
                 `/accounts/${this.pathSegment(id, 'Account ID')}/fields/${this.pathSegment(fid, 'Field ID')}`,
-                payload,
+                body,
             ),
         );
     }
@@ -238,9 +263,9 @@ export class FieldsResource extends BaseResource {
      * Validate a single value against a field definition
      * (`POST /accounts/{accountId}/fields/{fieldId}/validate`).
      *
-     * The official operation uses the client's API-key/Bearer authentication.
-     * `signerAccessCode` is retained as a deployment-specific, live-unverified
-     * compatibility query and is sent as `signer-access-code` when supplied.
+     * The operation uses the client's API-key/Bearer authentication.
+     * `signerAccessCode` is a compatibility query and is sent as
+     * `signer-access-code` when supplied.
      *
      * @param fieldId - The field definition to validate against.
      * @param value - The value to check (validated against the field's
@@ -254,7 +279,8 @@ export class FieldsResource extends BaseResource {
      *   "error_message": ""
      * }
      * ```
-     * @throws {ValidationError} If `fieldId` or the account ID is missing.
+     * @throws {ValidationError} If `fieldId` or the account ID is missing, or
+     * `value` is `undefined`.
      * @throws {ApiError} If the API rejects the request.
      *
      * @example
@@ -270,7 +296,12 @@ export class FieldsResource extends BaseResource {
         fieldId: string,
         value: unknown,
         options: { signerAccessCode?: string; accountId?: string } = {},
-    ): Promise<IFieldValidationResult> {
+    ): Promise<IFieldValidationResponse> {
+        assertRecord(options, 'field validation options');
+        validateSignerAccessCode(options.signerAccessCode);
+        if (value === undefined) {
+            throw new ValidationError('value is required');
+        }
         const id = this.accountId(options.accountId);
         const fid = this.requireId(fieldId, 'Field ID');
         const params = options.signerAccessCode
@@ -291,7 +322,7 @@ export class FieldsResource extends BaseResource {
      *
      * The request body is the array of `{ field_id, value }` entries itself
      * (not wrapped in an object). The optional `signerAccessCode` query is the
-     * same live-unverified compatibility extension described on
+     * same compatibility extension described on
      * {@link FieldsResource.validate}.
      *
      * @param entries - Non-empty array of `{ field_id, value }` pairs.
@@ -299,8 +330,8 @@ export class FieldsResource extends BaseResource {
      * @returns One validation result per entry. Response shape:
      * ```jsonc
      * [
-     *   { "type": "cpf", "success": true, "error_message": "" },
-     *   { "type": "text", "success": true, "error_message": "" }
+     *   { "field_id": "field-cpf", "type": "cpf", "success": true, "error_message": "" },
+     *   { "field_id": "field-name", "type": "text", "success": true, "error_message": "" }
      * ]
      * ```
      * @throws {ValidationError} If `entries` is empty or the account ID is missing.
@@ -319,18 +350,36 @@ export class FieldsResource extends BaseResource {
     async validateMultiple(
         entries: IFieldValidateMultipleEntry[],
         options: { signerAccessCode?: string; accountId?: string } = {},
-    ): Promise<IFieldValidationResult[]> {
-        if (!Array.isArray(entries) || entries.length === 0) {
-            throw new ValidationError('entries must be a non-empty array');
+    ): Promise<IFieldValidationMultipleResult[]> {
+        if (
+            !Array.isArray(entries)
+            || entries.length === 0
+            || entries.some(
+                (entry) =>
+                    !entry
+                    || typeof entry !== 'object'
+                    || Array.isArray(entry)
+                    || typeof entry.field_id !== 'string'
+                    || !entry.field_id.trim()
+                    || entry.value === undefined,
+            )
+        ) {
+            throw new ValidationError('entries must contain a non-empty field_id and value');
         }
+        assertRecord(options, 'field validation options');
+        validateSignerAccessCode(options.signerAccessCode);
         const id = this.accountId(options.accountId);
         const params = options.signerAccessCode
             ? { 'signer-access-code': options.signerAccessCode }
             : undefined;
+        const body = entries.map((entry) => ({
+            field_id: entry.field_id,
+            value: entry.value,
+        }));
         return this.call('Failed to validate field values', () =>
             this.http.post(
                 `/accounts/${this.pathSegment(id, 'Account ID')}/fields/validate-multiple`,
-                entries,
+                body,
                 { params },
             ),
         );
@@ -339,7 +388,11 @@ export class FieldsResource extends BaseResource {
     /**
      * List the platform's supported field types (`GET /field-types`).
      *
-     * @returns The catalogue of field types (11 live entries). Response shape:
+     * The catalog is server-controlled. CPF validation expects 11 digits;
+     * CNPJ accepts 14 characters, including letters A–Z in positions 1–12,
+     * with numeric check digits in positions 13–14. Punctuation is ignored.
+     *
+     * @returns The current catalogue of field types. Response shape:
      * ```jsonc
      * [
      *   { "type": "personName", "name": "Nome" },
@@ -359,4 +412,23 @@ export class FieldsResource extends BaseResource {
     async listTypes(): Promise<IFieldType[]> {
         return this.call('Failed to list field types', () => this.http.get('/field-types'));
     }
+}
+
+function validateFieldPayload(payload: ICreateFieldPayload | IUpdateFieldPayload): void {
+    if (
+        payload.regex !== undefined
+        && payload.regex !== null
+        && typeof payload.regex !== 'string'
+    ) {
+        throw new ValidationError('regex must be a string or null');
+    }
+    for (const key of ['is_required', 'is_active'] as const) {
+        if (payload[key] !== undefined && typeof payload[key] !== 'boolean') {
+            throw new ValidationError(`${key} must be a boolean`);
+        }
+    }
+}
+
+function validateSignerAccessCode(value: unknown): void {
+    if (value !== undefined) assertNonEmptyString(value, 'signerAccessCode');
 }

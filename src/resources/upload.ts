@@ -1,6 +1,7 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { ValidationError } from '../errors';
+import { assertRecord, serializeJsonRecord } from '../utils';
 
 /** Maximum upload size accepted by the API (hard limit, 25 MB). */
 export const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
@@ -18,6 +19,7 @@ export async function loadSource(
     source: FileUploadSource,
     options: { maxBytes?: number } = {},
 ): Promise<{ buffer: Buffer; fileName: string }> {
+    assertRecord(options, 'upload options');
     if (!source || typeof source !== 'object') {
         throw new ValidationError('Upload source is required');
     }
@@ -109,7 +111,7 @@ function formatMegabytes(bytes: number): string {
     return `${Number.isInteger(megabytes) ? megabytes : megabytes.toFixed(2)}MB`;
 }
 
-/** Build a one-part multipart body without copying the Buffer's bytes. */
+/** Build a one-part multipart body from exactly the Buffer's visible byte window. */
 export function buildFileForm(
     buffer: Buffer,
     fileName: string,
@@ -146,7 +148,7 @@ function toUploadFileName(name: string): string {
  * in the body. `options.name` therefore rides on the part's filename, falling
  * back to `fileName` (the source file's own name) when not supplied.
  *
- * Two API-side behaviours worth knowing, both verified against the sandbox:
+ * API-side naming behavior:
  * - The stored name always ends in `.pdf`; `'NDA template'` is stored as
  *   `'NDA template.pdf'`.
  * - Accents are transliterated: `'Contrato de Serviço.pdf'` is stored as
@@ -157,12 +159,16 @@ export function buildUploadForm(
     fileName: string,
     options: { name?: string; metadata?: Record<string, unknown> } = {},
 ): FormData {
+    assertRecord(options, 'upload form options');
+    if (options.name !== undefined && (typeof options.name !== 'string' || !options.name.trim())) {
+        throw new ValidationError('Upload name must be a non-empty string');
+    }
     const partName = options.name === undefined ? fileName : toUploadFileName(options.name);
-    // `buildFileForm` deliberately preserves the Buffer window instead of
-    // copying its backing allocation (which may be a pooled Buffer).
+    // `buildFileForm` preserves the Buffer's byteOffset/byteLength window so a
+    // pooled Buffer cannot expose neighboring bytes in the multipart part.
     const form = buildFileForm(buffer, partName, 'application/pdf');
-    if (options.metadata) {
-        form.append('metadata', JSON.stringify(options.metadata));
+    if (options.metadata !== undefined) {
+        form.append('metadata', serializeJsonRecord(options.metadata, 'metadata'));
     }
     return form;
 }

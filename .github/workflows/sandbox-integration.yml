@@ -1,0 +1,64 @@
+name: Sandbox integration
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Test scope
+        required: true
+        default: read-only
+        type: choice
+        options:
+          - read-only
+          - disposable-full
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sandbox-integration-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    name: ${{ inputs.mode }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: sandbox
+    env:
+      ASSINAFY_BASE_URL: https://sandbox.assinafy.com.br/v1
+      ASSINAFY_ACCOUNT_ID: ${{ secrets.ASSINAFY_ACCOUNT_ID }}
+      ASSINAFY_API_KEY: ${{ secrets.ASSINAFY_API_KEY }}
+      ASSINAFY_TEST_EMAIL_PRIMARY: ${{ secrets.ASSINAFY_TEST_EMAIL_PRIMARY }}
+      ASSINAFY_TEST_EMAIL_SECONDARY: ${{ secrets.ASSINAFY_TEST_EMAIL_SECONDARY }}
+      ASSINAFY_TEST_WEBHOOK_URL: ${{ secrets.ASSINAFY_TEST_WEBHOOK_URL }}
+      ASSINAFY_TEST_LOGIN_EMAIL: ${{ secrets.ASSINAFY_TEST_LOGIN_EMAIL }}
+      ASSINAFY_TEST_LOGIN_PASSWORD: ${{ secrets.ASSINAFY_TEST_LOGIN_PASSWORD }}
+      ASSINAFY_SIGNER_ACCESS_CODE: ${{ secrets.ASSINAFY_SIGNER_ACCESS_CODE }}
+      ASSINAFY_SIGNER_OTP: ${{ secrets.ASSINAFY_SIGNER_OTP }}
+      ASSINAFY_PUBLIC_DOCUMENT_ID: ${{ secrets.ASSINAFY_PUBLIC_DOCUMENT_ID }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+      - run: bun install --frozen-lockfile
+      - name: Check required secret configuration
+        run: |
+          test -n "$ASSINAFY_ACCOUNT_ID"
+          test -n "$ASSINAFY_API_KEY"
+      - name: Check disposable-flow secret configuration
+        if: inputs.mode == 'disposable-full'
+        run: |
+          test -n "$ASSINAFY_TEST_EMAIL_PRIMARY"
+          test -n "$ASSINAFY_TEST_EMAIL_SECONDARY"
+      - name: Run read-only integration tests
+        if: inputs.mode == 'read-only'
+        run: bun scripts/live-smoke.ts
+      - name: Run disposable integration tests
+        if: inputs.mode == 'disposable-full'
+        run: bun scripts/live-smoke.ts --all

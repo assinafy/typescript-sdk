@@ -14,6 +14,18 @@ describe('retry helpers', () => {
     test('retryDelayFromHeaders returns undefined with no usable hint', () => {
         expect(retryDelayFromHeaders(undefined)).toBeUndefined();
         expect(retryDelayFromHeaders({ 'x-other': 'value' })).toBeUndefined();
+        expect(retryDelayFromHeaders({ 'retry-after': '' })).toBeUndefined();
+        expect(retryDelayFromHeaders({ 'retry-after': '-1' })).toBeUndefined();
+        expect(retryDelayFromHeaders({ 'retry-after': '1.5' })).toBeUndefined();
+        expect(retryDelayFromHeaders({ 'x-rate-limit-reset': ' ' })).toBeUndefined();
+        expect(retryDelayFromHeaders({ 'x-rate-limit-reset': '-1' })).toBeUndefined();
+    });
+
+    test('retryDelayFromHeaders accepts a future HTTP-date', () => {
+        const future = new Date(Date.now() + 5_000).toUTCString();
+        const delay = retryDelayFromHeaders({ 'retry-after': future });
+        expect(delay).toBeGreaterThanOrEqual(3_500);
+        expect(delay).toBeLessThanOrEqual(5_000);
     });
 
     test('backoffMs grows exponentially and caps at 8s', () => {

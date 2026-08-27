@@ -1,25 +1,27 @@
 import type {
-    IListParams,
+    ITemplateListParams,
     ITemplateDetailsResponse,
     ITemplateListResponse,
     ITemplateListItem,
     IUpdateTemplatePayload,
 } from '../types';
-import { cleanListParams, cleanParams } from '../utils';
+import { ValidationError } from '../errors';
+import { assertNonEmptyString, assertRecord, cleanListParams, cleanParams } from '../utils';
 import { BaseResource } from './base';
 import type { DocumentUploadSource } from './upload';
 
 /**
- * Live-API compatibility endpoints for managing reusable templates.
+ * Manage reusable templates.
  *
- * These CRUD routes are operational in the Assinafy sandbox but are not
- * described by the current published OpenAPI document. They are retained for
- * compatibility and should be integration-tested against the target Assinafy
- * environment before a production rollout.
+ * Provides template listing plus compatibility methods for upload,
+ * single-template get/update/delete, and page download. Confirm compatibility
+ * method availability on the configured host.
  */
 export class TemplateResource extends BaseResource {
     /**
      * Create a template by uploading a PDF (`POST /accounts/{id}/templates`).
+     *
+     * Compatibility endpoint; confirm availability on the configured host.
      *
      * The template is created in `Uploaded` status and transitions to `Ready`
      * once the platform finishes processing its pages (`pages` stays empty until
@@ -71,6 +73,8 @@ export class TemplateResource extends BaseResource {
         source: DocumentUploadSource,
         options: { name?: string; accountId?: string } = {},
     ): Promise<ITemplateDetailsResponse> {
+        assertRecord(options, 'template upload options');
+        if (options.name !== undefined) assertNonEmptyString(options.name, 'name');
         const id = this.accountId(options.accountId);
         const formOptions: { name?: string } = {};
         if (options.name !== undefined) formOptions.name = options.name;
@@ -93,9 +97,11 @@ export class TemplateResource extends BaseResource {
      * List templates for the workspace (`GET /accounts/{id}/templates`).
      *
      * Pagination lives in the response **headers** and is surfaced on `meta`.
-     * Each item is an {@link ITemplateListItem} carrying `pages[]` (each with a
-     * `download_url`), so there is no need to `get()` a template again just to
-     * read its rendered pages.
+     * Each item is an {@link ITemplateListItem} carrying `pages[]` (each with an
+     * API-key-authenticated `download_url`), so there is no need to `get()` a
+     * template again just to read its rendered pages. Prefer
+     * {@link TemplateResource.downloadPage} to download the image bytes.
+     * Lifecycle values may be lowercase or title case (`ready` / `Ready`).
      *
      * @param params - `search`, `page`, and `per-page` (the SDK normalizes
      * `per_page` → `per-page`, the only spelling the API honors).
@@ -107,7 +113,7 @@ export class TemplateResource extends BaseResource {
      *   "name": "NDA template.pdf",
      *   "document_name": "nda.pdf",
      *   "message": null,
-     *   "status": "Ready",
+     *   "status": "ready",
      *   "pages": [
      *     {
      *       "id": "103ad217673e1f978cb86179e8f8",
@@ -134,7 +140,7 @@ export class TemplateResource extends BaseResource {
      * const { data, meta } = await client.templates.list({ search: 'nda', 'per-page': 20 });
      * ```
      */
-    async list(params: IListParams = {}, accountId?: string): Promise<ITemplateListResponse> {
+    async list(params: ITemplateListParams = {}, accountId?: string): Promise<ITemplateListResponse> {
         const id = this.accountId(accountId);
         return this.callList<ITemplateListItem>('Failed to list templates', () =>
             this.http.get(`/accounts/${this.pathSegment(id, 'Account ID')}/templates`, {
@@ -146,11 +152,14 @@ export class TemplateResource extends BaseResource {
     /**
      * Get a template by ID (`GET /accounts/{id}/templates/{template_id}`).
      *
+     * Compatibility endpoint; confirm availability on the configured host.
+     *
      * Returns the same shape as {@link TemplateResource.list} plus
      * `default_document_tags` (the tags auto-applied to every document created
      * from this template) and `resource`. Both endpoints return `pages` with
-     * per-page `download_url`, so fetching a template again purely to read its
-     * pages is unnecessary.
+     * per-page API-key-authenticated `download_url`, so fetching a template
+     * again purely to read its pages is unnecessary. Prefer
+     * {@link TemplateResource.downloadPage} to download the image bytes.
      *
      * @param templateId - The template to fetch.
      * @param accountId - Override the client's default account ID.
@@ -211,6 +220,8 @@ export class TemplateResource extends BaseResource {
      * Update a template's `name` and/or default `message`
      * (`PUT /accounts/{id}/templates/{template_id}`).
      *
+     * Compatibility endpoint; confirm availability on the configured host.
+     *
      * `message` is the default invitation message applied to documents created
      * from this template. Omit a field to leave it unchanged — the SDK strips
      * `undefined` keys before sending. Unlike uploads, `name` here is a plain
@@ -253,18 +264,29 @@ export class TemplateResource extends BaseResource {
         payload: IUpdateTemplatePayload,
         accountId?: string,
     ): Promise<ITemplateDetailsResponse> {
+        assertRecord(payload, 'template update payload');
+        if (payload.name !== undefined) assertNonEmptyString(payload.name, 'name');
+        if (payload.message !== undefined && typeof payload.message !== 'string') {
+            throw new ValidationError('message must be a string');
+        }
         const id = this.accountId(accountId);
         const tmplId = this.requireId(templateId, 'Template ID');
+        const body = cleanParams({
+            name: payload.name,
+            message: payload.message,
+        });
         return this.call('Failed to update template', () =>
             this.http.put(
                 `/accounts/${this.pathSegment(id, 'Account ID')}/templates/${this.pathSegment(tmplId, 'Template ID')}`,
-                cleanParams(payload as Record<string, unknown>),
+                body,
             ),
         );
     }
 
     /**
      * Delete a template (`DELETE /accounts/{id}/templates/{template_id}`).
+     *
+     * Compatibility endpoint; confirm availability on the configured host.
      *
      * The API responds with an empty `data` payload; this method resolves to
      * `void`.
@@ -294,9 +316,11 @@ export class TemplateResource extends BaseResource {
      * Download a template page as a JPEG
      * (`GET /accounts/{id}/templates/{template_id}/pages/{page_id}/download`).
      *
+     * Compatibility endpoint; confirm availability on the configured host.
+     *
      * Used by template editors to render page thumbnails on the client. The
-     * matching `download_url` is also returned on each `template.pages[]` entry,
-     * so if you already hold the template you can fetch that URL directly.
+     * matching API-key-authenticated `download_url` is also returned on each
+     * `template.pages[]` entry; this wrapper supplies the required credentials.
      *
      * @param templateId - The template that owns the page.
      * @param pageId - The page to download (`pages[].id` from `get()`/`list()`).

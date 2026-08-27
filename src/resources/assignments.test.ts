@@ -8,6 +8,11 @@ import { ValidationError } from '../errors';
 import type { AxiosInstance } from 'axios';
 
 describe('buildAssignmentPayload', () => {
+    test('rejects malformed payload objects with ValidationError', () => {
+        expect(() => buildAssignmentPayload(null as never)).toThrow(ValidationError);
+        expect(() => buildAssignmentEstimatePayload([] as never)).toThrow(ValidationError);
+    });
+
     test('normalises string signer ids into {id} objects', () => {
         const body = buildAssignmentPayload({ signers: ['a', 'b'] });
         expect(body).toEqual({ method: 'virtual', signers: [{ id: 'a' }, { id: 'b' }] });
@@ -29,6 +34,11 @@ describe('buildAssignmentPayload', () => {
             signers: [{ id: 'a' }, { signer_id: 'b' }],
         });
         expect(body['signers']).toEqual([{ id: 'a' }, { id: 'b' }]);
+        expect(buildAssignmentPayload({
+            signers: [{ id: 'certificate-signer', verification_method: 'DigitalCertificate' }],
+        })['signers']).toEqual([
+            { id: 'certificate-signer', verification_method: 'DigitalCertificate' },
+        ]);
     });
 
     test('forwards the sequential-signing step on signer objects', () => {
@@ -46,11 +56,65 @@ describe('buildAssignmentPayload', () => {
 
     test('allows estimation payloads without signer ids when methods are supplied', () => {
         const body = buildAssignmentEstimatePayload({
-            signers: [{ verification_method: 'Whatsapp' }, {}],
+            signers: [{ verification_method: 'DigitalCertificate' }, {}],
         });
         expect(body).toEqual({
             method: 'virtual',
-            signers: [{ verification_method: 'Whatsapp' }, {}],
+            signers: [{ verification_method: 'DigitalCertificate' }, {}],
+        });
+    });
+
+    test('projects collect entries and display settings to their exact wire fields', () => {
+        const entries = [{
+            page_id: 'page-1',
+            internal_secret: 'do-not-send',
+            fields: [{
+                signer_id: 'signer-1',
+                field_id: 'field-1',
+                internal_secret: 'do-not-send',
+                display_settings: {
+                    left: 10,
+                    top: 20,
+                    width: 120,
+                    height: 30,
+                    fontSize: 12,
+                    fontFamily: 'Arial',
+                    backgroundColor: '#ffffff',
+                    internal_secret: 'do-not-send',
+                },
+            }],
+        }];
+        const expectedEntries = [{
+            page_id: 'page-1',
+            fields: [{
+                signer_id: 'signer-1',
+                field_id: 'field-1',
+                display_settings: {
+                    left: 10,
+                    top: 20,
+                    width: 120,
+                    height: 30,
+                    fontSize: 12,
+                    fontFamily: 'Arial',
+                    backgroundColor: '#ffffff',
+                },
+            }],
+        }];
+        expect(buildAssignmentPayload({
+            method: 'collect',
+            signers: ['signer-1'],
+            entries,
+        })).toEqual({
+            method: 'collect',
+            signers: [{ id: 'signer-1' }],
+            entries: expectedEntries,
+        });
+        expect(buildAssignmentEstimatePayload({
+            method: 'collect',
+            entries,
+        })).toEqual({
+            method: 'collect',
+            entries: expectedEntries,
         });
     });
 
@@ -69,6 +133,123 @@ describe('buildAssignmentPayload', () => {
         expect(() => buildAssignmentPayload({ method: 'collect', signers: ['a'] })).toThrow(
             ValidationError,
         );
+    });
+
+    test('rejects malformed collect entry trees', () => {
+        const malformed = [
+            null,
+            [null],
+            [{}],
+            [{ page_id: 'page-1', fields: null }],
+            [{ page_id: 'page-1', fields: [null] }],
+            [{ page_id: 'page-1', fields: [{ signer_id: '', field_id: 'field-1' }] }],
+            [{ page_id: 'page-1', fields: [{ signer_id: 'signer-1' }] }],
+            [{
+                page_id: 'page-1',
+                fields: [{
+                    signer_id: 'signer-1',
+                    field_id: 'field-1',
+                    display_settings: null,
+                }],
+            }],
+            [{
+                page_id: 'page-1',
+                fields: [{
+                    signer_id: 'signer-1',
+                    field_id: 'field-1',
+                    display_settings: {
+                        left: 0,
+                        top: 0,
+                        width: 1,
+                        height: 1,
+                        fontSize: 1,
+                        fontFamily: 123,
+                    },
+                }],
+            }],
+            [{
+                page_id: 'page-1',
+                fields: [{
+                    signer_id: 'signer-1',
+                    field_id: 'field-1',
+                    display_settings: { left: 0 },
+                }],
+            }],
+        ];
+        for (const entries of malformed) {
+            expect(() => buildAssignmentPayload({
+                method: 'collect',
+                signers: ['signer-1'],
+                entries,
+            } as never)).toThrow(ValidationError);
+        }
+    });
+
+    test('rejects invalid methods, signer IDs, channels, steps, and copy receivers', () => {
+        expect(() =>
+            buildAssignmentPayload({ method: 'other' as never, signers: ['a'] }),
+        ).toThrow(ValidationError);
+        expect(() => buildAssignmentPayload({ signers: [' '] })).toThrow(ValidationError);
+        expect(() =>
+            buildAssignmentPayload({ signers: [{ id: 'a', step: 0 }] }),
+        ).toThrow(ValidationError);
+        expect(() =>
+            buildAssignmentPayload({
+                signers: [{ id: 'a', verification_method: 'SMS' as never }],
+            }),
+        ).toThrow(ValidationError);
+        expect(() =>
+            buildAssignmentPayload({
+                signers: [{ id: 'a', notification_methods: ['SMS' as never] }],
+            }),
+        ).toThrow(ValidationError);
+        expect(() =>
+            buildAssignmentPayload({ signers: ['a'], copy_receivers: [''] }),
+        ).toThrow(ValidationError);
+        expect(() =>
+            buildAssignmentPayload({ signers: ['a'], message: 42 as never }),
+        ).toThrow(ValidationError);
+        expect(() =>
+            buildAssignmentPayload({
+                signers: [{ id: 'a', step: 1 }, { id: 'b' }],
+            }),
+        ).toThrow(ValidationError);
+        expect(() =>
+            buildAssignmentPayload({
+                signers: [{ id: 'a', step: 1 }, { id: 'b', step: 3 }],
+            }),
+        ).toThrow(ValidationError);
+        expect(() =>
+            buildAssignmentPayload({
+                signers: [
+                    { id: 'a', verification_method: 'DigitalCertificate' },
+                    { id: 'b' },
+                ],
+            }),
+        ).toThrow(ValidationError);
+        expect(() =>
+            buildAssignmentPayload({ signers: ['a'], expires_at: 'not-a-date' }),
+        ).toThrow(ValidationError);
+    });
+
+    test('requires the method-specific cost-estimate inputs', () => {
+        expect(() =>
+            buildAssignmentEstimatePayload({ method: 'other' as never, signers: [{}] }),
+        ).toThrow(ValidationError);
+        expect(() => buildAssignmentEstimatePayload({ method: 'virtual' })).toThrow(
+            ValidationError,
+        );
+        expect(() => buildAssignmentEstimatePayload({ method: 'collect' })).toThrow(
+            ValidationError,
+        );
+        expect(() =>
+            buildAssignmentEstimatePayload({
+                signers: [{ verification_method: 'SMS' as never }],
+            }),
+        ).toThrow(ValidationError);
+        expect(() =>
+            buildAssignmentEstimatePayload({ signers: [null as never] }),
+        ).toThrow(ValidationError);
     });
 
     test('estimate bodies project away create-only and signer identity fields', () => {
@@ -92,11 +273,11 @@ describe('buildAssignmentPayload', () => {
         const body = buildAssignmentPayload({
             signers: ['a'],
             message: 'hi',
-            expires_at: '2024-12-31',
+            expires_at: '2027-12-31T23:59:00Z',
             copy_receivers: ['c'],
         });
         expect(body['message']).toBe('hi');
-        expect(body['expires_at']).toBe('2024-12-31');
+        expect(body['expires_at']).toBe('2027-12-31T23:59:00Z');
         expect(body['copy_receivers']).toEqual(['c']);
     });
 
@@ -119,6 +300,7 @@ describe('AssignmentResource', () => {
     test('create posts to /documents/{id}/assignments with normalised body', async () => {
         let capturedUrl = '';
         let capturedBody: unknown;
+        let logContext: Record<string, unknown> | undefined;
         const axiosMock = {
             post: async (url: string, body: unknown) => {
                 capturedUrl = url;
@@ -126,8 +308,16 @@ describe('AssignmentResource', () => {
                 return { status: 200, data: { status: 200, data: { id: 'assignment-1' } } };
             },
         } as unknown as AxiosInstance;
+        const logger = {
+            debug: () => undefined,
+            info: (_message: string, context?: Record<string, unknown>) => {
+                logContext = context;
+            },
+            warn: () => undefined,
+            error: () => undefined,
+        };
 
-        const resource = new AssignmentResource(axiosMock, 'acc');
+        const resource = new AssignmentResource(axiosMock, 'acc', logger);
         const result = await resource.create('doc-1', { signers: ['s1', 's2'] });
 
         expect(capturedUrl).toBe('/documents/doc-1/assignments');
@@ -136,6 +326,7 @@ describe('AssignmentResource', () => {
             signers: [{ id: 's1' }, { id: 's2' }],
         });
         expect(result).toEqual({ id: 'assignment-1' } as never);
+        expect(logContext).toEqual({ signerCount: 2 });
     });
 
     test('resendNotification requires all three IDs', async () => {
@@ -264,6 +455,15 @@ describe('AssignmentResource', () => {
         expect(asg.signing_urls?.[0]).toEqual({ signer_id: 's1', url: 'https://app/sign/abc' });
     });
 
+    test('keeps future server-side signer channel values representable', () => {
+        type Signer = import('../types').IAssignmentSigner;
+        const verification: Signer['verification_method'] = 'FutureVerificationMethod';
+        const notifications: Signer['notification_methods'] = ['FutureNotificationChannel'];
+
+        expect(verification).toBe('FutureVerificationMethod');
+        expect(notifications).toEqual(['FutureNotificationChannel']);
+    });
+
     test('resetExpiration puts the reset-expiration path with a non-null date', async () => {
         let capturedUrl = '';
         let capturedBody: unknown;
@@ -276,10 +476,10 @@ describe('AssignmentResource', () => {
         } as unknown as AxiosInstance;
 
         const resource = new AssignmentResource(axiosMock, 'acc');
-        await resource.resetExpiration('doc-1', 'asg-1', '2026-12-31T23:59:59Z');
+        await resource.resetExpiration('doc-1', 'asg-1', '2027-12-31T23:59:59Z');
 
         expect(capturedUrl).toBe('/documents/doc-1/assignments/asg-1/reset-expiration');
-        expect(capturedBody).toEqual({ expires_at: '2026-12-31T23:59:59Z' });
+        expect(capturedBody).toEqual({ expires_at: '2027-12-31T23:59:59Z' });
     });
 
     test('resetExpiration keeps expires_at: null in the body (does not strip null)', async () => {
@@ -309,6 +509,9 @@ describe('AssignmentResource', () => {
         const resource = new AssignmentResource(axiosMock, 'acc');
         await expect(resource.resetExpiration('', 'asg-1', null)).rejects.toThrow(ValidationError);
         await expect(resource.resetExpiration('doc-1', '', null)).rejects.toThrow(ValidationError);
+        await expect(
+            resource.resetExpiration('doc-1', 'asg-1', 'not-a-date'),
+        ).rejects.toThrow(ValidationError);
     });
 
     test('listWhatsAppNotifications gets the whatsapp-notifications path', async () => {

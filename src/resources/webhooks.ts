@@ -55,7 +55,8 @@ export class WebhookResource extends BaseResource {
      *   "updated_at": "2026-07-18T02:36:02Z" // no `id` / `created_at` are returned
      * }
      * ```
-     * @throws {ValidationError} If `url` or `email` is missing.
+     * @throws {ValidationError} If `url` / `email` is invalid, `events` /
+     * `is_active` has the wrong type, or no account ID is available.
      * @throws {ApiError} If the API rejects the subscription.
      *
      * @example
@@ -127,7 +128,7 @@ export class WebhookResource extends BaseResource {
      * present:
      * ```jsonc
      * {
-     *   "url": "https://hooks.zapier.com/hooks/standard/27880178/bbe9b90c.../",
+     *   "url": "https://webhooks.example.com/assinafy",
      *   "email": "ops@example.com",
      *   "events": [
      *     "document_ready",
@@ -138,6 +139,7 @@ export class WebhookResource extends BaseResource {
      *   "updated_at": "2026-07-18T02:36:02Z"
      * }
      * ```
+     * @throws {ValidationError} If no account ID is available.
      * @throws {ApiError} If the API fails for a reason other than `404`.
      *
      * @example
@@ -186,6 +188,7 @@ export class WebhookResource extends BaseResource {
      *   "updated_at": "2026-07-18T02:36:02Z"
      * }
      * ```
+     * @throws {ValidationError} If no account ID is available.
      * @throws {ApiError} If the API rejects the request.
      *
      * @example
@@ -207,14 +210,9 @@ export class WebhookResource extends BaseResource {
      * (`GET /webhooks/event-types`). This is a global, account-independent
      * catalog.
      *
-     * @returns The full list of event types with human-readable descriptions.
-     * Live, the API returns exactly 15 entries (in this order):
-     * `document_uploaded`, `document_metadata_ready`, `document_prepared`,
-     * `assignment_created`, `signature_requested`, `document_ready`,
-     * `signer_created`, `signer_email_verified`, `signer_whatsapp_verified`,
-     * `signer_data_confirmed`, `signer_signed_document`, `signer_viewed_document`,
-     * `signer_rejected_document`, `user_rejected_document`,
-     * `document_processing_failed`. Response shape:
+     * @returns The server-controlled event catalog with human-readable
+     * descriptions. Event types can be added over time, so callers should not
+     * depend on a fixed count or order. Response shape:
      * ```jsonc
      * [
      *   {
@@ -225,7 +223,6 @@ export class WebhookResource extends BaseResource {
      *     "id": "document_metadata_ready",
      *     "description": "Triggered when the document is ready to be prepared. The document has been normalized to PDF and its pages are available."
      *   }
-     *   // …13 more (15 total)
      * ]
      * ```
      * @throws {ApiError} If the API rejects the request.
@@ -247,6 +244,12 @@ export class WebhookResource extends BaseResource {
      * (`GET /accounts/{accountId}/webhooks`). Pagination info (if any) is
      * attached in `meta`.
      *
+     * Assinafy treats any `2xx` response as success. It makes at most two
+     * attempts per event with a three-second wait. After ten consecutive failed
+     * events, the circuit breaker pauses normal delivery and sends roughly 5%
+     * as recovery checks until one succeeds. The stored `response_body` is
+     * truncated to 2,000 characters.
+     *
      * @param params - Optional filters and pagination:
      *   - `event` — restrict to a single {@link WebhookEventType}
      *     (e.g. `'signer_signed_document'`).
@@ -258,6 +261,7 @@ export class WebhookResource extends BaseResource {
      * @returns Delivery records, with pagination in `meta`. Each item:
      * ```jsonc
      * {
+     *   "resource": "activity_dispatching_history",
      *   "id": "103a09cfce51319dd3b3f72ffcdf",
      *   "event": "signature_requested",
      *   "activity_id": 8629,
@@ -270,12 +274,13 @@ export class WebhookResource extends BaseResource {
      *   },
      *   "delivered": true,
      *   "http_status": 200,
-     *   "response_body": "{ ... }", // body returned by the receiving endpoint
+     *   "response_body": "{ ... }", // receiving endpoint body, max 2,000 chars
      *   "error": null,
      *   "created_at": "2026-07-15T20:04:36Z",
      *   "updated_at": "2026-07-15T20:04:36Z"
      * }
      * ```
+     * @throws {ValidationError} If no account ID is available.
      * @throws {ApiError} If the API rejects the request.
      *
      * @example
@@ -315,6 +320,7 @@ export class WebhookResource extends BaseResource {
      * shape:
      * ```jsonc
      * {
+     *   "resource": "activity_dispatching_history",
      *   "id": "103a09cfce51319dd3b3f72ffcdf",
      *   "event": "signature_requested",
      *   "activity_id": 8629,
@@ -322,13 +328,14 @@ export class WebhookResource extends BaseResource {
      *   "payload": { }, // the original event body that was re-POSTed
      *   "delivered": true,
      *   "http_status": 200,
-     *   "response_body": "{ ... }",
+     *   "response_body": "{ ... }", // max 2,000 characters
      *   "error": null,
      *   "created_at": "2026-07-15T20:04:36Z",
      *   "updated_at": "2026-07-15T20:05:10Z"
      * }
      * ```
-     * @throws {ValidationError} If `dispatchId` is empty.
+     * @throws {ValidationError} If `dispatchId` is empty or no account ID is
+     * available.
      * @throws {ApiError} If the dispatch is not found (`404`) or the retry fails.
      *
      * @example

@@ -44,7 +44,15 @@ export class WebhookVerifier {
      * ```
      */
     verify(payload: string | Buffer, signature: string): boolean {
-        if (!this.webhookSecret || !signature) return false;
+        if (
+            typeof this.webhookSecret !== 'string'
+            || !this.webhookSecret
+            || (typeof payload !== 'string' && !Buffer.isBuffer(payload))
+            || typeof signature !== 'string'
+            || !signature
+        ) {
+            return false;
+        }
 
         const buf = typeof payload === 'string' ? Buffer.from(payload, 'utf8') : payload;
         const provided = signature.trim();
@@ -60,9 +68,8 @@ export class WebhookVerifier {
     }
 
     /**
-     * Parse the raw webhook body into a JSON object. Inbound webhook bodies are
-     * not described by the current OpenAPI, so this remains deliberately
-     * tolerant of both the observed rich envelope and legacy `{ type, data }`.
+     * Parse the raw webhook body into a JSON object. Both the rich envelope and
+     * compatibility `{ type, data }` form are accepted.
      *
      * @param payload - Raw UTF-8 JSON request body.
      * @returns The object envelope, or `null` for malformed JSON, primitives,

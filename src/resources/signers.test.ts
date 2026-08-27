@@ -42,6 +42,9 @@ describe('SignerResource', () => {
         await expect(
             resource.update('signer-1', { whatsapp_phone_number: ' ' }),
         ).rejects.toThrow(ValidationError);
+        await expect(resource.update('signer-1', { government_id: '---' })).rejects.toThrow(
+            ValidationError,
+        );
         expect(called).toBe(false);
     });
 
@@ -52,13 +55,29 @@ describe('SignerResource', () => {
     test('throws when no account ID is available', async () => {
         const resource = new SignerResource(mockAxios);
         await expect(
-            resource.create({ full_name: 'Test', email: 'test@test.com' }),
+            resource.create({ full_name: 'Test', email: 'test@example.com' }),
         ).rejects.toThrow(ValidationError);
     });
 
     test('rejects invalid email', async () => {
         await expect(
             signerResource.create({ full_name: 'Test', email: 'not-an-email' }),
+        ).rejects.toThrow(ValidationError);
+        await expect(
+            signerResource.create({ full_name: 'Test', whatsapp_phone_number: 'not-e164' }),
+        ).rejects.toThrow(ValidationError);
+    });
+
+    test('rejects non-serializable metadata before requesting', async () => {
+        const circular: Record<string, unknown> = {};
+        circular['self'] = circular;
+
+        await expect(
+            signerResource.create({
+                full_name: 'Test',
+                email: 'test@example.com',
+                metadata: circular,
+            }),
         ).rejects.toThrow(ValidationError);
     });
 
@@ -72,6 +91,26 @@ describe('SignerResource', () => {
         await expect(signerResource.create({ full_name: 'Test' })).resolves.toMatchObject({
             id: expect.any(String),
         });
+    });
+
+    test('direct resource construction isolates logger failures and signer PII', async () => {
+        const entries: unknown[] = [];
+        const logger = {
+            debug: () => undefined,
+            info: (_message: string, context?: Record<string, unknown>) => {
+                entries.push(context);
+                throw new Error('logger failed');
+            },
+            warn: () => undefined,
+            error: () => undefined,
+        };
+        const resource = new SignerResource(mockAxios, 'acc', logger);
+
+        await expect(
+            resource.create({ full_name: 'Private Signer', email: 'private@example.com' }),
+        ).resolves.toMatchObject({ id: '123' });
+        expect(JSON.stringify(entries)).not.toContain('private@example.com');
+        expect(JSON.stringify(entries)).not.toContain('Private Signer');
     });
 
     test('creates a whatsapp-only signer without an email lookup', async () => {
@@ -126,7 +165,7 @@ describe('SignerResource', () => {
         } as unknown as AxiosInstance;
 
         const resource = new SignerResource(trackingAxios, 'default-account');
-        await resource.create({ full_name: 'Test', email: 'test@test.com' }, 'custom-account');
+        await resource.create({ full_name: 'Test', email: 'test@example.com' }, 'custom-account');
         expect(capturedUrl).toBe('/accounts/custom-account/signers');
     });
 
@@ -142,7 +181,7 @@ describe('SignerResource', () => {
         } as unknown as AxiosInstance;
 
         const resource = new SignerResource(trackingAxios, 'default-account');
-        await resource.create({ full_name: 'Test', email: 'test@test.com' });
+        await resource.create({ full_name: 'Test', email: 'test@example.com' });
         expect(capturedUrl).toBe('/accounts/default-account/signers');
     });
 
@@ -191,20 +230,25 @@ describe('SignerResource', () => {
     });
 
     test('findByEmail returns a matching signer', async () => {
+        let params: unknown;
         const trackingAxios = {
             ...mockAxios,
-            get: async () => ({
+            get: async (_url: string, config: { params: unknown }) => {
+                params = config.params;
+                return {
                 status: 200,
                 data: {
                     status: 200,
                     data: [{ id: '1', full_name: 'John', email: 'JOHN@EXAMPLE.COM' }],
                 },
                 headers: {},
-            }),
+                };
+            },
         } as unknown as AxiosInstance;
         const resource = new SignerResource(trackingAxios, 'acc');
         const result = await resource.findByEmail('john@example.com');
         expect(result?.id).toBe('1');
+        expect(params).toEqual({ search: 'john@example.com', 'per-page': 100 });
     });
 
     test('findByEmail returns null when the list request 404s', async () => {
@@ -268,9 +312,15 @@ describe('SignerResource', () => {
         } as unknown as AxiosInstance;
 
         const resource = new SignerResource(trackingAxios, 'acc');
-        const result = await resource.create({ full_name: 'John', email: 'john@example.com' });
+        const result = await resource.create({
+            full_name: 'Requested New Name',
+            email: 'john@example.com',
+            phone: '+5548999990000',
+            metadata: { source: 'new-request' },
+        });
 
         expect(result.id).toBe('existing');
+        expect(result.full_name).toBe('John');
         expect(postCalled).toBe(false);
     });
 
@@ -401,6 +451,7 @@ describe('SignerResource public request contracts', () => {
             full_name: 'Updated Name',
             phone: '+5548999990000',
             cpf: '390.533.447-05',
+            government_id: '12.345.678/0001-95',
         });
 
         expect(request).toEqual({
@@ -409,6 +460,7 @@ describe('SignerResource public request contracts', () => {
                 full_name: 'Updated Name',
                 whatsapp_phone_number: '+5548999990000',
                 cpf: '39053344705',
+                government_id: '12345678000195',
             },
         });
         expect(result).toEqual(updated as never);

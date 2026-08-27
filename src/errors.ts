@@ -69,12 +69,12 @@ export class ApiError extends AssinafyError {
     }
 }
 
-/** Thrown when client-side validation fails before the request is sent. */
+/** Thrown when SDK validation fails, including invalid input or workflow state. */
 export class ValidationError extends AssinafyError {
     public readonly errors: Record<string, unknown>;
 
     /**
-     * Create a client-side validation failure raised before network I/O.
+     * Create an SDK validation failure.
      *
      * @param message - Human-readable validation summary.
      * @param errors - Field/value diagnostics for programmatic handling.

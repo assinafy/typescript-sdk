@@ -55,9 +55,18 @@ describe('BaseResource helpers', () => {
         ).rejects.toBeInstanceOf(ApiError);
     });
 
-    test('callVoid throws when the status is outside 2xx', async () => {
+    test('every response helper maps a non-2xx response to ApiError', async () => {
         await expect(res().void$(async () => ({ status: 204 }))).resolves.toBeUndefined();
-        await expect(res().void$(async () => ({ status: 500 }))).rejects.toThrow();
+        await expect(res().void$(async () => ({ status: 500 }))).rejects.toBeInstanceOf(ApiError);
+        await expect(
+            res().call$(async () => ({ status: 500, data: { message: 'failed' } })),
+        ).rejects.toMatchObject({ statusCode: 500, responseData: { message: 'failed' } });
+        await expect(
+            res().binary$(async () => ({ status: 500, data: new ArrayBuffer(0) })),
+        ).rejects.toBeInstanceOf(ApiError);
+        await expect(
+            res().list$(async () => ({ status: 500, data: [], headers: {} })),
+        ).rejects.toBeInstanceOf(ApiError);
         await expect(
             res().void$(async () => ({
                 status: 200,

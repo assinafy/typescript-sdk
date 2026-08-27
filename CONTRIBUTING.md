@@ -11,7 +11,7 @@ Use the versions exercised by automation:
 
 | Runtime | Role |
 | --- | --- |
-| Bun 1.3.14 | Package manager, test runner, and primary development runtime |
+| Bun 1.4.0 | Package manager, test runner, and primary development runtime |
 | Node.js 22 | Minimum supported Node.js major |
 | Node.js 24 | LTS build and release runtime |
 | Node.js 26 | Current-release compatibility target |
@@ -24,6 +24,11 @@ bun install --frozen-lockfile
 
 `bun.lock` is the only dependency lockfile. Do not commit an npm lockfile or
 generated `dist`, coverage, log, archive, or environment files.
+
+`bun run typecheck` invokes the native TypeScript 7 compiler for the library,
+maintainer scripts, and tests. The TypeScript 6 package remains available only
+for tools that have not yet adopted the native compiler API; do not substitute
+its `tsc` binary for the canonical typecheck gate.
 
 ## Required checks
 
@@ -44,7 +49,7 @@ The scripts have the following responsibilities:
 | `bun run build` | CJS, ESM, and declaration outputs |
 | `bun run lint:pkg` | Packed exports, declarations, and consumer compatibility |
 | `bun run verify` | Typecheck, lint, coverage, build, and package validation |
-| `bun run audit` | Locked dependency vulnerability audit |
+| `bun run audit` | Locked dependency vulnerability scan |
 | `bun run audit:api` | Current official OpenAPI operation coverage |
 
 Run `bun run audit:api` when an API resource, request, response, or endpoint is
@@ -53,7 +58,10 @@ access.
 
 GitLab is the canonical repository. Its pipeline runs the verification gates
 before changes are mirrored to GitHub. The GitHub workflow repeats the gates
-and imports the built package with Node 22, 24, and 26 using both CJS and ESM.
+and exercises the packed SDK with Node 22, 24, and 26 using both CJS and ESM.
+Treat GitHub pull requests, including Dependabot updates, as advisory: apply
+reviewed changes through a GitLab merge request and let the mirror synchronize
+them. Do not merge directly into the GitHub mirror.
 
 ## Change guidelines
 
@@ -88,7 +96,7 @@ ASSINAFY_BASE_URL='https://sandbox.assinafy.com.br/v1' \
 bun scripts/live-smoke.ts
 ```
 
-The default run is read-only. A comprehensive reversible audit uses in-memory
+The default run is read-only. The disposable integration suite uses in-memory
 PDF/PNG fixtures and two controlled notification recipients:
 
 ```sh

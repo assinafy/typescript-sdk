@@ -1,3 +1,4 @@
+import type { AxiosInstance } from 'axios';
 import type {
     DocumentArtifactName,
     IDocumentDetailsResponse,
@@ -11,10 +12,16 @@ import type {
     ISigner,
     ISignerSelf,
     IUploadSignatureOptions,
+    Logger,
+    SignatureImageType,
 } from '../types';
 import { ValidationError } from '../errors';
-import { cleanListParams, cleanParams } from '../utils';
+import { assertDocumentArtifactName, assertRecord, cleanListParams, cleanParams } from '../utils';
 import { BaseResource } from './base';
+import { withoutCredentials } from '../support/transport';
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const E164_RE = /^\+[1-9]\d{1,14}$/u;
 
 /**
  * Signer-side endpoints for custom signing UIs. Most calls authenticate with
@@ -23,6 +30,15 @@ import { BaseResource } from './base';
  * public exception and can be called without an access code.
  */
 export class SignerDocumentsResource extends BaseResource {
+    constructor(
+        http: AxiosInstance,
+        defaultAccountId?: string,
+        logger?: Logger,
+        publicHttp?: AxiosInstance,
+    ) {
+        super(withoutCredentials(publicHttp ?? http), defaultAccountId, logger);
+    }
+
     /**
      * Fetch the document currently awaiting a given signer
      * (`GET /signers/{signer_id}/document?signer-access-code=…`).
@@ -59,7 +75,8 @@ export class SignerDocumentsResource extends BaseResource {
      *   "updated_at": "2026-07-19T14:56:56Z"
      * }
      * ```
-     * @throws {ValidationError} If `signerId` or `signerAccessCode` is missing.
+     * @throws {ValidationError} If `signerId` or `signerAccessCode` is missing,
+     * or a supplied `search` value is not a string.
      * @throws {ApiError} If the access code is invalid or expired.
      *
      * @example
@@ -144,9 +161,8 @@ export class SignerDocumentsResource extends BaseResource {
      *
      * The signer-side counterpart of {@link DocumentResource.search}, scoped to
      * one signer and authorised by their access code rather than the API key.
-     * Like {@link SignerDocumentsResource.list}, it requires
-     * `signer-access-code`; the published spec omits that parameter, but the
-     * endpoint is not usable without it.
+     * Like {@link SignerDocumentsResource.list}, it requires the
+     * `signer-access-code` query parameter.
      *
      * @param signerId - The signer whose documents are searched.
      * @param signerAccessCode - The signer's access code, from their signing link.
@@ -172,6 +188,9 @@ export class SignerDocumentsResource extends BaseResource {
     ): Promise<IDocumentListResponse> {
         const sid = this.requireId(signerId, 'Signer ID');
         const code = this.requireId(signerAccessCode, 'signer-access-code');
+        if (search !== undefined && typeof search !== 'string') {
+            throw new ValidationError('search must be a string');
+        }
         return this.callList<IDocumentListItem>('Failed to search signer documents', () =>
             this.http.get(`/signers/${this.pathSegment(sid, 'Signer ID')}/documents/search`, {
                 params: cleanParams({ 'signer-access-code': code, search }),
@@ -187,19 +206,22 @@ export class SignerDocumentsResource extends BaseResource {
      * artifact names, exposed by the API as a public signer-link endpoint. The
      * optional access-code argument is retained for compatibility with deployed
      * environments that still accept or require the legacy query parameter. The
-     * `certificated` and `bundle` artifacts only exist once the document is fully
-     * signed.
+     * `certificated` and `bundle` exist only once the document is fully signed.
+     * `pades` exists only when the document had a Digital Certificate signer.
+     * A bundle contains original, certificated, and certificate-page artifacts,
+     * plus PAdES when present.
      *
      * @param signerId - The signer requesting the download.
      * @param documentId - The document to download.
      * @param artifactName - Which artifact to fetch (`original`, `certificated`,
-     *   `certificate-page`, or `bundle`).
+     *   `certificate-page`, `pades`, or `bundle`).
      * @param signerAccessCode - Optional legacy signer access code. Omit it for
      *   the official public request shape.
-     * @returns The artifact bytes as a Node `Buffer` (PDF for `original` /
-     *   `certificated` / `bundle`).
-     * @throws {ValidationError} If `signerId` or `documentId` is missing, or if
-     *   an explicitly supplied legacy `signerAccessCode` is blank.
+     * @returns The raw artifact bytes as a Node `Buffer` (PDF except for the
+     *   ZIP `bundle`).
+     * @throws {ValidationError} If `signerId` or `documentId` is missing,
+     *   `artifactName` is not one of the five documented names, or an explicitly
+     *   supplied legacy `signerAccessCode` is blank.
      * @throws {ApiError} `404` if the artifact does not exist yet.
      *
      * @example
@@ -220,6 +242,7 @@ export class SignerDocumentsResource extends BaseResource {
     ): Promise<Buffer> {
         const sid = this.requireId(signerId, 'Signer ID');
         const did = this.requireId(documentId, 'Document ID');
+        assertDocumentArtifactName(artifactName);
         const code =
             signerAccessCode === undefined
                 ? undefined
@@ -244,6 +267,7 @@ export class SignerDocumentsResource extends BaseResource {
      * Batch shortcut for a signer who has multiple pending documents under the
      * same access code — it signs each with their stored signature/initials
      * rather than field-by-field (contrast {@link SignerDocumentsResource.sign}).
+     * Every document must use the `virtual` assignment method.
      * The `document_ids` array goes in the request body; the access code
      * authenticates via the `signer-access-code` query param.
      *
@@ -266,8 +290,12 @@ export class SignerDocumentsResource extends BaseResource {
      * ```
      */
     async signMultiple(documentIds: string[], signerAccessCode: string): Promise<void> {
-        if (!Array.isArray(documentIds) || documentIds.length === 0) {
-            throw new ValidationError('documentIds must be a non-empty array');
+        if (
+            !Array.isArray(documentIds)
+            || documentIds.length === 0
+            || documentIds.some((id) => typeof id !== 'string' || !id.trim())
+        ) {
+            throw new ValidationError('documentIds must be a non-empty array of non-empty IDs');
         }
         const code = this.requireId(signerAccessCode, 'signer-access-code');
         return this.callVoid('Failed to sign multiple documents', () =>
@@ -312,10 +340,16 @@ export class SignerDocumentsResource extends BaseResource {
         declineReason: string,
         signerAccessCode: string,
     ): Promise<void> {
-        if (!Array.isArray(documentIds) || documentIds.length === 0) {
-            throw new ValidationError('documentIds must be a non-empty array');
+        if (
+            !Array.isArray(documentIds)
+            || documentIds.length === 0
+            || documentIds.some((id) => typeof id !== 'string' || !id.trim())
+        ) {
+            throw new ValidationError('documentIds must be a non-empty array of non-empty IDs');
         }
-        if (!declineReason) throw new ValidationError('declineReason is required');
+        if (typeof declineReason !== 'string' || !declineReason.trim()) {
+            throw new ValidationError('declineReason is required');
+        }
         const code = this.requireId(signerAccessCode, 'signer-access-code');
         return this.callVoid('Failed to decline multiple documents', () =>
             this.http.put(
@@ -335,8 +369,8 @@ export class SignerDocumentsResource extends BaseResource {
      * prompt for {@link SignerDocumentsResource.uploadSignature} before signing.
      *
      * @param signerAccessCode - The signer's access code, from their signing link.
-     * @returns The signer profile. Unlike the workspace-side signer object, this
-     * also reports `has_signature` / `has_initial`:
+     * @returns The signer profile. `has_signature`, `has_initial`, and
+     * `is_signature_reusable` are optional compatibility flags:
      * ```jsonc
      * {
      *   "resource": "signer",
@@ -434,6 +468,7 @@ export class SignerDocumentsResource extends BaseResource {
         signerAccessCode: string;
         verificationCode: string;
     }): Promise<void> {
+        assertRecord(payload, 'email verification payload');
         const code = this.requireId(payload.signerAccessCode, 'signer-access-code');
         const otp = this.requireId(payload.verificationCode, 'verification-code');
         // `signer-access-code` authenticates via the QUERY param; the body carries
@@ -456,27 +491,29 @@ export class SignerDocumentsResource extends BaseResource {
      * the signed document. Only the provided fields are sent — `undefined`/`null`
      * entries are stripped by {@link cleanParams} before the request — so you can
      * pass just the fields the signer changed. The access code authenticates via
-     * the `signer-access-code` query param. Legal terms are accepted separately
-     * with {@link SignerDocumentsResource.acceptTerms}; they are never asserted
-     * by this identity-data request.
+     * the `signer-access-code` query param. For `DigitalCertificate`, pass
+     * `has_accepted_terms: true` here or call
+     * {@link SignerDocumentsResource.acceptTerms} before fetching the assignment.
      *
      * @param documentId - The document the signer is confirming data for.
      * @param signerAccessCode - The signer's access code, from their signing link.
      * @param payload - Any of the official `full_name`, `email`, or
-     *   `government_id` fields. Fields left out are not sent.
+     *   `government_id`, or `has_accepted_terms` fields. Fields left out are not
+     *   sent.
      * @returns The confirmed signer in the full {@link ISigner} response shape.
-     * @throws {ValidationError} If `documentId` or `signerAccessCode` is missing.
+     * @throws {ValidationError} If `documentId` or `signerAccessCode` is missing,
+     * or a supplied identity value is malformed.
      * @throws {ApiError} If the access code is invalid/expired or a value fails
      *   validation.
      *
      * @example
      * ```ts
-     * // body → { full_name: 'Example Signer', government_id: '123.456.789-00' }
+     * // body → { full_name: 'Example Signer', government_id: '123.456.789-00', has_accepted_terms: true }
      * await client.signerDocuments.confirmData(documentId, accessCode, {
      *   full_name: 'Example Signer',
      *   government_id: '123.456.789-00',
+     *   has_accepted_terms: true,
      * });
-     * await client.signerDocuments.acceptTerms(accessCode);
      * ```
      */
     async confirmData(
@@ -486,8 +523,7 @@ export class SignerDocumentsResource extends BaseResource {
     ): Promise<ISigner>;
     /**
      * @deprecated Compatibility overload preserving the previous wire shape.
-     * `whatsapp_phone_number` and `has_accepted_terms` are unverified legacy
-     * pass-through fields. Call `acceptTerms()` explicitly for legal consent.
+     * `whatsapp_phone_number` is a compatibility pass-through field.
      */
     async confirmData(
         documentId: string,
@@ -499,6 +535,8 @@ export class SignerDocumentsResource extends BaseResource {
         signerAccessCode: string,
         payload: ILegacyConfirmSignerDataPayload,
     ): Promise<ISigner> {
+        assertRecord(payload, 'signer confirmation payload');
+        validateConfirmDataPayload(payload);
         const did = this.requireId(documentId, 'Document ID');
         const code = this.requireId(signerAccessCode, 'signer-access-code');
         return this.call<ISigner>('Failed to confirm signer data', () =>
@@ -569,6 +607,22 @@ export class SignerDocumentsResource extends BaseResource {
         if (!Buffer.isBuffer(image) || image.byteLength === 0) {
             throw new ValidationError('image buffer is required');
         }
+        assertRecord(options, 'signature upload options');
+        if (
+            options.imageType !== undefined
+            && (typeof options.imageType !== 'string' || !options.imageType.trim())
+        ) {
+            throw new ValidationError('imageType must be a non-empty string');
+        }
+        if (options.reuse !== undefined && typeof options.reuse !== 'boolean') {
+            throw new ValidationError('reuse must be a boolean');
+        }
+        if (
+            options.contentType !== undefined
+            && (typeof options.contentType !== 'string' || !options.contentType.trim())
+        ) {
+            throw new ValidationError('contentType must be a non-empty string');
+        }
         return this.callVoid('Failed to upload signer signature', () =>
             this.http.post('/signature', image, {
                 params: cleanParams({
@@ -590,8 +644,8 @@ export class SignerDocumentsResource extends BaseResource {
      * custom signing UI). Returns bytes, not JSON.
      *
      * @param signerAccessCode - The signer's access code, from their signing link.
-     * @param imageType - Which image to fetch: `'signature'` (default) or
-     *   `'initial'`.
+     * @param imageType - Server-defined image category; known values are
+     *   `'signature'` (default) and `'initial'`.
      * @returns The image bytes as a Node `Buffer` (PNG by default).
      * @throws {ValidationError} If `signerAccessCode` is missing.
      * @throws {ApiError} `404` if the signer has no such image stored; `401`/`403`
@@ -605,9 +659,12 @@ export class SignerDocumentsResource extends BaseResource {
      */
     async downloadSignature(
         signerAccessCode: string,
-        imageType: 'signature' | 'initial' = 'signature',
+        imageType: SignatureImageType = 'signature',
     ): Promise<Buffer> {
         const code = this.requireId(signerAccessCode, 'signer-access-code');
+        if (typeof imageType !== 'string' || !imageType.trim()) {
+            throw new ValidationError('imageType must be a non-empty string');
+        }
         return this.callBinary('Failed to download signer signature', () =>
             this.http.get<ArrayBuffer>(`/signature/${this.pathSegment(imageType, 'Image type')}`, {
                 responseType: 'arraybuffer',
@@ -622,9 +679,15 @@ export class SignerDocumentsResource extends BaseResource {
      *
      * The entry point for a custom signing UI: resolves the access code to the
      * document, its pages, and the {@link ISignFieldEntry}-addressable items the
-     * signer must fill. Before terms are accepted the server may answer `409`, so
-     * call {@link SignerDocumentsResource.acceptTerms} first (or pass
-     * `hasAcceptedTerms: true` once accepted).
+     * signer must fill. The server answers `409` while the document is still
+     * being prepared; retry that response with backoff. For ordinary signers,
+     * `hasAcceptedTerms: true` records terms acceptance on this request.
+     * Digital-certificate signers must confirm their data and accept terms
+     * before this request; otherwise it returns `400`. The query flag is too
+     * late to open that gate, so use `confirmData(..., { has_accepted_terms:
+     * true })` or `acceptTerms()` first.
+     * The API records this read as the signer having viewed the assignment, so
+     * the SDK never automatically replays this particular `GET` after a `429`.
      *
      * @param signerAccessCode - The signer's access code, from their signing link.
      * @param hasAcceptedTerms - Maps to the `has_accepted_terms` query param
@@ -636,8 +699,9 @@ export class SignerDocumentsResource extends BaseResource {
      *   from which the `itemId` / `fieldId` / `pageId` values for
      *   {@link SignerDocumentsResource.sign} are read.
      * @throws {ValidationError} If `signerAccessCode` is missing.
-     * @throws {ApiError} `401`/`403` if the access code is invalid or expired;
-     *   `409` if terms have not yet been accepted.
+     * @throws {ApiError} `400` when DigitalCertificate identity/terms are not
+     *   confirmed; `401`/`403` if the access code is invalid or expired; `409`
+     *   while the document is still being prepared.
      *
      * @example
      * ```ts
@@ -650,6 +714,9 @@ export class SignerDocumentsResource extends BaseResource {
         hasAcceptedTerms?: boolean,
     ): Promise<IDocumentDetailsResponse> {
         const code = this.requireId(signerAccessCode, 'signer-access-code');
+        if (hasAcceptedTerms !== undefined && typeof hasAcceptedTerms !== 'boolean') {
+            throw new ValidationError('hasAcceptedTerms must be a boolean');
+        }
         return this.call<IDocumentDetailsResponse>('Failed to fetch signer assignment', () =>
             this.http.get('/sign', {
                 params: cleanParams({
@@ -669,6 +736,9 @@ export class SignerDocumentsResource extends BaseResource {
      * the request body, each entry addressing one item resolved from
      * {@link SignerDocumentsResource.getAssignment}. The access code
      * authenticates via the `signer-access-code` query param.
+     * Virtual signers must call {@link SignerDocumentsResource.confirmData}
+     * first. Digital Certificate signers cannot use this endpoint; use the
+     * certificate start/complete API flow instead.
      *
      * @param documentId - The document being signed.
      * @param assignmentId - The assignment within that document.
@@ -699,13 +769,37 @@ export class SignerDocumentsResource extends BaseResource {
         const did = this.requireId(documentId, 'Document ID');
         const aid = this.requireId(assignmentId, 'Assignment ID');
         const code = this.requireId(signerAccessCode, 'signer-access-code');
-        if (!Array.isArray(entries) || entries.length === 0) {
-            throw new ValidationError('entries must be a non-empty array');
+        if (
+            !Array.isArray(entries)
+            || entries.length === 0
+            || entries.some(
+                (entry) =>
+                    !entry
+                    || typeof entry !== 'object'
+                    || Array.isArray(entry)
+                    || typeof entry.itemId !== 'string'
+                    || !entry.itemId.trim()
+                    || typeof entry.fieldId !== 'string'
+                    || !entry.fieldId.trim()
+                    || typeof entry.pageId !== 'string'
+                    || !entry.pageId.trim()
+                    || typeof entry.value !== 'string',
+            )
+        ) {
+            throw new ValidationError(
+                'entries must contain itemId, fieldId, pageId, and string value',
+            );
         }
+        const body = entries.map((entry) => ({
+            itemId: entry.itemId,
+            fieldId: entry.fieldId,
+            pageId: entry.pageId,
+            value: entry.value,
+        }));
         return this.call<Record<string, unknown>>('Failed to sign document', () =>
             this.http.post(
                 `/documents/${this.pathSegment(did, 'Document ID')}/assignments/${this.pathSegment(aid, 'Assignment ID')}`,
-                entries,
+                body,
                 { params: { 'signer-access-code': code } },
             ),
         );
@@ -752,7 +846,9 @@ export class SignerDocumentsResource extends BaseResource {
         const did = this.requireId(documentId, 'Document ID');
         const aid = this.requireId(assignmentId, 'Assignment ID');
         const code = this.requireId(signerAccessCode, 'signer-access-code');
-        if (!declineReason) throw new ValidationError('declineReason is required');
+        if (typeof declineReason !== 'string' || !declineReason.trim()) {
+            throw new ValidationError('declineReason is required');
+        }
         return this.callVoid('Failed to decline assignment', () =>
             this.http.put(
                 `/documents/${this.pathSegment(did, 'Document ID')}/assignments/${this.pathSegment(aid, 'Assignment ID')}/reject`,
@@ -760,5 +856,32 @@ export class SignerDocumentsResource extends BaseResource {
                 { params: { 'signer-access-code': code } },
             ),
         );
+    }
+}
+
+function validateConfirmDataPayload(payload: ILegacyConfirmSignerDataPayload): void {
+    for (const key of ['full_name', 'government_id'] as const) {
+        if (payload[key] !== undefined && typeof payload[key] !== 'string') {
+            throw new ValidationError(`${key} must be a string`);
+        }
+    }
+    if (
+        payload.email !== undefined
+        && (typeof payload.email !== 'string' || !EMAIL_RE.test(payload.email))
+    ) {
+        throw new ValidationError('email must be a valid email address');
+    }
+    if (
+        payload.whatsapp_phone_number !== undefined
+        && (typeof payload.whatsapp_phone_number !== 'string'
+            || !E164_RE.test(payload.whatsapp_phone_number))
+    ) {
+        throw new ValidationError('whatsapp_phone_number must use E.164 format');
+    }
+    if (
+        payload.has_accepted_terms !== undefined
+        && typeof payload.has_accepted_terms !== 'boolean'
+    ) {
+        throw new ValidationError('has_accepted_terms must be a boolean');
     }
 }

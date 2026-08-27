@@ -2,10 +2,8 @@
  * Rate-limit retry helpers.
  *
  * Assinafy deployments may return standard `Retry-After` or
- * `X-Rate-Limit-Reset` hints on a 429, but the current public OpenAPI contract
- * does not guarantee either header or a fixed requests-per-minute quota. The
- * client honors a usable hint when present and otherwise applies bounded
- * exponential backoff.
+ * `X-Rate-Limit-Reset` hints on a 429. The client honors a usable hint when
+ * present and otherwise applies bounded exponential backoff.
  */
 
 import { readHeader } from './headers';
@@ -18,15 +16,17 @@ import { readHeader } from './headers';
 export function retryDelayFromHeaders(headers: Record<string, unknown> | undefined): number | undefined {
     const retryAfter = readHeader(headers, 'retry-after');
     if (retryAfter !== undefined) {
-        const seconds = Number(retryAfter);
-        if (Number.isFinite(seconds)) return Math.max(0, seconds * 1000);
-        const date = Date.parse(retryAfter);
-        if (!Number.isNaN(date)) return Math.max(0, date - Date.now());
+        const value = retryAfter.trim();
+        if (/^\d+$/.test(value)) return Number(value) * 1000;
+        if (value && !/^[+-]?\d+(?:\.\d+)?$/.test(value)) {
+            const date = Date.parse(value);
+            if (!Number.isNaN(date)) return Math.max(0, date - Date.now());
+        }
     }
     const reset = readHeader(headers, 'x-rate-limit-reset');
     if (reset !== undefined) {
-        const seconds = Number(reset);
-        if (Number.isFinite(seconds)) return Math.max(0, seconds * 1000);
+        const value = reset.trim();
+        if (/^\d+$/.test(value)) return Number(value) * 1000;
     }
     return undefined;
 }

@@ -1,11 +1,12 @@
 import type { AxiosInstance, AxiosResponse, AxiosResponseHeaders } from 'axios';
 import { ApiError, AssinafyError, ValidationError } from '../errors';
 import type { Logger, PaginatedResult, PaginationMeta } from '../types';
-import { createNoopLogger, handleAssinafyResponse, toSdkError } from '../utils';
+import { createNoopLogger, createSafeLogger, handleAssinafyResponse, toSdkError } from '../utils';
 import { readHeader } from '../support/headers';
 import { encodePathSegment } from '../support/path';
 import { buildUploadForm, loadSource, MAX_UPLOAD_BYTES, validateUpload } from './upload';
 import type { DocumentUploadSource } from './upload';
+import { applySdkTransportDefaults } from '../support/transport';
 
 /** Content-Type required by the document and template upload endpoints. */
 const MULTIPART_CONTENT_TYPE = 'multipart/form-data';
@@ -23,11 +24,16 @@ const MULTIPART_CONTENT_TYPE = 'multipart/form-data';
  * one of `call` / `callVoid` / `callBinary` / `callList` instead.
  */
 export abstract class BaseResource {
+    protected readonly logger: Logger;
+
     constructor(
         protected readonly http: AxiosInstance,
         protected readonly defaultAccountId?: string,
-        protected readonly logger: Logger = createNoopLogger(),
-    ) {}
+        logger: Logger = createNoopLogger(),
+    ) {
+        this.logger = createSafeLogger(logger);
+        applySdkTransportDefaults(http);
+    }
 
     /** Resolve the effective account id, throwing if none is available. */
     protected accountId(explicit?: string): string {
@@ -61,7 +67,7 @@ export abstract class BaseResource {
     /** Execute an HTTP call and return the unwrapped envelope body. */
     protected async call<T>(label: string, request: RequestFn): Promise<T> {
         try {
-            const response = await request();
+            const response = assertSuccessful(await request());
             return handleAssinafyResponse<T>(response.data);
         } catch (err) {
             throw toSdkError(err, label);
@@ -81,10 +87,7 @@ export abstract class BaseResource {
     /** Execute an HTTP call that returns no body (DELETE / 204). */
     protected async callVoid(label: string, request: RequestFn): Promise<void> {
         try {
-            const response = await request();
-            if (response.status < 200 || response.status >= 300) {
-                throw new ValidationError(`${label}: HTTP ${response.status}`);
-            }
+            const response = assertSuccessful(await request());
             // Validate an Assinafy status/message envelope when present. This
             // also normalizes acknowledgement responses that intentionally omit
             // `data` to `void`.
@@ -100,7 +103,7 @@ export abstract class BaseResource {
         request: () => Promise<AxiosResponse<ArrayBuffer>>,
     ): Promise<Buffer> {
         try {
-            const response = await request();
+            const response = assertSuccessful(await request());
             return Buffer.from(response.data);
         } catch (err) {
             throw toSdkError(err, label);
@@ -147,7 +150,7 @@ export abstract class BaseResource {
     /** Execute a paginated list call and attach meta from `X-Pagination-*` headers. */
     protected async callList<T>(label: string, request: RequestFn): Promise<PaginatedResult<T>> {
         try {
-            const response = await request();
+            const response = assertSuccessful(await request());
             const unwrapped = handleAssinafyResponse<T[] | { data?: T[] }>(response.data);
             let data: T[];
             if (Array.isArray(unwrapped)) {
@@ -168,6 +171,13 @@ export abstract class BaseResource {
 }
 
 type RequestFn = () => Promise<AxiosResponse>;
+
+function assertSuccessful<T extends AxiosResponse>(response: T): T {
+    if (response.status < 200 || response.status >= 300) {
+        throw ApiError.fromResponse(response.status, response.data);
+    }
+    return response;
+}
 
 function parsePaginationMeta(
     headers: AxiosResponseHeaders | Record<string, unknown> | undefined,

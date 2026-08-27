@@ -1,11 +1,19 @@
 import { ValidationError } from '../errors';
 import type { IDocumentStatsParams } from '../types';
-import { cleanParams } from '../utils';
+import { assertRecord, cleanParams } from '../utils';
 
 const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
 
 /** Validate and serialize the query shared by account and current-user KPI routes. */
 export function documentStatsParams(params: IDocumentStatsParams = {}): Record<string, unknown> {
+    assertRecord(params, 'statistics parameters');
+    if (
+        params.granularity !== undefined
+        && params.granularity !== 'monthly'
+        && params.granularity !== 'daily'
+    ) {
+        throw new ValidationError('granularity must be monthly or daily');
+    }
     if (params.granularity === 'daily' && !params.month) {
         throw new ValidationError('month is required when granularity is daily');
     }

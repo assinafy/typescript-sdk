@@ -30,6 +30,58 @@ describe('WorkspaceResource', () => {
         await expect(workspaceResource.delete('')).rejects.toThrow(ValidationError);
     });
 
+    test('rejects malformed payload and option objects with ValidationError', async () => {
+        await expect(workspaceResource.create(null as never)).rejects.toBeInstanceOf(
+            ValidationError,
+        );
+        await expect(workspaceResource.update('w1', null as never)).rejects.toBeInstanceOf(
+            ValidationError,
+        );
+        await expect(workspaceResource.delete('w1', null as never)).rejects.toBeInstanceOf(
+            ValidationError,
+        );
+        const malformedPayloads = [
+            { name: 42 },
+            { name: 'Workspace', notification_sender_type: 'Other' },
+            { name: 'Workspace', primary_color: 42 },
+        ];
+        for (const payload of malformedPayloads) {
+            await expect(workspaceResource.create(payload as never)).rejects.toBeInstanceOf(
+                ValidationError,
+            );
+        }
+        await expect(
+            workspaceResource.update('w1', { secondary_color: false } as never),
+        ).rejects.toBeInstanceOf(ValidationError);
+    });
+
+    test('rejects malformed workspace colours before create or update requests', async () => {
+        let calls = 0;
+        const ax = {
+            ...mockAxios,
+            post: async () => {
+                calls++;
+                return { data: { status: 200, data: { id: 'w1' } } };
+            },
+            put: async () => {
+                calls++;
+                return { data: { status: 200, data: { id: 'w1' } } };
+            },
+        } as unknown as AxiosInstance;
+        const workspaces = new WorkspaceResource(ax);
+
+        for (const color of ['abcde', '#aabbcc', 'gg0011']) {
+            await expect(
+                workspaces.create({ name: 'Workspace', primary_color: color }),
+            ).rejects.toBeInstanceOf(ValidationError);
+            await expect(
+                workspaces.update('w1', { secondary_color: color }),
+            ).rejects.toBeInstanceOf(ValidationError);
+        }
+
+        expect(calls).toBe(0);
+    });
+
     test('create POSTs to /accounts and forwards the payload', async () => {
         let url = '';
         let body: unknown;
@@ -44,6 +96,7 @@ describe('WorkspaceResource', () => {
                         data: {
                             id: 'w1',
                             name: 'Acme Legal',
+                            notification_sender_type: 'Account',
                             primary_color: 'ff0066',
                             secondary_color: '0066ff',
                             created_at: '2026-05-12T18:05:11Z',
@@ -54,13 +107,21 @@ describe('WorkspaceResource', () => {
         } as unknown as AxiosInstance;
         const ws = await new WorkspaceResource(ax).create({
             name: 'Acme Legal',
+            notification_sender_type: 'Account',
+            primary_color: 'ff0066',
+            secondary_color: '0066ff',
+            internal_secret: 'do-not-send',
+        } as never);
+        expect(url).toBe('/accounts');
+        expect(body).toEqual({
+            name: 'Acme Legal',
+            notification_sender_type: 'Account',
             primary_color: 'ff0066',
             secondary_color: '0066ff',
         });
-        expect(url).toBe('/accounts');
-        expect(body).toEqual({ name: 'Acme Legal', primary_color: 'ff0066', secondary_color: '0066ff' });
         expect(ws.id).toBe('w1');
         expect(ws.name).toBe('Acme Legal');
+        expect(ws.notification_sender_type).toBe('Account');
     });
 
     test('list GETs /accounts and returns { data }', async () => {
@@ -179,6 +240,45 @@ describe('WorkspaceResource', () => {
         ).rejects.toBeInstanceOf(ValidationError);
     });
 
+    test('uploadLogo infers supported image MIME types and uses a binary fallback', async () => {
+        const uploads: Array<{ fileName: string; contentType: string }> = [];
+        const ax = {
+            ...mockAxios,
+            post: async (_url: string, body: FormData) => {
+                const file = body.get('file') as File;
+                uploads.push({ fileName: file.name, contentType: file.type });
+                return { status: 200, data: { status: 200, message: '' } };
+            },
+        } as unknown as AxiosInstance;
+        const workspaces = new WorkspaceResource(ax);
+
+        for (const fileName of [
+            'logo.JPG',
+            'logo.jpeg',
+            'logo.gif',
+            'logo.webp',
+            'logo.svg',
+            'logo.bin',
+        ]) {
+            await workspaces.uploadLogo('w1', { buffer: Buffer.from([1]), fileName });
+        }
+        await workspaces.uploadLogo('w1', {
+            buffer: Buffer.from([1]),
+            fileName: 'logo.data',
+            contentType: 'image/avif',
+        });
+
+        expect(uploads).toEqual([
+            { fileName: 'logo.JPG', contentType: 'image/jpeg' },
+            { fileName: 'logo.jpeg', contentType: 'image/jpeg' },
+            { fileName: 'logo.gif', contentType: 'image/gif' },
+            { fileName: 'logo.webp', contentType: 'image/webp' },
+            { fileName: 'logo.svg', contentType: 'image/svg+xml' },
+            { fileName: 'logo.bin', contentType: 'application/octet-stream' },
+            { fileName: 'logo.data', contentType: 'image/avif' },
+        ]);
+    });
+
     test('deleteLogo calls the documented account logo endpoint', async () => {
         let url = '';
         const ax = {
@@ -200,8 +300,13 @@ describe('WorkspaceResource', () => {
                 documents_uploaded: 2,
                 documents_sent: 2,
                 signature_requests: 3,
-                signature_requests_email: 2,
-                signature_requests_whatsapp: 1,
+                signature_requests_notification_email: 2,
+                signature_requests_notification_whatsapp: 1,
+                signature_requests_notification_bypass: 0,
+                signature_requests_verification_email: 2,
+                signature_requests_verification_whatsapp: 1,
+                signature_requests_verification_bypass: 0,
+                signature_requests_verification_digital_certificate: 0,
                 signature_requests_viewed: 2,
                 signature_requests_completed: 1,
                 documents_certified: 1,
@@ -235,9 +340,18 @@ describe('WorkspaceResource', () => {
                 return { data: { status: 200, data: { id: 'w1', name: 'Renamed' } } };
             },
         } as unknown as AxiosInstance;
-        await new WorkspaceResource(ax).update('w1', { name: 'Renamed', primary_color: 'ff0066' });
+        await new WorkspaceResource(ax).update('w1', {
+            name: 'Renamed',
+            notification_sender_type: 'Account',
+            primary_color: 'ff0066',
+            internal_secret: 'do-not-send',
+        } as never);
         expect(url).toBe('/accounts/w1');
-        expect(body).toEqual({ name: 'Renamed', primary_color: 'ff0066' });
+        expect(body).toEqual({
+            name: 'Renamed',
+            notification_sender_type: 'Account',
+            primary_color: 'ff0066',
+        });
     });
 
     test('delete forwards { force: true } in the request body config', async () => {
@@ -267,5 +381,20 @@ describe('WorkspaceResource', () => {
         } as unknown as AxiosInstance;
         await new WorkspaceResource(ax).delete('w1');
         expect(config).toBeUndefined();
+    });
+
+    test('delete rejects non-boolean force values before requesting', async () => {
+        let calls = 0;
+        const ax = {
+            ...mockAxios,
+            delete: async () => {
+                calls++;
+                return { status: 200 };
+            },
+        } as unknown as AxiosInstance;
+        await expect(
+            new WorkspaceResource(ax).delete('w1', { force: 'false' as never }),
+        ).rejects.toBeInstanceOf(ValidationError);
+        expect(calls).toBe(0);
     });
 });

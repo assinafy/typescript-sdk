@@ -1,11 +1,9 @@
 # API coverage
 
-This ledger maps the official Assinafy OpenAPI document to the public SDK API.
-It was reconciled on 2026-08-06 against
-[`GET /v1/docs/openapi.json`](https://api.assinafy.com.br/v1/docs/openapi.json):
-68 paths, 89 HTTP operations, and 37 component schemas. The audited response's
-SHA-256 digest is
-`7e5957082002e8e96c5abc2cadf7b4b463eaa5bd61b76e26f64b90a8b922088c`.
+This ledger maps the official
+[`GET /v1/docs/openapi.json`](https://api.assinafy.com.br/v1/docs/openapi.json)
+contract to the public SDK API: 67 paths, 89 HTTP operations, and 39 component
+schemas.
 
 All paths below include the `/v1` prefix shown by the OpenAPI document. The
 SDK's default `baseUrl` already ends in `/v1`, so resource implementations use
@@ -14,10 +12,9 @@ the corresponding relative path without repeating that prefix.
 Status meanings:
 
 - **Covered** — a public, typed SDK method sends the operation.
-- **URL helper** — the operation is a browser redirect/callback; the SDK builds
-  its absolute URL instead of following it inside the server process.
-- **Live extension** — verified route retained for compatibility, but absent
-  from the current OpenAPI path set and excluded from the 89-operation total.
+- **Compatibility extension** — route retained for existing integrations but
+  absent from the current OpenAPI path set and excluded from the 89-operation
+  total.
 
 ## Accounts — 10/10
 
@@ -46,12 +43,10 @@ Status meanings:
 | `PUT` | `/v1/documents/{documentId}/assignments/{assignmentId}/reset-expiration` | `client.assignments.resetExpiration(documentId, assignmentId, expiresAt)` | Covered |
 | `GET` | `/v1/documents/{documentId}/assignments/{assignmentId}/whatsapp-notifications` | `client.assignments.listWhatsAppNotifications(documentId, assignmentId)` | Covered |
 
-## Authentication — 11/11
+## Authentication — 9/9
 
 | Method | Path | SDK method | Status |
 | --- | --- | --- | --- |
-| `GET` | `/v1/auth/authenticate` | `client.auth.getSocialLoginUrl(authClient?)` | URL helper |
-| `GET` | `/v1/login-callback` | `client.auth.getSocialLoginCallbackUrl()` | URL helper |
 | `POST` | `/v1/login` | `client.auth.login(email, password)` | Covered |
 | `PUT` | `/v1/authentication/request-password-reset` | `client.auth.requestPasswordReset(email)` | Covered |
 | `PUT` | `/v1/authentication/reset-password` | `client.auth.resetPassword(payload)` | Covered |
@@ -150,15 +145,17 @@ an optional fourth access-code argument only for legacy compatibility.
 | --- | --- | --- | --- |
 | `GET` | `/v1/accounts/{accountId}/templates` | `client.templates.list(params?, accountId?)` | Covered |
 
-Five additional live routes are documented separately under
-[Live template extensions](#live-template-extensions).
+Five additional routes are documented separately under
+[Template compatibility routes](#template-compatibility-routes).
 
-## Users — 2/2
+## Users — 4/4
 
 | Method | Path | SDK method | Status |
 | --- | --- | --- | --- |
 | `GET` | `/v1/users/self` | `client.users.getCurrent()` | Covered |
 | `GET` | `/v1/users/self/stats` | `client.users.getStats(params?)` | Covered |
+| `GET` | `/v1/users/self/notification-preferences` | `client.users.getNotificationPreferences()` | Covered |
+| `PUT` | `/v1/users/self/notification-preferences` | `client.users.updateNotificationPreferences(preferences)` | Covered |
 
 ## Webhooks — 6/6
 
@@ -171,19 +168,19 @@ Five additional live routes are documented separately under
 | `GET` | `/v1/accounts/{accountId}/webhooks` | `client.webhooks.listDispatches(params?, accountId?)` | Covered |
 | `POST` | `/v1/accounts/{accountId}/webhooks/{historyId}/retry` | `client.webhooks.retryDispatch(historyId, accountId?)` | Covered |
 
-## Live template extensions
+## Template compatibility routes
 
-These routes are available in the live API and covered by the SDK, but they do
-not appear in the 2026-08-06 OpenAPI path set. They are intentionally excluded
-from the official 89-operation coverage count.
+These routes are available to existing integrations but do not appear in the
+current OpenAPI path set. They are excluded from the official 89-operation
+coverage count.
 
-| Method | Live path | SDK method | Status |
+| Method | Path | SDK method | Status |
 | --- | --- | --- | --- |
-| `POST` | `/v1/accounts/{accountId}/templates` | `client.templates.create(source, options?)` | Live extension |
-| `GET` | `/v1/accounts/{accountId}/templates/{templateId}` | `client.templates.get(templateId, accountId?)` | Live extension |
-| `PUT` | `/v1/accounts/{accountId}/templates/{templateId}` | `client.templates.update(templateId, payload, accountId?)` | Live extension |
-| `DELETE` | `/v1/accounts/{accountId}/templates/{templateId}` | `client.templates.delete(templateId, accountId?)` | Live extension |
-| `GET` | `/v1/accounts/{accountId}/templates/{templateId}/pages/{pageId}/download` | `client.templates.downloadPage(templateId, pageId, accountId?)` | Live extension |
+| `POST` | `/v1/accounts/{accountId}/templates` | `client.templates.create(source, options?)` | Compatibility extension |
+| `GET` | `/v1/accounts/{accountId}/templates/{templateId}` | `client.templates.get(templateId, accountId?)` | Compatibility extension |
+| `PUT` | `/v1/accounts/{accountId}/templates/{templateId}` | `client.templates.update(templateId, payload, accountId?)` | Compatibility extension |
+| `DELETE` | `/v1/accounts/{accountId}/templates/{templateId}` | `client.templates.delete(templateId, accountId?)` | Compatibility extension |
+| `GET` | `/v1/accounts/{accountId}/templates/{templateId}/pages/{pageId}/download` | `client.templates.downloadPage(templateId, pageId, accountId?)` | Compatibility extension |
 
 ## SDK conveniences
 
@@ -191,8 +188,9 @@ These helpers compose or derive official operations and therefore do not add to
 the endpoint count:
 
 - `client.uploadAndRequestSignatures(options)` validates the complete input,
-  uploads a document, waits for metadata readiness, reuses or creates signers,
-  creates an assignment, and optionally fetches the final document snapshot.
+  uploads a document, reuses or creates signers, creates its virtual assignment
+  while metadata may still be processing, and optionally polls before returning
+  current document details.
 - `client.documents.waitUntilReady(documentId, options?)` polls the official
   document-details operation with terminal-state and timeout handling.
 - `client.documents.isFullySigned(documentId)` and
@@ -204,6 +202,6 @@ the endpoint count:
 
 For request and response payload definitions, use the exported TypeScript
 interfaces and each method's JSDoc examples together with the
-[official API reference](https://api.assinafy.com.br/v1/docs). Contract
-differences that require compatibility handling are recorded in
+[official API reference](https://api.assinafy.com.br/v1/docs). Deployment
+variants that require compatibility handling are recorded in
 [COMPATIBILITY.md](COMPATIBILITY.md).

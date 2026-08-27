@@ -1,27 +1,90 @@
 # API compatibility
 
 The SDK targets the official Assinafy contract at
-[`/v1/docs/openapi.json`](https://api.assinafy.com.br/v1/docs/openapi.json) and
-keeps compatibility behavior narrow, explicit, and typed. This document records
-the differences observed during the 2026-08-06 contract and sandbox audit. It
-contains no credentials, account identifiers, signer data, or reusable test
-artifacts. The audited OpenAPI response's SHA-256 digest is
-`7e5957082002e8e96c5abc2cadf7b4b463eaa5bd61b76e26f64b90a8b922088c`.
+[`/v1/docs/openapi.json`](https://api.assinafy.com.br/v1/docs/openapi.json).
+New integrations should send the published request shape. Compatibility paths
+are narrow, typed, and used only when a caller selects one or when a validation
+response unambiguously requests an older shape.
 
-The governing rule is simple: new integrations should send the published
-contract. A compatibility path is used only when the caller selects it
-explicitly or the server returns a validation error that unambiguously requests
-the older shape.
+## Host availability
 
-## Template management live extensions
+The production contract includes these account and authenticated-user routes:
 
-The current OpenAPI document contains only:
+```text
+GET, POST          /v1/accounts
+GET, PUT, DELETE   /v1/accounts/{accountId}
+GET, POST, DELETE  /v1/accounts/{accountId}/logo
+GET                /v1/accounts/{accountId}/theme
+GET                /v1/accounts/{accountId}/stats
+GET                /v1/users/self
+GET, PUT           /v1/users/self/notification-preferences
+GET                /v1/users/self/stats
+```
+
+Sandbox deployments can return `404` for user statistics, account statistics,
+or notification preferences while still accepting the production methods on
+the production host. The SDK keeps the official paths and response types. A
+sandbox `404` does not cause the client to route a request elsewhere.
+
+Two browser URL helpers used by older deployments remain available:
+
+```text
+GET /v1/auth/authenticate
+GET /v1/login-callback
+```
+
+They map to `auth.getSocialLoginUrl()` and
+`auth.getSocialLoginCallbackUrl()` and are not part of the official
+89-operation total.
+
+The SDK also includes the production contract additions for:
+
+- the `pades` document artifact;
+- `DigitalCertificate` verification on assignment and template-document
+  creation and cost estimation;
+- typed `display_settings` for collect fields;
+- signer `government_id` updates;
+- signature-image `reuse`;
+- the documented `400` response from `GET /sign`; and
+- the dedicated `SignerSelf` response fields.
+
+Older signer-self responses can omit `has_signature`, `has_initial`, and
+`is_signature_reusable`; assignment signers can omit `notification_history`.
+Those fields are optional in the SDK response types.
+
+`DocumentStatsRow` separates notification-channel counters from verification
+method counters. Notification counters are not mutually exclusive.
+`signature_requests_verification_{email,whatsapp,bypass,digital_certificate}`
+are mutually exclusive and sum to `signature_requests`. Older unsuffixed email
+and WhatsApp counters remain optional.
+
+## Assignment list account context
+
+`GET /v1/assignments` requires the workspace in the camel-case `accountId`
+query parameter even though most account-scoped routes place it in the path.
+The SDK obtains it from the optional method argument or the client default:
+
+```ts
+const page = await client.assignments.list(
+  { page: 1, 'per-page': 20 },
+  'account-id',
+);
+// Request query: ?page=1&per-page=20&accountId=account-id
+// Response: { data: IAssignment[], meta?: PaginationMeta }
+```
+
+If neither source supplies an account ID, the SDK throws `ValidationError`
+before making the request.
+
+## Template management extensions
+
+The official OpenAPI document contains only:
 
 ```text
 GET /v1/accounts/{accountId}/templates
 ```
 
-The live API additionally exposes five routes used by existing integrations:
+Existing integrations can also use these routes:
 
 ```text
 POST   /v1/accounts/{accountId}/templates
@@ -31,16 +94,9 @@ DELETE /v1/accounts/{accountId}/templates/{templateId}
 GET    /v1/accounts/{accountId}/templates/{templateId}/pages/{pageId}/download
 ```
 
-They map to `client.templates.create`, `get`, `update`, `delete`, and
-`downloadPage`. They are documented and tested as **live compatibility
-extensions**, not counted as official OpenAPI operations. Their absence from a
-future schema is not by itself grounds for removal; removal requires a live
-regression test, a deprecation period, and a major-version decision.
-
-Template status examples have also differed in casing (`Uploaded`/`Ready` in
-live extension responses versus `uploaded`/`ready` in the published schema).
-The exported type intentionally remains `string`. Applications should normalize
-before comparing:
+They map to `templates.create`, `get`, `update`, `delete`, and `downloadPage`
+and are excluded from the official operation count. Template status casing can
+vary, so normalize before branching:
 
 ```ts
 if (template.status.toLowerCase() === 'ready') {
@@ -48,9 +104,13 @@ if (template.status.toLowerCase() === 'ready') {
 }
 ```
 
+A page object's `download_url` is protected by account authentication. Prefer
+`templates.downloadPage(templateId, pageId)` so the SDK attaches credentials
+and returns the JPEG bytes as a `Buffer`.
+
 ## Public send-token request
 
-The official operation is:
+The official operation sends an email body:
 
 ```http
 PUT /v1/public/documents/{documentId}/send-token
@@ -59,13 +119,11 @@ Content-Type: application/json
 { "email": "signer@example.com" }
 ```
 
-That is the default SDK call:
-
 ```ts
 await client.documents.sendToken(documentId, 'signer@example.com');
 ```
 
-Some older environments require `{ recipient, channel }`. The explicit
+Older environments can require `{ recipient, channel }`. The explicit
 three-argument overload sends that shape:
 
 ```ts
@@ -73,121 +131,142 @@ await client.documents.sendToken(documentId, '+5511999990000', 'whatsapp');
 ```
 
 For a two-argument call, the SDK starts with `{ email }` and retries the older
-email shape only when the API's validation body specifically says that
-`recipient` or `channel` is required. Unrelated errors are never swallowed or
-retried under this compatibility rule.
+email shape only when the validation response names `recipient` or `channel` as
+required. Other errors are returned unchanged.
 
-## Document tag identifiers
+## Document tags
 
-The current OpenAPI request schemas for replacing and attaching document tags
-define `tags` as an array of existing **tag IDs**. The SDK follows that contract:
+Replace and attach requests require existing tag IDs:
 
 ```ts
-const tag = await client.tags.create({ name: 'Contracts' });
+const tag = await client.tags.create({ name: 'Contracts', color: '#ff8800' });
 await client.documents.addTags(documentId, [tag.id]);
 await client.documents.replaceTags(documentId, [tag.id]);
+const result = await client.documents.detachTag(documentId, tag.id);
+// result → { detached: true }
 ```
 
-Older environments have accepted tag names and auto-created unknown names. The
-wire type remains `string[]` so those deployments are not broken, but name-based
-attachment is a legacy extension and is not the documented default. Production
-code should create/list tags first and submit IDs.
+The API accepts a tag color with or without a leading `#` and returns the
+stored six-character value without it. Unknown tag names are not the normal
+attachment input; create or list the tag first and send its ID. An empty array
+passed to `replaceTags` detaches every tag.
 
-## Account branding fields on create and update
+## Account branding fields
 
-The official `Account` response schema includes `primary_color` and
-`secondary_color`, while the current create/update request schemas list only
-`name` and `notification_sender_type`. The sandbox also accepts the two color
-fields on create/update, and the SDK preserves them for existing integrations.
-They must be six hexadecimal characters without a leading `#`.
+The official account create/update request schemas define `name` and
+`notification_sender_type`. The response includes `primary_color` and
+`secondary_color`. Some deployments also accept those two color fields on
+create/update, so the SDK retains them as optional inputs. Account colors must
+be six hexadecimal characters without a leading `#`.
 
-The sandbox audited on 2026-08-06 rejects the official optional
-`notification_sender_type` field with `400` on account creation, while accepting
-the same field on update. The SDK still exposes and sends it because it is part
-of the production OpenAPI contract. The live audit creates its prerequisite
-workspace with a name only, then tests the field independently via update so
-the create-side deployment lag cannot prevent the rest of the suite.
+Some sandbox plans reject `notification_sender_type` during account creation
+while accepting it on update. If that occurs, create with `{ name }` and apply
+the sender type in a separate update. `getTheme`, `downloadLogo`, `uploadLogo`,
+and `deleteLogo` are official operations.
 
-The branding read and file operations—`getTheme`, `downloadLogo`, `uploadLogo`,
-and `deleteLogo`—are official operations and are not extensions.
+`workspaces.delete(accountId, { force: true })` requests cancellation of an
+active paid subscription as part of account deletion. It is not a general
+override for unrelated deletion restrictions.
 
-## Field-definition request extensions
+## Field-definition extensions
 
 The official field-create body defines `type`, `name`, nullable `regex`, and
-`is_required`; the update body defines `name`, nullable `regex`, and
-`is_active`. The audited sandbox also accepts `is_active` on create and
-`type`/`is_required` on update. Those three properties remain typed as explicit
-live extensions so existing integrations keep working. New code should prefer
-the operation-specific official fields.
+`is_required`; update defines `name`, nullable `regex`, and `is_active`. The SDK
+also retains `is_active` on create and `type` or `is_required` on update for
+deployments that accept them. New code should prefer the operation-specific
+official fields.
 
-The field-validation schemas also omit the `signer-access-code` query parameter
-accepted by signer-portal deployments. `fields.validate` and `validateMultiple`
-retain the typed `signerAccessCode` option for those deployments. The 2026-08-06
-full audit exercised account-authenticated validation; it did not have the
-signer-code fixture needed to re-certify this compatibility query.
+The field-validation schemas omit the `signer-access-code` query parameter used
+by some signer portals. `fields.validate()` and `validateMultiple()` retain the
+typed `signerAccessCode` option for those environments.
 
-## Retained signer request compatibility
+## Signer request extensions
 
-The current signer create/update schemas use `full_name`, `email`, and
-`whatsapp_phone_number`. The SDK also retains three older integration inputs:
+The official signer-create schema uses `full_name`, `email`, and
+`whatsapp_phone_number`. Signer update adds `government_id`, which the SDK
+normalizes to digits. Three older integration inputs remain accepted:
 
-- `phone` is a client-only alias normalized to `whatsapp_phone_number` before
-  transmission;
+- `phone` is normalized to `whatsapp_phone_number` before transmission;
 - `cpf` is normalized to digits and forwarded; and
 - create-time `metadata` is forwarded unchanged.
 
-These inputs remain source-compatible because removing them without a live
-regression would break existing consumers. They were unit/request-contract
-tested but were not separately re-probed in the 2026-08-06 disposable signer
-matrix, so new integrations should prefer only the published fields.
+New integrations should use the official create fields and `government_id` on
+update. `cpf` is not an alias for the official update field, and signer
+responses do not return it.
 
-The official signer `confirm-data` body contains only `full_name`, `email`, and
-`government_id`. Its primary overload exposes exactly those fields. A deprecated
-compatibility overload retains `whatsapp_phone_number`, which was not live-
-certified in this audit. It also preserves the pre-audit `has_accepted_terms`
-pass-through because that behavior could not be live-tested with the supplied
-fixtures. This field is outside the current contract and must **not** be treated
-as legal consent or as a substitute for the separate official `acceptTerms()`
-request. Production signer UIs should call `acceptTerms()` explicitly.
+## Digital certificate and collect placement
 
-## Signature-image media type
+`DigitalCertificate` requires the account feature, a CPF or CNPJ stored in the
+signer's `government_id`, and exactly one certificate signer in that signing
+step. It costs two credits per signer in addition to the selected notification
+cost. Notification methods remain `Email` and `Whatsapp`.
 
-`POST /signature` officially accepts a raw `image/png` body. That is the SDK's
-typed/default request and the only media type claimed by the API contract. The
-deprecated `contentType` compatibility overload is retained so older consumers
-are not silently broken, but non-PNG values were not live-certified because the
-provided audit fixtures contained no signer access code or legal-consent flow.
-Do not use the override in new integrations without verifying the target
-deployment.
+For a `collect` assignment, each field can include `display_settings`.
+`left`, `top`, `width`, `height`, and `fontSize` are required; `fontFamily` and
+`backgroundColor` are optional. Values use Assinafy's 150-DPI page-image pixels
+from the upper-left corner and must stay within the page.
 
-## Document upload metadata
+## Document responses and artifacts
 
-The multipart upload schema documents the PDF file but not the SDK's optional
-JSON `metadata` part. The audited sandbox accepted and processed a disposable
-document carrying metadata on 2026-08-06. The option remains an explicit live
-extension; callers should treat metadata keys and values as application-owned,
-opaque JSON.
+`documents.rename()` can return a document without `pages` or `assignment`.
+`IRenameDocumentResponse` therefore keeps those two properties optional while
+retaining the other document fields.
 
-## Reset-expiration null and public signer-download compatibility
+`documents.details()` returns `decline_reason` only when the access token
+belongs to the document creator. Do not infer the absence of a decline merely
+because that field is missing for another authenticated user.
 
-The reset-expiration schema declares `expires_at` as a date-time string. The SDK
-retains `null` as a compatibility value used by older integrations to clear an
-expiration, but the full live audit tested only a future timestamp; `null` is
-unit/request-contract tested and remains live-unverified.
+Owner and signer downloads accept `original`, `certificated`,
+`certificate-page`, `pades`, and `bundle`:
 
-The signer artifact download is the opposite case: OpenAPI explicitly marks it
-public and defines no `signer-access-code` query. The official three-argument SDK
-call therefore sends no code. An optional fourth code remains available for
-older deployments, but it is a compatibility query rather than part of the
-published operation.
+- `pades` exists only when the document had an ICP-Brasil certificate signer;
+- `bundle` is a ZIP containing `original`, `certificated`, and
+  `certificate-page`, plus `pades` when it exists; and
+- a generated artifact can return `404` until processing or certification is
+  complete.
+
+Document and page download URLs in JSON responses are protected. Prefer the
+typed download methods so credentials are applied and binary data is returned
+as a `Buffer`.
+
+## Signer-side preconditions
+
+The signer `confirm-data` body contains `full_name`, `email`,
+`government_id`, and `has_accepted_terms`. A certificate signer must confirm
+data and accept terms before `getAssignment()`; either send
+`has_accepted_terms: true` with `confirmData()` or call `acceptTerms()` first.
+The `has_accepted_terms` query on `getAssignment()` is too late to open that
+gate for a certificate signer.
+
+`getAssignment()` uses `GET /sign`, but the API records the signer as having
+viewed the assignment. The SDK therefore excludes this request from automatic
+HTTP 429 replay.
+
+`sign()` sends a non-empty array of `{ itemId, fieldId, pageId, value }` and is
+intended for collect assignments. A virtual signer must confirm their data
+before signing and should use `signMultiple()`, which accepts only virtual
+documents. Certificate signers cannot use `sign()`; they complete the
+certificate-start and certificate-complete browser flow.
+
+Signature image upload sends raw PNG bytes with `Content-Type: image/png`.
+`reuse: true` persists the image for later documents. A deprecated
+`contentType` option remains for older integrations, but the official contract
+supports PNG only.
+
+## Upload metadata and expiration reset
+
+Document upload accepts a PDF of at most 25 MB and 2,000 pages. The multipart
+schema documents the file; the SDK's optional `metadata` JSON part is retained
+for deployments that accept application-owned opaque metadata.
+
+The reset-expiration schema requires an ISO-8601 date-time string. The SDK also
+accepts `null` for older integrations that clear an expiration this way. Confirm
+support in the target deployment before sending `null`.
 
 ## Resend-cost response variants
 
-The published
-`POST /documents/{documentId}/assignments/{assignmentId}/signers/{signerId}/estimate-resend-cost`
-response references the full `CostEstimate` schema. A smaller resend-specific
-shape has also been observed live. The SDK therefore returns the honest union
-`IResendCostEstimate`:
+The official resend-cost response is `ICostEstimate`. Older deployments can
+return a compact branch, so the SDK exposes `IResendCostEstimate`:
 
 ```ts
 const estimate = await client.assignments.estimateResendCost(
@@ -203,83 +282,81 @@ if ('total_credits' in estimate) {
 }
 ```
 
-The SDK does not synthesize missing fields, so callers never mistake invented
-zeroes for server-provided balances.
+The SDK does not add absent balance fields.
 
-## Public-document response variants
+## Public document and signer download
 
-The official `GET /public/documents/{documentId}` response references the full
-`Document` schema. Older public responses can be compact and expose only fields
-such as `id`, `name`, `page_count`, and `created_by`. `IPublicDocumentInfo`
-requires the stable `id` and `name`, makes expanded document fields optional,
-and retains the compact fields. Check optional fields before using them:
+The official public-document response is the full `Document` schema. Compact
+responses can contain only `id`, `name`, `page_count`, and `created_by`.
+`IPublicDocumentInfo` requires `id` and `name`, keeps expanded fields optional,
+and retains the compact fields:
 
 ```ts
 const document = await client.documents.getPublic(documentId);
-if (document.pages) {
-  console.log(document.pages.length);
-} else {
-  console.log(Number(document.page_count ?? 0));
-}
+const pages = document.pages?.length ?? Number(document.page_count ?? 0);
 ```
+
+Signer artifact download is public in the OpenAPI document and requires no
+access-code query in the official three-argument call. An optional fourth code
+is available only for older deployments that require it.
 
 ## Empty acknowledgements
 
-Several write operations return a successful status/message envelope with no
-`data` field, while a few older responses use an empty array or object. Methods
-whose contract has no meaningful result resolve to `Promise<void>` and validate
-the HTTP/envelope status. This applies to token dispatch, signer OTP/terms,
-signature-image upload, bulk signer actions, and deletion operations. Success is
-not represented as a fabricated object.
+Several write operations return a success envelope without `data`; older
+responses can use an empty array or object. Methods with no meaningful result
+resolve to `Promise<void>` after validating the HTTP and envelope status. This
+applies to token dispatch, signer OTP and terms, signature-image upload, bulk
+signer actions, and deletions without a documented result. Tag deletion and
+document-tag detachment preserve `{ deleted: boolean }` and
+`{ detached: boolean }`.
+
+## WhatsApp notification buttons
+
+The published notification button schema requires `text`. Some deployments
+also return `url`, so the SDK types it as optional. A button URL can contain a
+signer access or verification value; treat it as a credential and never log it.
+
+## Webhook delivery
+
+Assinafy sends webhook events as HTTP `POST` JSON requests with
+`Connection: close`. Any `2xx` is successful. There are at most two automatic
+attempts per event with a three-second wait. After ten consecutive failed
+events, ordinary delivery pauses and about 5% of later events are attempted
+until one succeeds. `webhooks.retryDispatch()` requests immediate redelivery.
+Only the first 2,000 characters of the receiver response body are retained in
+dispatch history.
+
+The common body contains `id`, `event`, nullable `message`, nullable `payload`,
+nullable `origin`, Unix-second `created_at`, polymorphic `subject` and `object`,
+and `account_id`. Use `id` for idempotent handling and accept unknown fields.
 
 ## Webhook signature verification is not in the OpenAPI contract
 
 The official webhook operations define subscription management, event types,
-delivery history, and retry. The current OpenAPI document does **not** define a
-shared-secret field, signature algorithm, digest encoding, or signature header
-for incoming deliveries.
+delivery history, and retry. They do not define a shared-secret field,
+signature algorithm, digest encoding, or signature header for incoming events.
 
-`client.webhookVerifier` is retained as an opt-in HMAC-SHA256 utility for
-environments whose separate Assinafy agreement provides a shared secret and a
-hex digest. Confirm the header name and signing procedure with Assinafy for the
-target environment before enforcing it. Do not assume an
-`X-Assinafy-Signature` header solely from this SDK.
+`client.webhookVerifier` is an opt-in HMAC-SHA256 utility for environments whose
+separate Assinafy agreement provides a shared secret and hex digest. Confirm the
+header name and signing procedure for the target environment before enforcing
+it. Do not assume an `X-Assinafy-Signature` header solely from this SDK.
 
 ## Authentication isolation
 
-Public documents, login/social login, password-reset, OAuth URL, and
+Public documents, login and social login, password reset, OAuth URLs, and
 signer-access-code flows use a separate HTTP transport without `X-Api-Key` or
-`Authorization` defaults. This is a security boundary rather than a
-wire-contract deviation: a credentialless `new AssinafyClient()` can drive
-those flows, and credentials configured for protected resources are not leaked
-to them.
+`Authorization` defaults. A credentialless `new AssinafyClient()` can drive
+those flows, and credentials configured for protected resources are not sent.
 
-Protected methods still use the authenticated transport and receive the API's
-normal `401` response if credentials are absent or invalid.
+Protected methods use the authenticated transport and receive the API's normal
+`401` response when credentials are absent or invalid. The authenticated
+transport accepts same-origin absolute URLs, rejects cross-origin requests
+before dispatch, and treats credentials as redirect-sensitive. Use a separate
+HTTP client for unrelated origins.
 
-## Sandbox user and statistics deployment lag
+## Authenticated-user response variants
 
-The current OpenAPI schema defines `GET /users/self` as a direct `AuthUser`
-payload. The sandbox audited on 2026-08-06 still wraps that value as
-`{ user, accounts }` and adds `user.is_password_set`. `users.getCurrent()`
-normalizes both forms to `IAuthenticatedUser`; `is_password_set` is an optional
-live-compatibility field.
-
-The same sandbox returns `404` for the official `GET /users/self/stats` and
-`GET /accounts/{accountId}/stats` routes. The production host recognizes both
-routes (an unauthenticated probe receives `401`), so the SDK retains the exact
-published paths and types. The live audit reports those sandbox-only `404`s as
-explicit `SKIP`s rather than claiming they passed or rewriting calls to an
-undocumented route.
-
-## Updating this record
-
-When the upstream API changes:
-
-1. Diff the new official OpenAPI paths and schemas against the snapshot date
-   above.
-2. Add or update typed methods and request/response tests.
-3. Verify live-only behavior in the sandbox without logging secrets or tokens.
-4. Update [API_COVERAGE.md](API_COVERAGE.md) and this file in the same change.
-5. Keep compatibility behavior isolated and feature-detectable; do not silently
-   broaden retries or coerce malformed success payloads.
+`GET /users/self` officially returns `AuthUser` directly. Some sandbox
+deployments return `{ user, accounts }` and add `user.is_password_set`.
+`users.getCurrent()` normalizes both forms to `IAuthenticatedUser`, where
+`is_password_set` is optional.

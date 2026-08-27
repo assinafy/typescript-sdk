@@ -107,6 +107,23 @@ describe('TemplateResource', () => {
         ).rejects.toThrow(ValidationError);
     });
 
+    test('create and update reject malformed string fields before requesting', async () => {
+        const { http, calls } = mockHttp();
+        const templates = new TemplateResource(http, 'acc');
+
+        await expect(templates.create(
+            { buffer: Buffer.from('%PDF-1.4'), fileName: 'doc.pdf' },
+            { name: 42 } as never,
+        )).rejects.toBeInstanceOf(ValidationError);
+        await expect(
+            templates.update('tmpl-1', { name: 42 } as never),
+        ).rejects.toBeInstanceOf(ValidationError);
+        await expect(
+            templates.update('tmpl-1', { message: {} } as never),
+        ).rejects.toBeInstanceOf(ValidationError);
+        expect(calls).toHaveLength(0);
+    });
+
     test('get fetches the single-template endpoint', async () => {
         const { http, calls } = mockHttp();
         const templates = new TemplateResource(http, 'acc');
@@ -133,7 +150,11 @@ describe('TemplateResource', () => {
     test('update PUTs both name and message to the template endpoint', async () => {
         const { http, calls } = mockHttp();
         const templates = new TemplateResource(http, 'acc');
-        await templates.update('tmpl-1', { name: 'NDA v2', message: 'Please sign' });
+        await templates.update('tmpl-1', {
+            name: 'NDA v2',
+            message: 'Please sign',
+            internal_secret: 'do-not-send',
+        } as never);
         expect(calls[0]?.method).toBe('PUT');
         expect(calls[0]?.url).toBe('/accounts/acc/templates/tmpl-1');
         expect(calls[0]?.body).toEqual({ name: 'NDA v2', message: 'Please sign' });
@@ -143,6 +164,7 @@ describe('TemplateResource', () => {
         const { http } = mockHttp();
         const templates = new TemplateResource(http, 'acc');
         await expect(templates.update('', { name: 'x' })).rejects.toThrow(ValidationError);
+        await expect(templates.update('tmpl-1', null as never)).rejects.toThrow(ValidationError);
     });
 
     test('get requests the single-template endpoint with the account path', async () => {

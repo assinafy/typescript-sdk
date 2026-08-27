@@ -1,6 +1,6 @@
 import axios from 'axios';
-import { ApiError, AssinafyError, NetworkError } from './errors';
-import type { Logger } from './types';
+import { ApiError, AssinafyError, NetworkError, ValidationError } from './errors';
+import type { DocumentArtifactName, Logger } from './types';
 
 const SAFE_LOG_NUMBER_FIELDS = new Set([
     'attempt',
@@ -178,6 +178,11 @@ function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
 
 type ErrorWithCode = Error & { code?: unknown };
 
+const SENSITIVE_ERROR_VALUE_RE = new RegExp(
+    '((?:authorization|x(?:-|_|%2d)api(?:-|_|%2d)key|api(?:-|_|%2d)?key|access(?:-|_|%2d)?token|refresh(?:-|_|%2d)?token|signer(?:-|_|%2d)access(?:-|_|%2d)code|verification(?:-|_|%2d)code|client(?:-|_|%2d)?secret|token|secret|password|passcode|otp)(?:["\\\']|%22)?\\s*(?::|=|%3a|%3d)\\s*(?:["\\\']|%22)?)(?:bearer\\s+)?[^\\s,;&"\\\']+',
+    'gi',
+);
+
 function sanitiseNetworkCause(error: ErrorWithCode): ErrorWithCode {
     const safe = new Error(redactSensitiveErrorText(error.message)) as ErrorWithCode;
     safe.name = error.name || 'AxiosError';
@@ -194,15 +199,99 @@ function sanitiseNetworkCause(error: ErrorWithCode): ErrorWithCode {
 
 function redactSensitiveErrorText(message: string): string {
     return message
-        .replace(
-            /((?:authorization|x-api-key|api[_-]?key|access[_-]?token|token|secret)\s*[:=]\s*)(?:bearer\s+)?[^\s,;]+/gi,
-            '$1[REDACTED]',
-        )
+        .replace(SENSITIVE_ERROR_VALUE_RE, '$1[REDACTED]')
         .replace(/(https?:\/\/)[^/@\s]+:[^/@\s]+@/gi, '$1[REDACTED]@');
+}
+
+/** Assert that caller-supplied JSON input is a non-array object. */
+export function assertRecord(
+    value: unknown,
+    label: string,
+): void {
+    if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+        throw new ValidationError(`${label} must be an object`);
+    }
+}
+
+/** Require a non-empty string at a public runtime boundary. */
+export function assertNonEmptyString(value: unknown, label: string): asserts value is string {
+    if (typeof value !== 'string' || !value.trim()) {
+        throw new ValidationError(`${label} must be a non-empty string`);
+    }
+}
+
+const DOCUMENT_ARTIFACT_NAMES = new Set<DocumentArtifactName>([
+    'original',
+    'certificated',
+    'certificate-page',
+    'pades',
+    'bundle',
+]);
+
+/** Require one of the artifact names accepted by the document download endpoints. */
+export function assertDocumentArtifactName(
+    value: unknown,
+): asserts value is DocumentArtifactName {
+    if (
+        typeof value !== 'string'
+        || !DOCUMENT_ARTIFACT_NAMES.has(value as DocumentArtifactName)
+    ) {
+        throw new ValidationError(
+            'Artifact name must be original, certificated, certificate-page, pades, or bundle',
+        );
+    }
+}
+
+/** Validate and serialize a caller-supplied JSON object. */
+export function serializeJsonRecord(value: unknown, label: string): string {
+    assertRecord(value, label);
+    try {
+        const serialized = JSON.stringify(value);
+        if (typeof serialized !== 'string' || !serialized.startsWith('{')) {
+            throw new ValidationError(`${label} must serialize to a JSON object`);
+        }
+        return serialized;
+    } catch {
+        throw new ValidationError(`${label} must be JSON-serializable`);
+    }
+}
+
+/** Require an RFC 3339 date-time such as `2027-12-31T23:59:00Z`. */
+export function assertDateTime(value: unknown, label: string): asserts value is string {
+    if (typeof value !== 'string') throw new ValidationError(`${label} must be an ISO-8601 date-time`);
+    const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:Z|[+-](\d{2}):(\d{2}))$/u.exec(value);
+    if (!match) throw new ValidationError(`${label} must be an ISO-8601 date-time`);
+
+    const [year, month, day, hour, minute, second] = match.slice(1, 7).map(Number);
+    const offsetHour = Number(match[7] ?? 0);
+    const offsetMinute = Number(match[8] ?? 0);
+    const leap = year !== undefined && (year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0));
+    const days = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    if (
+        year === undefined
+        || year < 1
+        || month === undefined
+        || month < 1
+        || month > 12
+        || day === undefined
+        || day < 1
+        || day > (days[month - 1] ?? 0)
+        || hour === undefined
+        || hour > 23
+        || minute === undefined
+        || minute > 59
+        || second === undefined
+        || second > 60
+        || offsetHour > 23
+        || offsetMinute > 59
+    ) {
+        throw new ValidationError(`${label} must be an ISO-8601 date-time`);
+    }
 }
 
 /** Strip undefined values from a params record (Axios sends `undefined` as literal). */
 export function cleanParams(params: Record<string, unknown>): Record<string, unknown> {
+    assertRecord(params, 'params');
     const out: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(params)) {
         if (value !== undefined && value !== null) {
@@ -217,9 +306,8 @@ export function cleanParams(params: Record<string, unknown>): Record<string, unk
  * `per-page` spelling the API actually reads.
  *
  * The API honours **only** `per-page`. `per_page` is not rejected — it is
- * silently ignored and the response falls back to the default page size of 20
- * (verified: `?per-page=2` returns 2 items with `x-pagination-per-page: 2`,
- * while `?per_page=2` returns 20). Accepting both spellings keeps the
+ * silently ignored and the response falls back to the default page size of 20.
+ * Accepting both spellings keeps the
  * snake_case form working for callers rather than failing them quietly.
  *
  * An explicit `per-page` always wins over `per_page`.

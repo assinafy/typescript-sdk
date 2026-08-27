@@ -8,7 +8,9 @@ import type {
     IWorkspaceResponse,
     IUpdateWorkspacePayload,
 } from '../types';
+import { ValidationError } from '../errors';
 import { documentStatsParams } from '../support/stats';
+import { assertNonEmptyString, assertRecord } from '../utils';
 import { BaseResource } from './base';
 import { buildFileForm, loadSource, validateFileNotEmpty } from './upload';
 
@@ -22,10 +24,9 @@ export type AccountLogoUploadSource =
  * signer, template, tag, field, and webhook. Each endpoint lives under
  * `/accounts`, and the `accountId` used elsewhere in the SDK is a workspace id.
  *
- * Colours (`primary_color` / `secondary_color`) are stored on the workspace and
- * echoed back on the response. They must be an **exactly 6-character hex string
- * with NO leading `#`** (`'ff0066'`, not `'#ff0066'`); a `#`-prefixed value is
- * rejected with `400`. Verified live against the API.
+ * Requests accept `name`, `notification_sender_type`, `primary_color`, and
+ * `secondary_color`. Colours are always modeled on responses. When
+ * sent, they must be exactly six hex characters with no leading `#`.
  *
  * @example
  * ```ts
@@ -37,18 +38,25 @@ export class WorkspaceResource extends BaseResource {
     /**
      * Create a new workspace (`POST /accounts`).
      *
-     * @param payload - The workspace `name` (required) plus optional brand
-     * colours. Colours are 6-char hex **without** a leading `#`.
+     * @param payload - Official fields are workspace `name` (required) and
+     * optional `notification_sender_type` (`User` or `Account`). Optional brand
+     * colours use six hex characters without
+     * a leading `#`.
      * @returns The created workspace. Response shape:
      * ```jsonc
      * {
+     *   "resource": "account",
      *   "id": "acc_example",
      *   "name": "Acme Legal",
+     *   "notification_sender_type": "Account",
      *   "primary_color": "ff0066",
      *   "secondary_color": "0066ff",
+     *   "roles": ["owner"],
+     *   "is_delete_allowed": true,
      *   "created_at": "2026-05-12T18:05:11Z"
      * }
      * ```
+     * @throws {ValidationError} If `payload` is not an object.
      * @throws {ApiError} If the API rejects the request — e.g. `400` when a
      * colour is not exactly 6 hex characters (or carries a leading `#`).
      *
@@ -56,13 +64,25 @@ export class WorkspaceResource extends BaseResource {
      * ```ts
      * const ws = await client.workspaces.create({
      *   name: 'Acme Legal',
+     *   notification_sender_type: 'Account',
      *   primary_color: 'ff0066',
      *   secondary_color: '0066ff',
      * });
      * ```
      */
     async create(payload: ICreateWorkspacePayload): Promise<IWorkspaceResponse> {
-        return this.call('Failed to create workspace', () => this.http.post('/accounts', payload));
+        assertRecord(payload, 'workspace payload');
+        assertNonEmptyString(payload.name, 'name');
+        validateWorkspaceSender(payload.notification_sender_type);
+        validateWorkspaceColor(payload.primary_color, 'primary_color', false);
+        validateWorkspaceColor(payload.secondary_color, 'secondary_color', false);
+        const body: ICreateWorkspacePayload = { name: payload.name };
+        if (payload.notification_sender_type !== undefined) {
+            body.notification_sender_type = payload.notification_sender_type;
+        }
+        if (payload.primary_color !== undefined) body.primary_color = payload.primary_color;
+        if (payload.secondary_color !== undefined) body.secondary_color = payload.secondary_color;
+        return this.call('Failed to create workspace', () => this.http.post('/accounts', body));
     }
 
     /**
@@ -74,8 +94,12 @@ export class WorkspaceResource extends BaseResource {
      * {
      *   "data": [
      *     {
+     *       "resource": "account",
      *       "id": "acc_example",
      *       "name": "MT",
+     *       "primary_color": null,
+     *       "secondary_color": null,
+     *       "notification_sender_type": "User",
      *       "roles": ["owner"],
      *       "is_delete_allowed": true,
      *       "created_at": "2026-05-12T18:05:11Z"
@@ -105,10 +129,14 @@ export class WorkspaceResource extends BaseResource {
      * until brand colours are set (6-char hex, no `#`, when present):
      * ```jsonc
      * {
+     *   "resource": "account",
      *   "id": "acc_example",
      *   "name": "MT",
      *   "primary_color": null,
      *   "secondary_color": null,
+     *   "notification_sender_type": "User",
+     *   "roles": ["owner"],
+     *   "is_delete_allowed": true,
      *   "created_at": "2026-05-12T18:05:11Z"
      * }
      * ```
@@ -225,6 +253,8 @@ export class WorkspaceResource extends BaseResource {
      *
      * @param accountId - Account whose logo should be removed.
      * @returns Resolves when the API acknowledges deletion.
+     * @throws {ValidationError} If `accountId` is empty.
+     * @throws {ApiError} If the API rejects the request.
      * @example
      * ```ts
      * await client.workspaces.deleteLogo('acc_example');
@@ -251,8 +281,13 @@ export class WorkspaceResource extends BaseResource {
      *   "documents_uploaded": 42,
      *   "documents_sent": 37,
      *   "signature_requests": 61,
-     *   "signature_requests_email": 55,
-     *   "signature_requests_whatsapp": 18,
+     *   "signature_requests_notification_email": 55,
+     *   "signature_requests_notification_whatsapp": 18,
+     *   "signature_requests_notification_bypass": 3,
+     *   "signature_requests_verification_email": 48,
+     *   "signature_requests_verification_whatsapp": 6,
+     *   "signature_requests_verification_bypass": 3,
+     *   "signature_requests_verification_digital_certificate": 4,
      *   "signature_requests_viewed": 44,
      *   "signature_requests_completed": 52,
      *   "documents_certified": 30
@@ -288,19 +323,26 @@ export class WorkspaceResource extends BaseResource {
      * Update a workspace (`PUT /accounts/{accountId}`).
      *
      * @param accountId - The workspace to update.
-     * @param payload - The fields to change (`name` and/or brand colours).
-     * Colours are 6-char hex **without** a leading `#`; pass `null` to clear one.
+     * @param payload - Official fields are `name` and
+     * `notification_sender_type` (`User` or `Account`). Brand colours use six
+     * hex characters without a leading `#`;
+     * pass `null` to clear one.
      * @returns The updated workspace. Response shape:
      * ```jsonc
      * {
+     *   "resource": "account",
      *   "id": "acc_example",
      *   "name": "Acme Legal (Renamed)",
+     *   "notification_sender_type": "Account",
      *   "primary_color": "ff0066",
      *   "secondary_color": "0066ff",
+     *   "roles": ["owner"],
+     *   "is_delete_allowed": true,
      *   "created_at": "2026-05-12T18:05:11Z"
      * }
      * ```
-     * @throws {ValidationError} If `accountId` is missing.
+     * @throws {ValidationError} If `accountId` is missing or `payload` is not
+     * an object.
      * @throws {ApiError} `400` for an invalid colour; `404` if the workspace
      * does not exist.
      *
@@ -308,26 +350,41 @@ export class WorkspaceResource extends BaseResource {
      * ```ts
      * await client.workspaces.update('acc_example', {
      *   name: 'Acme Legal (Renamed)',
+     *   notification_sender_type: 'Account',
      *   primary_color: 'ff0066',
      * });
      * ```
      */
     async update(accountId: string, payload: IUpdateWorkspacePayload): Promise<IWorkspaceResponse> {
+        assertRecord(payload, 'workspace payload');
+        if (payload.name !== undefined) assertNonEmptyString(payload.name, 'name');
+        validateWorkspaceSender(payload.notification_sender_type);
+        validateWorkspaceColor(payload.primary_color, 'primary_color', true);
+        validateWorkspaceColor(payload.secondary_color, 'secondary_color', true);
         const id = this.requireId(accountId, 'Account ID');
+        const body: IUpdateWorkspacePayload = {};
+        if (payload.name !== undefined) body.name = payload.name;
+        if (payload.notification_sender_type !== undefined) {
+            body.notification_sender_type = payload.notification_sender_type;
+        }
+        if (payload.primary_color !== undefined) body.primary_color = payload.primary_color;
+        if (payload.secondary_color !== undefined) body.secondary_color = payload.secondary_color;
         return this.call('Failed to update workspace', () =>
-            this.http.put(`/accounts/${this.pathSegment(id, 'Account ID')}`, payload),
+            this.http.put(`/accounts/${this.pathSegment(id, 'Account ID')}`, body),
         );
     }
 
     /**
      * Delete a workspace (`DELETE /accounts/{accountId}`).
      *
-     * A workspace with restrictions (e.g. remaining documents) is rejected with
-     * `400` and a `restrictions` list; pass `{ force: true }` to override and
-     * delete it anyway. The flag is sent in the request body, per the API.
+     * A workspace with an active paid subscription is rejected with `400` and
+     * a `restrictions` list. `{ force: true }` cancels that subscription and
+     * proceeds with deletion; it is not documented as a blanket override for
+     * unrelated restrictions. The flag is sent in the request body.
      *
      * @param accountId - The workspace to delete.
-     * @param options - Set `force: true` to delete despite restrictions.
+     * @param options - Set `force: true` to cancel an active paid subscription
+     * and proceed with deletion.
      * @returns Nothing on success (`200` with no meaningful body).
      * @throws {ValidationError} If `accountId` is missing.
      * @throws {ApiError} `400` (with a `restrictions` list) when the workspace
@@ -336,11 +393,15 @@ export class WorkspaceResource extends BaseResource {
      * @example
      * ```ts
      * await client.workspaces.delete('acc_example');
-     * // override restrictions:
+     * // cancel an active paid subscription, then delete:
      * await client.workspaces.delete('acc_example', { force: true });
      * ```
      */
     async delete(accountId: string, options: { force?: boolean } = {}): Promise<void> {
+        assertRecord(options, 'workspace delete options');
+        if (options.force !== undefined && typeof options.force !== 'boolean') {
+            throw new ValidationError('force must be a boolean');
+        }
         const id = this.requireId(accountId, 'Account ID');
         const config = options.force ? { data: { force: true } } : undefined;
         return this.callVoid('Failed to delete workspace', () =>
@@ -357,4 +418,19 @@ function imageContentType(fileName: string): string {
     if (name.endsWith('.webp')) return 'image/webp';
     if (name.endsWith('.svg')) return 'image/svg+xml';
     return 'application/octet-stream';
+}
+
+function validateWorkspaceSender(value: unknown): void {
+    if (value !== undefined && value !== 'User' && value !== 'Account') {
+        throw new ValidationError('notification_sender_type must be User or Account');
+    }
+}
+
+function validateWorkspaceColor(value: unknown, name: string, nullable: boolean): void {
+    if (value === undefined || (nullable && value === null)) return;
+    if (typeof value !== 'string' || !/^[0-9a-fA-F]{6}$/.test(value)) {
+        throw new ValidationError(
+            `${name} must be exactly six hexadecimal characters without a leading #${nullable ? ', or null' : ''}`,
+        );
+    }
 }

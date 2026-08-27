@@ -33,6 +33,15 @@ describe('WebhookVerifier', () => {
         expect(verifier.verify(payload, signature)).toBe(false);
     });
 
+    test('verify fails closed for malformed runtime inputs', () => {
+        const verifier = new WebhookVerifier(secret);
+
+        expect(verifier.verify(null as never, signature)).toBe(false);
+        expect(verifier.verify(new Uint8Array([1, 2, 3]) as never, signature)).toBe(false);
+        expect(verifier.verify(payload, {} as never)).toBe(false);
+        expect(new WebhookVerifier({} as never).verify(payload, signature)).toBe(false);
+    });
+
     test('extractEvent parses JSON payloads', () => {
         const verifier = new WebhookVerifier(secret);
         expect(verifier.extractEvent(payload)).toEqual(event);

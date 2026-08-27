@@ -4,6 +4,7 @@ import type {
     DocumentStatus,
     ICostEstimate,
     ICreateDocumentFromTemplateOptions,
+    IDetachDocumentTagResponse,
     IDocumentActivity,
     IDocumentDetailsResponse,
     IDocumentListItem,
@@ -23,11 +24,29 @@ import type {
     SendTokenChannel,
 } from '../types';
 import { ApiError, ValidationError } from '../errors';
-import { cleanListParams } from '../utils';
+import {
+    assertDateTime,
+    assertDocumentArtifactName,
+    assertNonEmptyString,
+    assertRecord,
+    cleanListParams,
+} from '../utils';
 import { BaseResource } from './base';
 import type { DocumentUploadSource } from './upload';
+import { withoutCredentials } from '../support/transport';
+import { validateAssignmentSignerOptions, validateSigningOrder } from './assignments';
 
 export type { DocumentUploadSource } from './upload';
+
+export function validateDocumentWaitOptions(
+    options: { maxWaitMs?: number; pollIntervalMs?: number },
+): void {
+    assertRecord(options, 'wait options');
+    if (options.maxWaitMs !== undefined) validateWaitOption(options.maxWaitMs, 'maxWaitMs');
+    if (options.pollIntervalMs !== undefined) {
+        validateWaitOption(options.pollIntervalMs, 'pollIntervalMs');
+    }
+}
 
 const READY_STATUSES: ReadonlySet<DocumentStatus | string> = new Set([
     'metadata_ready',
@@ -41,6 +60,8 @@ const FAILED_STATUSES: ReadonlySet<DocumentStatus | string> = new Set([
     'rejected_by_user',
     'expired',
 ]);
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 /** Options accepted by {@link DocumentResource.upload}. */
 export interface IDocumentUploadOptions {
@@ -59,13 +80,16 @@ export interface IDocumentUploadOptions {
 }
 
 export class DocumentResource extends BaseResource {
+    private readonly publicHttp: AxiosInstance;
+
     constructor(
         http: AxiosInstance,
         defaultAccountId?: string,
         logger?: Logger,
-        private readonly publicHttp: AxiosInstance = http,
+        publicHttp?: AxiosInstance,
     ) {
         super(http, defaultAccountId, logger);
+        this.publicHttp = withoutCredentials(publicHttp ?? http);
     }
 
     /**
@@ -102,7 +126,8 @@ export class DocumentResource extends BaseResource {
      * }
      * ```
      * @throws {ValidationError} If the file is empty, not a `.pdf`, exceeds
-     * 25 MB, or the API returns no document ID.
+     * 25 MB, or the API returns no document ID. The API rejects PDFs over
+     * 2,000 pages.
      * @throws {ApiError} If the API rejects the upload.
      *
      * @example
@@ -119,6 +144,7 @@ export class DocumentResource extends BaseResource {
         source: DocumentUploadSource,
         options: IDocumentUploadOptions = {},
     ): Promise<IDocumentUploadResponse> {
+        assertRecord(options, 'document upload options');
         const accountId = this.accountId(options.accountId);
         const formOptions: { name?: string; metadata?: Record<string, unknown> } = {};
         if (options.name !== undefined) formOptions.name = options.name;
@@ -147,8 +173,10 @@ export class DocumentResource extends BaseResource {
      * so prefer it when you need signing state or page geometry. Pagination
      * info (if any) is attached in `meta`.
      *
-     * @param params - Filters and pagination: `status`, `method`, `tags`
-     * (comma-separated tag IDs), `search`, `sort`, `page`, `per-page`.
+     * @param params - Filters and pagination: `status`; `method` (`virtual` or
+     * `collect`); `tags` (comma-separated IDs, all of which must match);
+     * `search` (document name, signer name, or signer email); `sort` (`name` or
+     * `updated_at`); `page`; and `per-page` (maximum 100).
      * @param accountId - Override the client's default account ID.
      * @returns Matching documents, with pagination in `meta`. Each item:
      * ```jsonc
@@ -270,10 +298,29 @@ export class DocumentResource extends BaseResource {
      *
      * @param documentId - The document to rename.
      * @param name - The new display name (max 255 chars), e.g.
-     * `'Service agreement.pdf'`.
-     * @returns The updated document — **without** `pages` or `assignment`,
-     * which this endpoint does not return (unlike
-     * {@link DocumentResource.details}). Call `details()` if you need them.
+     * `'Service agreement.pdf'`. The API removes diacritics and replaces
+     * unsupported characters with dashes.
+     * @returns The updated document. `pages` and `assignment` are optional on
+     * this response; call {@link DocumentResource.details} when they are
+     * required:
+     * ```jsonc
+     * {
+     *   "resource": "document",
+     *   "id": "103ad216846e6b90710cb9acef59",
+     *   "account_id": "acc_example",
+     *   "template_id": null,
+     *   "name": "Service agreement.pdf",
+     *   "status": "metadata_ready",
+     *   "artifacts": { "original": "https://…/download/original" },
+     *   "signing_url": "https://…/sign/103ad216…",
+     *   "is_closed": false,
+     *   "decline_reason": null,
+     *   "declined_by": null,
+     *   "tags": [],
+     *   "created_at": "2026-07-19T17:24:43Z",
+     *   "updated_at": "2026-07-19T17:24:46Z"
+     * }
+     * ```
      * @throws {ValidationError} If `documentId` or `name` is missing.
      * @throws {ApiError} `400` if the document is processing or already in
      * signing; `404` if it does not exist.
@@ -288,6 +335,9 @@ export class DocumentResource extends BaseResource {
     async rename(documentId: string, name: string): Promise<IRenameDocumentResponse> {
         const id = this.requireId(documentId, 'Document ID');
         const newName = this.requireId(name, 'Name');
+        if ([...newName].length > 255) {
+            throw new ValidationError('Name must not exceed 255 characters');
+        }
         this.logger.info('Renaming document', { documentId: id });
         return this.call('Failed to rename document', () =>
             this.http.patch(`/documents/${this.pathSegment(id, 'Document ID')}`, {
@@ -300,7 +350,8 @@ export class DocumentResource extends BaseResource {
      * Get document details (`GET /documents/{documentId}`).
      *
      * The full single-document view, including the embedded `assignment` (or
-     * `null`), rendered `pages`, and `artifacts`.
+     * `null`), rendered `pages`, and `artifacts`. `decline_reason` is returned
+     * only when the access token belongs to the document creator.
      *
      * @param documentId - The document to fetch.
      * @returns The document. Response shape (once `metadata_ready`):
@@ -310,7 +361,7 @@ export class DocumentResource extends BaseResource {
      *   "id": "103ad216846e6b90710cb9acef59",
      *   "account_id": "acc_example",
      *   "template_id": null,
-     *   "name": "audit-test.pdf",
+     *   "name": "service-agreement.pdf",
      *   "status": "metadata_ready",
      *   "artifacts": {
      *     "original": "https://…/documents/103ad216…/download/original",
@@ -335,7 +386,8 @@ export class DocumentResource extends BaseResource {
      *   "updated_at": "2026-07-19T17:24:46Z"
      * }
      * ```
-     * @throws {ValidationError} If `documentId` is missing.
+     * @throws {ValidationError} If `documentId` is missing or `artifactName` is
+     * not one of the five documented artifact names.
      * @throws {ApiError} `404` if the document does not exist.
      *
      * @example
@@ -346,8 +398,15 @@ export class DocumentResource extends BaseResource {
      */
     async details(documentId: string): Promise<IDocumentDetailsResponse> {
         const id = this.requireId(documentId, 'Document ID');
+        return this.fetchDetails(id);
+    }
+
+    private fetchDetails(id: string, signal?: AbortSignal): Promise<IDocumentDetailsResponse> {
         return this.call('Failed to fetch document details', () =>
-            this.http.get(`/documents/${this.pathSegment(id, 'Document ID')}`),
+            this.http.get(
+                `/documents/${this.pathSegment(id, 'Document ID')}`,
+                signal ? { signal } : undefined,
+            ),
         );
     }
 
@@ -405,11 +464,10 @@ export class DocumentResource extends BaseResource {
         documentId: string,
         options: { maxWaitMs?: number; pollIntervalMs?: number } = {},
     ): Promise<IDocumentDetailsResponse> {
+        validateDocumentWaitOptions(options);
         const id = this.requireId(documentId, 'Document ID');
         const maxWaitMs = options.maxWaitMs ?? 30_000;
         const pollIntervalMs = options.pollIntervalMs ?? 2_000;
-        validateWaitOption(maxWaitMs, 'maxWaitMs');
-        validateWaitOption(pollIntervalMs, 'pollIntervalMs');
         const start = Date.now();
         let attempts = 0;
 
@@ -418,7 +476,9 @@ export class DocumentResource extends BaseResource {
         while (Date.now() - start < maxWaitMs) {
             attempts++;
             try {
-                const details = await this.details(id);
+                const remainingMs = maxWaitMs - (Date.now() - start);
+                const requestTimeoutMs = Math.min(Math.max(Math.ceil(remainingMs), 1), 2_147_483_647);
+                const details = await this.fetchDetails(id, AbortSignal.timeout(requestTimeoutMs));
                 const status = details.status ?? 'unknown';
                 this.logger.debug('Document status check', { attempts, status });
 
@@ -442,7 +502,9 @@ export class DocumentResource extends BaseResource {
                     error: err instanceof Error ? err.message : String(err),
                 });
             }
-            await sleep(pollIntervalMs);
+            const remainingAfterRequestMs = maxWaitMs - (Date.now() - start);
+            if (remainingAfterRequestMs <= 0) break;
+            await sleep(Math.min(pollIntervalMs, remainingAfterRequestMs));
         }
 
         throw new ValidationError('Timeout waiting for document to be ready', {
@@ -457,9 +519,11 @@ export class DocumentResource extends BaseResource {
      *
      * @param documentId - The document to download from.
      * @param artifactName - Which artifact to fetch: `original`,
-     * `certificated` (the default — the signed PDF), `certificate-page`, or
-     * `bundle`.
-     * @returns A {@link Buffer} of the artifact's bytes (PDF).
+     * `certificated` (the default — the signed PDF), `certificate-page`,
+     * `pades`, or `bundle` (ZIP). `pades` exists only when the document had a
+     * Digital Certificate signer. `bundle` contains the original, certificated,
+     * and certificate-page artifacts, plus PAdES when present.
+     * @returns A {@link Buffer} containing the raw PDF or ZIP bytes.
      * @throws {ValidationError} If `documentId` is missing.
      * @throws {ApiError} `404` if the document or artifact does not exist (e.g.
      * requesting `certificated` before signing completes).
@@ -468,6 +532,7 @@ export class DocumentResource extends BaseResource {
      * ```ts
      * const pdf = await client.documents.download('doc-1'); // signed PDF
      * const original = await client.documents.download('doc-1', 'original');
+     * const pades = await client.documents.download('doc-1', 'pades');
      * await fs.promises.writeFile('signed.pdf', pdf);
      * ```
      */
@@ -476,6 +541,7 @@ export class DocumentResource extends BaseResource {
         artifactName: DocumentArtifactName = 'certificated',
     ): Promise<Buffer> {
         const id = this.requireId(documentId, 'Document ID');
+        assertDocumentArtifactName(artifactName);
         return this.callBinary('Failed to download document', () =>
             this.http.get<ArrayBuffer>(
                 `/documents/${this.pathSegment(id, 'Document ID')}/download/${this.pathSegment(artifactName, 'Artifact name')}`,
@@ -544,7 +610,7 @@ export class DocumentResource extends BaseResource {
      * Fetch the document activity log
      * (`GET /documents/{documentId}/activities`).
      *
-     * Returns a chronological audit trail of lifecycle events. Normalises an
+     * Returns a chronological history of lifecycle events. Normalises an
      * absent body to `[]`.
      *
      * @param documentId - The document whose activity log to fetch.
@@ -564,7 +630,7 @@ export class DocumentResource extends BaseResource {
      *     "event": "document_uploaded",
      *     "message": "Documento criado.",
      *     "payload": [],
-     *     "origin": { "ip": "99.75.13.162", "user-agent": "assinafy-webforms-java-client-sdk" },
+     *     "origin": { "ip": "192.0.2.10", "user-agent": "assinafy-webforms-java-client-sdk" },
      *     "created_at": "2026-07-19T14:56:55Z"
      *   }
      * ]
@@ -596,7 +662,7 @@ export class DocumentResource extends BaseResource {
      * certificated.
      *
      * @param documentId - The document to delete.
-     * @returns Nothing on success.
+     * @returns Nothing; resolves when the document is deleted.
      * @throws {ValidationError} If `documentId` is missing.
      * @throws {ApiError} `400` if the document is not in a deletable status;
      * `404` if it does not exist.
@@ -655,10 +721,9 @@ export class DocumentResource extends BaseResource {
      * Replace the document's tag set
      * (`PUT /accounts/{accountId}/documents/{documentId}/tags`).
      *
-     * The official contract defines `tags` as an array of tag **IDs**. An empty
-     * array detaches all tags. Some environments have also accepted names and
-     * auto-created missing tags, but that is an undocumented extension and
-     * should not be relied on. This overwrites the existing set — use
+     * `tags` is an array of tag **IDs**. An empty array detaches all tags. Tag
+     * names are not portable identifiers and should not be used here. This
+     * overwrites the existing set — use
      * {@link DocumentResource.addTags} to append.
      *
      * @param documentId - The document to retag.
@@ -684,7 +749,12 @@ export class DocumentResource extends BaseResource {
     async replaceTags(documentId: string, tags: string[], accountId?: string): Promise<ITag[]> {
         const accId = this.accountId(accountId);
         const docId = this.requireId(documentId, 'Document ID');
-        if (!Array.isArray(tags)) throw new ValidationError('tags must be an array of tag IDs');
+        if (
+            !Array.isArray(tags)
+            || tags.some((tagId) => typeof tagId !== 'string' || !tagId.trim())
+        ) {
+            throw new ValidationError('tags must be an array of non-empty tag IDs');
+        }
         return this.call('Failed to replace document tags', () =>
             this.http.put(
                 `/accounts/${this.pathSegment(accId, 'Account ID')}/documents/${this.pathSegment(docId, 'Document ID')}/tags`,
@@ -723,8 +793,12 @@ export class DocumentResource extends BaseResource {
     async addTags(documentId: string, tags: string[], accountId?: string): Promise<ITag[]> {
         const accId = this.accountId(accountId);
         const docId = this.requireId(documentId, 'Document ID');
-        if (!Array.isArray(tags) || tags.length === 0) {
-            throw new ValidationError('tags must be a non-empty array of tag IDs');
+        if (
+            !Array.isArray(tags)
+            || tags.length === 0
+            || tags.some((tagId) => typeof tagId !== 'string' || !tagId.trim())
+        ) {
+            throw new ValidationError('tags must be a non-empty array of non-empty tag IDs');
         }
         return this.call('Failed to add document tags', () =>
             this.http.post(
@@ -745,21 +819,25 @@ export class DocumentResource extends BaseResource {
      * @param documentId - The document to detach from.
      * @param tagId - The ID of the tag to detach.
      * @param accountId - Override the client's default account ID.
-     * @returns Nothing on success.
+     * @returns `{ detached: true }` when the association was removed.
      * @throws {ValidationError} If `documentId` or `tagId` is missing, or no
      * account ID is available.
      * @throws {ApiError} If the API rejects the request.
      *
      * @example
      * ```ts
-     * await client.documents.detachTag('doc-1', 'tag-1');
+     * const { detached } = await client.documents.detachTag('doc-1', 'tag-1');
      * ```
      */
-    async detachTag(documentId: string, tagId: string, accountId?: string): Promise<void> {
+    async detachTag(
+        documentId: string,
+        tagId: string,
+        accountId?: string,
+    ): Promise<IDetachDocumentTagResponse> {
         const accId = this.accountId(accountId);
         const docId = this.requireId(documentId, 'Document ID');
         const tid = this.requireId(tagId, 'Tag ID');
-        return this.callVoid('Failed to detach document tag', () =>
+        return this.call('Failed to detach document tag', () =>
             this.http.delete(
                 `/accounts/${this.pathSegment(accId, 'Account ID')}/documents/${this.pathSegment(docId, 'Document ID')}/tags/${this.pathSegment(tid, 'Tag ID')}`,
             ),
@@ -772,12 +850,17 @@ export class DocumentResource extends BaseResource {
      *
      * Instantiates the template, binding each role to a signer, and returns the
      * new document. The request body is `{ signers, ...options }` — `signers`
-     * maps template `role_id` → signer `id`, and `options` may add `name`,
-     * `message`, `expires_at`, `editor_fields`, and `tags`.
+     * maps every template `role_id` to an existing account signer `id`, and
+     * `options` may add `name`, `message`, `expires_at`, `editor_fields`, and
+     * tag names in `tags` (unknown names are created automatically).
      *
      * @param templateId - The template to instantiate.
      * @param signers - Role-to-signer bindings (each with `role_id` and `id`,
      * plus optional `verification_method`, `notification_methods`, `step`).
+     * Only one notification method is allowed per signer; when only one of the
+     * verification/notification fields is supplied, the API infers the other.
+     * `DigitalCertificate` costs two credits, requires the feature plus a
+     * signer `government_id`, and that signer must be alone in its step.
      * @param options - Optional `name`, `message`, `expires_at`,
      * `editor_fields`, `tags`.
      * @param accountId - Override the client's default account ID.
@@ -789,12 +872,12 @@ export class DocumentResource extends BaseResource {
      *   "id": "19f675b761b392a48b8642503bb",
      *   "account_id": "acc_example",
      *   "template_id": "103a0991a5cde83518e5672aa9aa",
-     *   "name": "Audit From Template",
+     *   "name": "Service agreement from template",
      *   "status": "pending_signature",
      *   "artifacts": { "original": "https://…/download/original", "thumbnail": "https://…/thumbnail" },
      *   "is_closed": false,
      *   "signing_url": "https://app-sandbox.assinafy.com.br/sign/19f675b7…",
-     *   "tags": [{ "id": "103a0992…", "name": "audit-tmp-fromtmpl", "color": null }],
+     *   "tags": [{ "id": "103a0992…", "name": "agreements", "color": null }],
      *   "assignment": { "id": "103a09a1…", "method": "virtual", "summary": { "signer_count": 1, "completed_count": 0 } },
      *   "pages": [{ "id": "103a0992…", "number": 1, "height": 1651, "width": 1275, "download_url": "https://…/download" }],
      *   "created_at": "2026-07-15T19:57:55Z",
@@ -809,7 +892,7 @@ export class DocumentResource extends BaseResource {
      * @example
      * ```ts
      * await client.documents.createFromTemplate('tmpl_id', [
-     *   { role_id: 'role_id', id: 'signer_id', verification_method: 'Email', notification_methods: ['Email'] },
+     *   { role_id: 'role_id', id: 'signer_id', verification_method: 'DigitalCertificate' },
      * ], { name: 'My Contract' });
      * ```
      */
@@ -819,12 +902,34 @@ export class DocumentResource extends BaseResource {
         options: ICreateDocumentFromTemplateOptions = {},
         accountId?: string,
     ): Promise<IDocumentDetailsResponse> {
+        assertRecord(options, 'template document options');
+        if (options.name !== undefined && typeof options.name !== 'string') {
+            throw new ValidationError('name must be a string');
+        }
+        if (options.message !== undefined && typeof options.message !== 'string') {
+            throw new ValidationError('message must be a string');
+        }
+        if (options.expires_at !== undefined) assertDateTime(options.expires_at, 'expires_at');
+        const editorFields = options.editor_fields === undefined
+            ? undefined
+            : normaliseTemplateEditorFields(options.editor_fields);
+        if (
+            options.tags !== undefined
+            && (!Array.isArray(options.tags)
+                || options.tags.some((tag) => typeof tag !== 'string' || !tag.trim()))
+        ) {
+            throw new ValidationError('tags must be an array of non-empty tag names');
+        }
         const tmplId = this.requireId(templateId, 'Template ID');
         const accId = this.accountId(accountId);
         const body: Record<string, unknown> = {
-            ...options,
             signers: normaliseTemplateSigners(signers),
         };
+        if (options.name !== undefined) body['name'] = options.name;
+        if (options.message !== undefined) body['message'] = options.message;
+        if (options.expires_at !== undefined) body['expires_at'] = options.expires_at;
+        if (editorFields !== undefined) body['editor_fields'] = editorFields;
+        if (options.tags !== undefined) body['tags'] = [...options.tags];
         this.logger.info('Creating document from template', { templateId: tmplId, accountId: accId });
         return this.call('Failed to create document from template', () =>
             this.http.post(
@@ -840,11 +945,14 @@ export class DocumentResource extends BaseResource {
      *
      * A dry run: sends only `{ signers }` and consumes nothing. Use it to check
      * balances before calling {@link DocumentResource.createFromTemplate}.
+     * `DigitalCertificate` adds two credits per signer and has the same feature,
+     * `government_id`, and signing-step prerequisites as document creation.
      *
      * @param templateId - The template that would be instantiated.
      * @param signers - One channel descriptor per template role. Cost requests
      * use only `role_id`, `verification_method`, and `notification_methods`;
-     * they do not send a signer ID or signing-order step.
+     * they do not send a signer ID or signing-order step, and editor roles are
+     * ignored by the cost calculation.
      * @param accountId - Override the client's default account ID.
      * @returns An {@link ICostEstimate}: `total_credits`, balances, and a
      * per-line `breakdown` of what the operation would consume:
@@ -872,7 +980,7 @@ export class DocumentResource extends BaseResource {
      * @example
      * ```ts
      * const estimate = await client.documents.estimateCostFromTemplate('tmpl_id', [
-     *   { role_id: 'role_id', verification_method: 'Email' },
+     *   { role_id: 'role_id', verification_method: 'DigitalCertificate' },
      * ]);
      * if (!estimate.has_sufficient_resources) throw new Error(estimate.blocking_reason ?? 'insufficient');
      * ```
@@ -903,8 +1011,21 @@ export class DocumentResource extends BaseResource {
      *
      * @param hash - The document's signature hash (the
      * `documentSignatureHash` path segment).
-     * @returns `{ hash, id, status, page_count, signer_count, completed_count,
-     * completed_at, verified_at, is_valid, message }`.
+     * @returns The verification record:
+     * ```jsonc
+     * {
+     *   "hash": "FE32EDDADE7CBDDCBB934E7402047450B0E59C02",
+     *   "id": "63ddb172402799bfc991d10d",
+     *   "status": "certificated",
+     *   "page_count": "1",
+     *   "signer_count": "1",
+     *   "completed_count": 1,
+     *   "completed_at": "2023-01-27T19:27:44Z",
+     *   "verified_at": "2023-01-27T19:27:46Z",
+     *   "is_valid": true,
+     *   "message": ""
+     * }
+     * ```
      * @throws {ValidationError} If `hash` is missing.
      * @throws {ApiError} If the API rejects the request.
      *
@@ -921,11 +1042,12 @@ export class DocumentResource extends BaseResource {
     }
 
     /**
-     * List every possible document status (`GET /documents/statuses`).
+     * List the server's document-status catalog (`GET /documents/statuses`).
      *
-     * A static catalog (11 entries) of each status `code` and whether documents
-     * in that status can be deleted (`deletable`). This catalog requires the
-     * same API-key or Bearer authentication as other workspace operations.
+     * A server-controlled catalog of each status `code` and whether documents
+     * in that status can be deleted (`deletable`). New statuses may be added,
+     * so callers should not depend on a fixed count or order. This catalog
+     * requires the same API-key or Bearer authentication as workspace calls.
      *
      * @returns The status catalog:
      * ```jsonc
@@ -935,9 +1057,12 @@ export class DocumentResource extends BaseResource {
      *   { "code": "metadata_processing", "deletable": false },
      *   { "code": "metadata_ready", "deletable": true },
      *   { "code": "pending_signature", "deletable": true },
-     *   { "code": "certificated", "deletable": false }
-     *   // …11 total: also expired, certificating, rejected_by_signer,
-     *   //            rejected_by_user, failed
+     *   { "code": "expired", "deletable": false },
+     *   { "code": "certificating", "deletable": false },
+     *   { "code": "certificated", "deletable": false },
+     *   { "code": "rejected_by_signer", "deletable": false },
+     *   { "code": "rejected_by_user", "deletable": false },
+     *   { "code": "failed", "deletable": false }
      * ]
      * ```
      * @throws {ApiError} If the API rejects the request.
@@ -955,21 +1080,32 @@ export class DocumentResource extends BaseResource {
     }
 
     /**
-     * Public, unauthenticated lookup of basic document info
+     * Public, unauthenticated lookup of a document
      * (`GET /public/documents/{documentId}`).
      *
-     * Used by the signing portal before the signer authenticates via the access
-     * code, so it returns only non-sensitive fields.
+     * Returns either the full document response or a compact `page_count` /
+     * `created_by` compatibility variant.
      *
      * @param documentId - The document to look up.
-     * @returns Basic public info for the document:
+     * @returns The current document representation:
      * ```jsonc
      * {
      *   "resource": "document",
      *   "id": "103ad216846e6b90710cb9acef59",
+     *   "account_id": "acc_example",
+     *   "template_id": null,
      *   "name": "Service agreement.pdf",
-     *   "page_count": 1,
-     *   "created_by": "Multica Test"
+     *   "status": "pending_signature",
+     *   "artifacts": { "original": "https://…/download/original" },
+     *   "is_closed": false,
+     *   "signing_url": "https://…/sign/103ad216…",
+     *   "decline_reason": null,
+     *   "declined_by": null,
+     *   "tags": [],
+     *   "assignment": null,
+     *   "pages": [],
+     *   "created_at": "2026-07-19T17:24:43Z",
+     *   "updated_at": "2026-07-19T17:24:46Z"
      * }
      * ```
      * @throws {ValidationError} If `documentId` is missing.
@@ -1004,7 +1140,9 @@ export class DocumentResource extends BaseResource {
      * explicit channel is supplied).
      * @param channel - Optional legacy delivery channel.
      * @returns Nothing after the API's empty acknowledgement.
-     * @throws {ValidationError} If `documentId` or `recipient` is missing.
+     * @throws {ValidationError} If `documentId` or `recipient` is missing, the
+     * official two-argument form does not receive a valid email address, or a
+     * supplied `channel` is not a non-empty string.
      * @throws {ApiError} If the API rejects the request.
      *
      * @example
@@ -1025,7 +1163,11 @@ export class DocumentResource extends BaseResource {
         channel?: SendTokenChannel,
     ): Promise<void> {
         const id = this.requireId(documentId, 'Document ID');
-        if (!recipient) throw new ValidationError('recipient is required');
+        assertNonEmptyString(recipient, 'recipient');
+        if (channel !== undefined) assertNonEmptyString(channel, 'channel');
+        if (channel === undefined && !EMAIL_RE.test(recipient)) {
+            throw new ValidationError('recipient must be a valid email address');
+        }
         const path = `/public/documents/${this.pathSegment(id, 'Document ID')}/send-token`;
         if (channel !== undefined) {
             return this.callVoid('Failed to send signing token', () =>
@@ -1115,7 +1257,7 @@ function normaliseTemplateSigners(signers: ITemplateSigner[]): ITemplateSigner[]
     if (!Array.isArray(signers) || signers.length === 0) {
         throw new ValidationError('At least one template signer is required');
     }
-    return signers.map((signer, index) => {
+    const normalised = signers.map((signer, index) => {
         if (!signer || typeof signer !== 'object') {
             throw new ValidationError(`Template signer ${index + 1} is invalid`);
         }
@@ -1125,7 +1267,41 @@ function normaliseTemplateSigners(signers: ITemplateSigner[]): ITemplateSigner[]
         if (typeof signer.id !== 'string' || !signer.id.trim()) {
             throw new ValidationError(`Template signer ${index + 1} requires id`);
         }
-        return signer;
+        validateAssignmentSignerOptions(signer, `Template signer ${index + 1}`);
+        if (signer.notification_methods !== undefined && signer.notification_methods.length > 1) {
+            throw new ValidationError(`Template signer ${index + 1} allows one notification method`);
+        }
+        const projected: ITemplateSigner = { role_id: signer.role_id, id: signer.id };
+        if (signer.verification_method !== undefined) {
+            projected.verification_method = signer.verification_method;
+        }
+        if (signer.notification_methods !== undefined) {
+            projected.notification_methods = [...signer.notification_methods];
+        }
+        if (signer.step !== undefined) projected.step = signer.step;
+        return projected;
+    });
+    validateSigningOrder(normalised, 'template signers');
+    return normalised;
+}
+
+function normaliseTemplateEditorFields(
+    fields: ICreateDocumentFromTemplateOptions['editor_fields'],
+): Array<{ field_id: string; value: string }> {
+    if (!Array.isArray(fields)) {
+        throw new ValidationError('editor_fields must be an array');
+    }
+    return fields.map((field, index) => {
+        if (!field || typeof field !== 'object' || Array.isArray(field)) {
+            throw new ValidationError(`Editor field ${index + 1} must be an object`);
+        }
+        if (typeof field.field_id !== 'string' || !field.field_id.trim()) {
+            throw new ValidationError(`Editor field ${index + 1} requires field_id`);
+        }
+        if (typeof field.value !== 'string') {
+            throw new ValidationError(`Editor field ${index + 1} value must be a string`);
+        }
+        return { field_id: field.field_id, value: field.value };
     });
 }
 
@@ -1140,6 +1316,7 @@ function normaliseTemplateCostSigners(signers: ITemplateCostSigner[]): ITemplate
         if (typeof signer.role_id !== 'string' || !signer.role_id.trim()) {
             throw new ValidationError(`Template cost signer ${index + 1} requires role_id`);
         }
+        validateAssignmentSignerOptions(signer, `Template cost signer ${index + 1}`);
         const descriptor: ITemplateCostSigner = { role_id: signer.role_id };
         if (signer.verification_method !== undefined) {
             descriptor.verification_method = signer.verification_method;
@@ -1152,8 +1329,9 @@ function normaliseTemplateCostSigners(signers: ITemplateCostSigner[]): ITemplate
 }
 
 function validateWaitOption(value: number, name: 'maxWaitMs' | 'pollIntervalMs'): void {
-    if (!Number.isFinite(value) || value < 0) {
-        throw new ValidationError(`${name} must be a finite, non-negative number`, {
+    if (!Number.isFinite(value) || value < 0 || (name === 'pollIntervalMs' && value === 0)) {
+        const requirement = name === 'pollIntervalMs' ? 'positive' : 'non-negative';
+        throw new ValidationError(`${name} must be a finite, ${requirement} number`, {
             [name]: value,
         });
     }
@@ -1167,6 +1345,17 @@ function isLegacySendTokenValidation(error: unknown): boolean {
     if (!(error instanceof ApiError) || (error.statusCode !== 400 && error.statusCode !== 422)) {
         return false;
     }
-    const detail = `${error.message} ${JSON.stringify(error.responseData)}`.toLowerCase();
-    return detail.includes('channel') || detail.includes('recipient');
+    const namesLegacyField = /\b(?:channel|recipient)\b/iu.test(error.message);
+    const saysRequired = /\b(?:required|obrigat[oó]ri[oa])\b/iu.test(error.message);
+    if (namesLegacyField && saysRequired) return true;
+
+    const response = error.responseData;
+    if (!response || typeof response !== 'object' || Array.isArray(response)) return false;
+    const errors = (response as Record<string, unknown>)['errors'];
+    if (!errors || typeof errors !== 'object' || Array.isArray(errors)) return false;
+    return ['channel', 'recipient'].some((field) => {
+        if (!Object.hasOwn(errors, field)) return false;
+        const detail = JSON.stringify((errors as Record<string, unknown>)[field]);
+        return /required|obrigat[oó]ri[oa]/iu.test(detail);
+    });
 }

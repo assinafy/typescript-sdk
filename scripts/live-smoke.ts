@@ -1,11 +1,11 @@
 /**
- * Redaction-safe live integration audit for the Assinafy API.
+ * Redaction-safe integration suite for the Assinafy API.
  *
- * Read-only audit:
+ * Read-only checks:
  *   ASSINAFY_BASE_URL=... ASSINAFY_API_KEY=... ASSINAFY_ACCOUNT_ID=... \
  *     bun scripts/live-smoke.ts
  *
- * Full disposable-workspace audit (sandbox only by default):
+ * Full disposable-workspace checks (sandbox only by default):
  *   ASSINAFY_BASE_URL=... ASSINAFY_API_KEY=... ASSINAFY_ACCOUNT_ID=... \
  *   ASSINAFY_TEST_EMAIL_PRIMARY=... ASSINAFY_TEST_EMAIL_SECONDARY=... \
  *     bun scripts/live-smoke.ts --all
@@ -25,12 +25,15 @@ import {
     type ICreateAssignmentPayload,
     type IDocumentDetailsResponse,
     type ITemplateDetailsResponse,
+    type ITemplateSigner,
 } from '../src';
 
 const SANDBOX_HOST = 'sandbox.assinafy.com.br';
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const TEMPLATE_WAIT_MS = 90_000;
 const DISPATCH_WAIT_MS = 20_000;
+// The sandbox allows 120 requests/minute; leave headroom for polling calls.
+const INTEGRATION_STEP_INTERVAL_MS = 650;
 
 type AuditStatus = 'PASS' | 'FAIL' | 'SKIP';
 
@@ -72,9 +75,11 @@ class AuditConfigurationError extends Error {}
 
 class Reporter {
     private readonly records: AuditRecord[] = [];
+    private nextStepAt = 0;
 
     async step<T>(label: string, operation: () => Promise<T>): Promise<StepResult<T>> {
         try {
+            await this.pace();
             const value = await operation();
             this.record('PASS', label);
             return { ok: true, value };
@@ -91,6 +96,7 @@ class Reporter {
         operation: () => Promise<T>,
     ): Promise<StepResult<T>> {
         try {
+            await this.pace();
             const value = await operation();
             this.record('PASS', label);
             return { ok: true, value };
@@ -119,6 +125,12 @@ class Reporter {
     private record(status: AuditStatus, label: string, note?: string): void {
         this.records.push({ status, label });
         console.log(note ? `${status} ${label} (${note})` : `${status} ${label}`);
+    }
+
+    private async pace(): Promise<void> {
+        const waitMs = this.nextStepAt - Date.now();
+        if (waitMs > 0) await delay(waitMs);
+        this.nextStepAt = Date.now() + INTEGRATION_STEP_INTERVAL_MS;
     }
 }
 
@@ -242,7 +254,7 @@ function validateFixtureUrl(value: string): void {
 }
 
 function makePdf(): Buffer {
-    const stream = 'BT /F1 12 Tf 72 720 Td (Assinafy SDK integration audit) Tj ET\n';
+    const stream = 'BT /F1 12 Tf 72 720 Td (Assinafy SDK integration test) Tj ET\n';
     const objects = [
         '1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n',
         '2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n',
@@ -326,6 +338,35 @@ async function runGlobalReads(
         const user = await client.users.getCurrent();
         assertId(user.id);
     });
+    const notificationPreferences = await reporter.stepWithKnownApiStatusSkip(
+        'users.notification-preferences-read',
+        404,
+        'official route is not deployed in sandbox',
+        async () => {
+            const preferences = await client.users.getNotificationPreferences();
+            assertCondition(
+                Object.keys(preferences).length === 9 &&
+                Object.values(preferences).every((value) => typeof value === 'boolean'),
+            );
+            return preferences;
+        },
+    );
+    if (config.fullAudit && notificationPreferences.ok) {
+        await reporter.step('users.notification-preferences-update-noop', async () => {
+            const updated = await client.users.updateNotificationPreferences(
+                notificationPreferences.value,
+            );
+            assertCondition(
+                Object.keys(updated).length === 9 &&
+                Object.values(updated).every((value) => typeof value === 'boolean'),
+            );
+        });
+    } else {
+        reporter.skip(
+            'users.notification-preferences-update-noop',
+            config.fullAudit ? 'preference read fixture unavailable' : 'read-only mode',
+        );
+    }
     await reporter.stepWithKnownApiStatusSkip(
         'users.stats-monthly',
         404,
@@ -554,7 +595,7 @@ async function runFullSandboxAudit(
     try {
         const workspaceCreated = await reporter.step('workspaces.create-disposable', async () => {
             const workspace = await rootClient.workspaces.create({
-                name: randomLabel('sdk-integration-audit'),
+                name: randomLabel('sdk-integration-test'),
             });
             assertId(workspace.id);
             return workspace;
@@ -579,7 +620,7 @@ async function runFullSandboxAudit(
         });
         await reporter.step('workspaces.update-disposable', async () => {
             const workspace = await client.workspaces.update(workspaceId, {
-                name: randomLabel('sdk-integration-audit-updated'),
+                name: randomLabel('sdk-integration-test-updated'),
             });
             assertCondition(workspace.id === workspaceId);
         });
@@ -625,7 +666,7 @@ async function runFullSandboxAudit(
         const logoUploaded = await reporter.step('workspaces.logo-upload', async () => {
             await client.workspaces.uploadLogo(workspaceId, {
                 buffer: png,
-                fileName: 'sdk-integration-audit.png',
+                fileName: 'sdk-integration-test.png',
                 contentType: 'image/png',
             });
         });
@@ -703,13 +744,13 @@ async function runFullSandboxAudit(
                 assertCondition(field.id === fieldCreated.value.id);
             });
             await reporter.step('fields.validate', async () => {
-                const result = await client.fields.validate(fieldCreated.value.id, 'audit-ok');
+                const result = await client.fields.validate(fieldCreated.value.id, 'test-ok');
                 assertCondition(typeof result.success === 'boolean');
             });
             await reporter.step('fields.validate-multiple', async () => {
                 const results = await client.fields.validateMultiple([
-                    { field_id: fieldCreated.value.id, value: 'audit-ok' },
-                    { field_id: fieldCreated.value.id, value: 'audit-not-ok' },
+                    { field_id: fieldCreated.value.id, value: 'test-ok' },
+                    { field_id: fieldCreated.value.id, value: 'test-not-ok' },
                 ]);
                 assertCondition(results.length === 2);
             });
@@ -736,6 +777,25 @@ async function runFullSandboxAudit(
             secondaryEmail,
             randomLabel('SDK Integration Signer Secondary'),
         );
+        const unassignedSigner = await reporter.step('signers.create-delete-fixture', async () => {
+            const signer = await client.signers.create({
+                full_name: randomLabel('SDK Integration Unassigned Signer'),
+            });
+            assertId(signer.id);
+            state.signers.add(signer.id);
+            return signer;
+        });
+        if (unassignedSigner.ok) {
+            await deleteTrackedSigner(
+                client,
+                reporter,
+                state,
+                unassignedSigner.value.id,
+                'signers.delete-unassigned',
+            );
+        } else {
+            reporter.skip('signers.delete-unassigned', 'unassigned signer fixture was not created');
+        }
         await reporter.step('signers.list', async () => {
             const result = await client.signers.list({ 'per-page': 10 });
             assertArray(result.data);
@@ -755,10 +815,22 @@ async function runFullSandboxAudit(
                 });
                 assertCondition(signer.id === firstSigner.value.id);
             });
+            await reporter.stepWithKnownApiStatusSkip(
+                'signers.update-government-id',
+                400,
+                'production-only field is not deployed or enabled in sandbox',
+                async () => {
+                    const signer = await client.signers.update(firstSigner.value.id, {
+                        government_id: '390.533.447-05',
+                    });
+                    assertCondition(signer.id === firstSigner.value.id);
+                },
+            );
         } else {
             reporter.skip('signers.get', 'signer fixture was not created');
             reporter.skip('signers.find-by-email-primary', 'signer fixture was not created');
             reporter.skip('signers.update', 'signer fixture was not created');
+            reporter.skip('signers.update-government-id', 'signer fixture was not created');
         }
         if (secondSigner.ok) {
             await reporter.step('signers.find-by-email-secondary', async () => {
@@ -772,8 +844,8 @@ async function runFullSandboxAudit(
         const uploadName = randomLabel('sdk-integration-document');
         const documentUploaded = await reporter.step('documents.upload', async () => {
             const document = await client.documents.upload(
-                { buffer: pdf, fileName: 'sdk-integration-audit.pdf' },
-                { name: uploadName, metadata: { source: 'sdk-integration-audit' } },
+                { buffer: pdf, fileName: 'sdk-integration-test.pdf' },
+                { name: uploadName, metadata: { source: 'sdk-integration-test' } },
             );
             assertId(document.id);
             state.documents.add(document.id);
@@ -843,6 +915,7 @@ async function runFullSandboxAudit(
             });
             reporter.skip('documents.download-certificated', 'unsigned document has no final artifact');
             reporter.skip('documents.download-certificate-page', 'unsigned document has no certificate page');
+            reporter.skip('documents.download-pades', 'unsigned document has no PAdES artifact');
             reporter.skip('documents.download-bundle', 'unsigned document has no signed bundle');
             await reporter.step('documents.activities', async () => {
                 assertArray(await client.documents.activities(documentId));
@@ -852,7 +925,6 @@ async function runFullSandboxAudit(
             reporter.skip('documents.dependent-suite', 'document fixture was not uploaded');
         }
 
-        await deleteTrackedField(client, reporter, state, fieldCreated);
         await deleteTrackedTag(client, reporter, state, firstTag, 'tags.delete-primary');
         await deleteTrackedTag(client, reporter, state, secondTag, 'tags.delete-secondary');
 
@@ -865,10 +937,14 @@ async function runFullSandboxAudit(
                 reporter,
                 documentUploaded.value.id,
                 availableSigners,
+                fieldCreated.ok && readyDocument.pages[0]
+                    ? { fieldId: fieldCreated.value.id, pageId: readyDocument.pages[0].id }
+                    : undefined,
             );
         } else {
             reporter.skip('assignments.mutable-suite', 'ready document or signer fixture was unavailable');
         }
+        await deleteTrackedField(client, reporter, state, fieldCreated);
 
         if (documentUploaded.ok) {
             const documentId = documentUploaded.value.id;
@@ -876,11 +952,6 @@ async function runFullSandboxAudit(
                 const document = await client.documents.getPublic(documentId);
                 assertCondition(document.id === documentId);
             });
-            for (const signer of availableSigners) {
-                await reporter.step('documents.send-token-email', async () => {
-                    await client.documents.sendToken(documentId, signer.email);
-                });
-            }
             await reporter.step('documents.signing-progress', async () => {
                 const progress = await client.documents.getSigningProgress(documentId);
                 assertCondition(progress.total >= progress.signed && progress.pending >= 0);
@@ -907,11 +978,44 @@ async function runFullSandboxAudit(
         await finishDisposableWebhook(client, reporter, state);
 
         if (firstSigner.ok) {
-            await deleteTrackedSigner(client, reporter, state, firstSigner.value.id, 'signers.delete-primary');
+            await deleteTrackedSigner(
+                client,
+                reporter,
+                state,
+                firstSigner.value.id,
+                'signers.delete-primary',
+                {
+                    skipStatusCode: 400,
+                    skipReason: 'active assignment is removed by final workspace force-delete',
+                },
+            );
         }
         if (secondSigner.ok) {
-            await deleteTrackedSigner(client, reporter, state, secondSigner.value.id, 'signers.delete-secondary');
+            await deleteTrackedSigner(
+                client,
+                reporter,
+                state,
+                secondSigner.value.id,
+                'signers.delete-secondary',
+                {
+                    skipStatusCode: 400,
+                    skipReason: 'active assignment is removed by final workspace force-delete',
+                },
+            );
         }
+
+        await reporter.step('client.upload-and-request-signatures-immediate-virtual', async () => {
+            const result = await client.uploadAndRequestSignatures({
+                source: { buffer: pdf, fileName: 'sdk-integration-helper.pdf' },
+                signers: [{ name: randomLabel('SDK Integration Helper Signer'), email: primaryEmail }],
+                message: 'SDK integration helper test',
+                waitForReady: false,
+            });
+            assertId(result.document.id);
+            state.documents.add(result.document.id);
+            assertId(result.assignment.id);
+            assertCondition(result.signer_ids.length === 1);
+        });
     } finally {
         await cleanupSandbox(rootClient, reporter, state);
     }
@@ -1043,8 +1147,11 @@ async function runAssignmentSuite(
     reporter: Reporter,
     documentId: string,
     signers: Array<{ id: string; email: string }>,
+    collectFixture?: { fieldId: string; pageId: string },
 ): Promise<void> {
-    const signerPayload: NonNullable<ICreateAssignmentPayload['signers']> = signers.map(
+    const signingSigners = signers.slice(0, 1);
+    const copyReceiver = signers[1];
+    const signerPayload: NonNullable<ICreateAssignmentPayload['signers']> = signingSigners.map(
         (signer) => ({
             id: signer.id,
             verification_method: 'Email',
@@ -1055,19 +1162,63 @@ async function runAssignmentSuite(
     const payload: ICreateAssignmentPayload = {
         method: 'virtual',
         signers: signerPayload,
-        message: 'SDK integration audit notification',
+        message: 'SDK integration test notification',
     };
+    if (copyReceiver) payload.copy_receivers = [copyReceiver.id];
 
     await reporter.step('assignments.estimate-cost', async () => {
         const estimate = await client.assignments.estimateCost(documentId, {
             method: 'virtual',
-            signers: signers.map(() => ({
+            signers: signingSigners.map(() => ({
                 verification_method: 'Email',
                 notification_methods: ['Email'],
             })),
         });
         assertCondition(typeof estimate.total_credits === 'number');
     });
+    await reporter.stepWithKnownApiStatusSkip(
+        'assignments.estimate-cost-digital-certificate',
+        400,
+        'Digital Certificate feature is unavailable on the sandbox plan',
+        async () => {
+            const estimate = await client.assignments.estimateCost(documentId, {
+                method: 'virtual',
+                signers: [{ verification_method: 'DigitalCertificate' }],
+            });
+            assertCondition(typeof estimate.total_credits === 'number');
+        },
+    );
+    if (collectFixture) {
+        await reporter.step('assignments.estimate-cost-collect-display-settings', async () => {
+            const estimate = await client.assignments.estimateCost(documentId, {
+                method: 'collect',
+                signers: signingSigners.map(() => ({
+                    verification_method: 'Email',
+                    notification_methods: ['Email'],
+                })),
+                entries: [{
+                    page_id: collectFixture.pageId,
+                    fields: [{
+                        signer_id: signers[0]!.id,
+                        field_id: collectFixture.fieldId,
+                        display_settings: {
+                            left: 20,
+                            top: 20,
+                            width: 180,
+                            height: 32,
+                            fontSize: 12,
+                        },
+                    }],
+                }],
+            });
+            assertCondition(typeof estimate.total_credits === 'number');
+        });
+    } else {
+        reporter.skip(
+            'assignments.estimate-cost-collect-display-settings',
+            'rendered page or field fixture unavailable',
+        );
+    }
     const assignment = await reporter.step('assignments.create', async () => {
         const created = await client.assignments.create(documentId, payload);
         assertId(created.id);
@@ -1078,7 +1229,10 @@ async function runAssignmentSuite(
         assertArray(result.data);
     });
     if (!assignment.ok) {
+        reporter.skip('assignments.copy-receivers-persisted', 'assignment fixture was not created');
+        reporter.skip('documents.send-token-email', 'assignment fixture was not created');
         reporter.skip('signer-documents.download-public-original', 'assignment fixture was not created');
+        reporter.skip('signer-documents.download-public-pades', 'assignment fixture was not created');
         reporter.skip('assignments.reset-expiration', 'assignment fixture was not created');
         reporter.skip('assignments.estimate-resend-cost', 'assignment fixture was not created');
         reporter.skip('assignments.resend-notification', 'assignment fixture was not created');
@@ -1086,11 +1240,34 @@ async function runAssignmentSuite(
         return;
     }
 
-    const signer = signers[0];
+    if (!copyReceiver) {
+        reporter.skip('assignments.copy-receivers-persisted', 'second signer fixture unavailable');
+    } else if (
+        !assignment.value.copy_receivers?.some(
+            (receiver) =>
+                receiver['id'] === copyReceiver.id || receiver['signer_id'] === copyReceiver.id,
+        )
+    ) {
+        reporter.skip(
+            'assignments.copy-receivers-persisted',
+            'sandbox plan accepted but did not persist the signer ID',
+        );
+    } else {
+        await reporter.step('assignments.copy-receivers-persisted', async () => undefined);
+    }
+
+    const signer = signingSigners[0];
     assertCondition(signer);
+    await reporter.step('documents.send-token-email', async () => {
+        await client.documents.sendToken(documentId, signer.email);
+    });
     await reporter.step('signer-documents.download-public-original', async () => {
         assertBuffer(await client.signerDocuments.download(signer.id, documentId, 'original'));
     });
+    reporter.skip(
+        'signer-documents.download-public-pades',
+        'unsigned document has no PAdES artifact',
+    );
     await reporter.step('assignments.reset-expiration', async () => {
         const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1_000).toISOString();
         const updated = await client.assignments.resetExpiration(
@@ -1148,7 +1325,7 @@ async function runTemplateSuite(
         await reporter.step('templates.extension-update', async () => {
             const template = await client.templates.update(created.value.id, {
                 name: randomLabel('sdk-integration-template-updated'),
-                message: 'SDK integration audit template',
+                message: 'SDK integration test template',
             });
             assertCondition(template.id === created.value.id);
         });
@@ -1174,7 +1351,7 @@ async function runTemplateSuite(
         reporter.skip('templates.documents.estimate-cost', 'template role or signer fixture unavailable');
         reporter.skip('templates.documents.create', 'template role or signer fixture unavailable');
     } else {
-        const signers = [
+        const signers: ITemplateSigner[] = [
             {
                 role_id: fixtureRoleId,
                 id: signerId,
@@ -1193,13 +1370,28 @@ async function runTemplateSuite(
             );
             assertCondition(typeof estimate.total_credits === 'number');
         });
+        await reporter.stepWithKnownApiStatusSkip(
+            'templates.documents.estimate-cost-digital-certificate',
+            400,
+            'Digital Certificate feature is unavailable on the sandbox plan',
+            async () => {
+                const estimate = await client.documents.estimateCostFromTemplate(
+                    fixtureTemplateId,
+                    [{
+                        role_id: fixtureRoleId,
+                        verification_method: 'DigitalCertificate',
+                    }],
+                );
+                assertCondition(typeof estimate.total_credits === 'number');
+            },
+        );
         const document = await reporter.step('templates.documents.create', async () => {
             const result = await client.documents.createFromTemplate(
                 fixtureTemplateId,
                 signers,
                 {
                     name: randomLabel('sdk-integration-from-template'),
-                    message: 'SDK integration audit template document',
+                    message: 'SDK integration test template document',
                 },
             );
             assertId(result.id);
@@ -1322,8 +1514,17 @@ async function deleteTrackedSigner(
     state: SandboxState,
     signerId: string,
     label: string,
+    options?: { skipStatusCode: number; skipReason: string },
 ): Promise<void> {
-    const deleted = await reporter.step(label, async () => client.signers.delete(signerId));
+    const operation = async () => client.signers.delete(signerId);
+    const deleted = options
+        ? await reporter.stepWithKnownApiStatusSkip(
+            label,
+            options.skipStatusCode,
+            options.skipReason,
+            operation,
+        )
+        : await reporter.step(label, operation);
     if (deleted.ok) state.signers.delete(signerId);
 }
 
@@ -1381,6 +1582,10 @@ async function cleanupSandbox(
                 state,
                 signerId,
                 'cleanup.signers.delete',
+                {
+                    skipStatusCode: 400,
+                    skipReason: 'active assignment requires final workspace force-delete',
+                },
             );
         }
     }

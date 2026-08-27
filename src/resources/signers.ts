@@ -4,10 +4,10 @@ import type {
     ISigner,
     ISignerListResponse,
     IUpdateSignerPayload,
-    IListParams,
+    ISignerListParams,
 } from '../types';
 import { ApiError, ValidationError } from '../errors';
-import { cleanListParams, cleanParams } from '../utils';
+import { cleanListParams, cleanParams, serializeJsonRecord } from '../utils';
 import { BaseResource } from './base';
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -22,10 +22,13 @@ export class SignerResource extends BaseResource {
      * an existing signer with that address is reused instead of duplicated (a
      * duplicate POST is answered by the API with `400 "Um signatário com este
      * e-mail já existe."`, which this method recovers from transparently).
+     * A reused signer is returned unchanged; this method does not overwrite its
+     * existing name, phone, CPF, or metadata with the create payload.
      *
-     * @param payload - The signer to create. Only `full_name` is required.
-     * Optional `email`, `whatsapp_phone_number`/`phone`, and `cpf` are normalized
-     * before sending.
+     * @param payload - The signer to create. The official fields are required
+     * `full_name` plus optional `email` and E.164 `whatsapp_phone_number`.
+     * `phone`, `cpf`, and `metadata` are compatibility extensions; the SDK
+     * normalizes the phone alias and strips non-digits from CPF before sending.
      * @param accountId - Override the client's default account ID.
      * @returns The created (or reused) signer. Note the response **never echoes
      * `cpf` back**, even when one was sent:
@@ -144,8 +147,8 @@ export class SignerResource extends BaseResource {
      * List signers for the workspace (`GET /accounts/{accountId}/signers`).
      * Pagination info (if any) is attached in `meta`.
      *
-     * @param params - `page`, `per-page`, `search`, `sort`. `per-page` is
-     * clamped to the API maximum of 50.
+     * @param params - `page`, `per-page`, and `search` (matches `full_name` or
+     * `email`). The API maximum is 100 items per page.
      * @param accountId - Override the client's default account ID.
      * @returns The matching signers, with pagination in `meta`. Each item:
      * ```jsonc
@@ -168,7 +171,7 @@ export class SignerResource extends BaseResource {
      * });
      * ```
      */
-    async list(params: IListParams = {}, accountId?: string): Promise<ISignerListResponse> {
+    async list(params: ISignerListParams = {}, accountId?: string): Promise<ISignerListResponse> {
         const id = this.accountId(accountId);
         return this.callList<ISigner>('Failed to list signers', () =>
             this.http.get(`/accounts/${this.pathSegment(id, 'Account ID')}/signers`, {
@@ -178,12 +181,14 @@ export class SignerResource extends BaseResource {
     }
 
     /**
-     * Update a signer (`PUT /accounts/{accountId}/signers/{signerId}`). Fails
-     * if the signer has active assignments.
+     * Update a signer (`PUT /accounts/{accountId}/signers/{signerId}`). A name
+     * can always be updated. A verified email or WhatsApp channel cannot change
+     * while it belongs to an in-flight document; changing an unverified channel
+     * rotates its access/verification codes, so resend the notification.
      *
      * @param signerId - The signer to update.
-     * @param payload - Fields to change. Any `cpf` is stripped to digits before
-     * sending.
+     * @param payload - Fields to change. The official `government_id` field and
+     * legacy `cpf` extension are stripped to digits before sending.
      * @param accountId - Override the client's default account ID.
      * @returns The updated signer (as with create, `cpf` is never echoed back):
      * ```jsonc
@@ -197,13 +202,14 @@ export class SignerResource extends BaseResource {
      * }
      * ```
      * @throws {ValidationError} If `signerId` is missing or no account ID is available.
-     * @throws {ApiError} `400` if the signer has active assignments; `404` if it
-     * does not exist.
+     * @throws {ApiError} `400` if a verified contact channel is in use by an
+     * in-flight document; `404` if the signer does not exist.
      *
      * @example
      * ```ts
      * await client.signers.update('19e6b92e7895332ed9708535d8c', {
      *   full_name: 'Ana Souza Lima',
+     *   government_id: '390.533.447-05',
      * });
      * ```
      */
@@ -256,10 +262,9 @@ export class SignerResource extends BaseResource {
      * `search` is a substring match across signer fields, so the result is
      * re-filtered here for an exact, case-insensitive email match.
      *
-     * Page size is pinned to the API's maximum of 50: larger values are
-     * silently clamped to 50 by the server, so asking for more is misleading.
+     * Page size is pinned to the API's maximum of 100.
      * An exact address realistically matches one signer, but a search term that
-     * matched more than 50 could in principle miss one — the API exposes no
+     * matched more than 100 could in principle miss one — the API exposes no
      * exact-email filter to rule that out.
      *
      * A `404` from the underlying list is treated as "no match" and mapped to
@@ -290,7 +295,7 @@ export class SignerResource extends BaseResource {
     async findByEmail(email: string, accountId?: string): Promise<ISigner | null> {
         this.assertEmail(email);
         try {
-            const { data } = await this.list({ search: email, 'per-page': 50 }, accountId);
+            const { data } = await this.list({ search: email, 'per-page': 100 }, accountId);
             const lower = email.toLowerCase();
             return data.find((s) => (s.email ?? '').toLowerCase() === lower) ?? null;
         } catch (err) {
@@ -323,10 +328,9 @@ export function validateCreateSignerPayload(payload: ICreateSignerPayload): void
     ) {
         throw new ValidationError('Invalid email address', { email: payload.email });
     }
-    if (phone !== undefined && (typeof phone !== 'string' || !phone.trim())) {
-        throw new ValidationError('whatsapp_phone_number cannot be empty');
-    }
-    validateOptionalCpf(payload.cpf);
+    validateOptionalPhone(phone);
+    if (payload.metadata !== undefined) serializeJsonRecord(payload.metadata, 'metadata');
+    validateOptionalDigits(payload.cpf, 'cpf');
 }
 
 /** Validate the fields supplied to a partial signer update. */
@@ -341,6 +345,7 @@ export function validateUpdateSignerPayload(payload: IUpdateSignerPayload): void
         payload.whatsapp_phone_number,
         payload.phone,
         payload.cpf,
+        payload.government_id,
     ].some((value) => value !== undefined);
     if (!hasSupportedField) {
         throw new ValidationError('Signer update must include at least one field');
@@ -359,16 +364,22 @@ export function validateUpdateSignerPayload(payload: IUpdateSignerPayload): void
     }
 
     const phone = payload.whatsapp_phone_number ?? payload.phone;
-    if (phone !== undefined && (typeof phone !== 'string' || !phone.trim())) {
-        throw new ValidationError('whatsapp_phone_number cannot be empty');
-    }
-    validateOptionalCpf(payload.cpf);
+    validateOptionalPhone(phone);
+    validateOptionalDigits(payload.cpf, 'cpf');
+    validateOptionalDigits(payload.government_id, 'government_id');
 }
 
-function validateOptionalCpf(cpf: string | undefined): void {
-    if (cpf === undefined) return;
-    if (typeof cpf !== 'string' || cpf.replace(/\D/g, '').length === 0) {
-        throw new ValidationError('cpf must contain digits');
+function validateOptionalDigits(value: string | undefined, field: 'cpf' | 'government_id'): void {
+    if (value === undefined) return;
+    if (typeof value !== 'string' || value.replace(/\D/g, '').length === 0) {
+        throw new ValidationError(`${field} must contain digits`);
+    }
+}
+
+function validateOptionalPhone(value: string | undefined): void {
+    if (value === undefined) return;
+    if (typeof value !== 'string' || !/^\+[1-9]\d{1,14}$/u.test(value)) {
+        throw new ValidationError('whatsapp_phone_number must use E.164 format');
     }
 }
 
@@ -383,6 +394,10 @@ function normaliseSignerPayload(
 
     if (payload.cpf) {
         normalised['cpf'] = payload.cpf.replace(/\D/g, '');
+    }
+
+    if ('government_id' in payload && payload.government_id) {
+        normalised['government_id'] = payload.government_id.replace(/\D/g, '');
     }
 
     if ('metadata' in payload && payload.metadata !== undefined) {

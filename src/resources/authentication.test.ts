@@ -80,7 +80,8 @@ describe('AuthenticationResource', () => {
         expect(auth.getSocialLoginCallbackUrl()).toBe(
             'https://sandbox.assinafy.com.br/v1/login-callback',
         );
-        expect(() => auth.getSocialLoginUrl('')).toThrow(ValidationError);
+        expect(() => auth.getSocialLoginUrl('' as never)).toThrow(ValidationError);
+        expect(() => auth.getSocialLoginUrl('github' as never)).toThrow(ValidationError);
     });
 
     test('login validates credentials and returns the POST response', async () => {
@@ -108,16 +109,33 @@ describe('AuthenticationResource', () => {
         const auth = new AuthenticationResource(http);
 
         await expect(
-            auth.socialLogin({ provider: '', token: 'token', has_accepted_terms: true }),
+            auth.socialLogin({ provider: '' as never, token: 'token', has_accepted_terms: true }),
+        ).rejects.toThrow(ValidationError);
+        await expect(
+            auth.socialLogin({
+                provider: 'github' as never,
+                token: 'token',
+                has_accepted_terms: true,
+            }),
         ).rejects.toThrow(ValidationError);
         await expect(
             auth.socialLogin({ provider: 'google', token: '', has_accepted_terms: true }),
+        ).rejects.toThrow(ValidationError);
+        await expect(
+            auth.socialLogin({ provider: 'google', token: 'token' } as never),
+        ).rejects.toThrow(ValidationError);
+        await expect(
+            auth.socialLogin({
+                provider: 'google',
+                token: 'token',
+                has_accepted_terms: 'true',
+            } as never),
         ).rejects.toThrow(ValidationError);
 
         const payload = {
             provider: 'google' as const,
             token: 'provider-token',
-            has_accepted_terms: true,
+            has_accepted_terms: false,
         };
         const result = await auth.socialLogin(payload);
 
@@ -132,13 +150,136 @@ describe('AuthenticationResource', () => {
         expect(result).toEqual(LOGIN_RESPONSE);
     });
 
+    test('payload methods reject null with ValidationError before requesting', async () => {
+        const { http, calls } = mockHttp();
+        const auth = new AuthenticationResource(http);
+        const requests = [
+            () => auth.socialLogin(null as never),
+            () => auth.linkSocialLogin(null as never),
+            () => auth.changePassword(null as never),
+            () => auth.resetPassword(null as never),
+        ];
+
+        for (const request of requests) {
+            await expect(request()).rejects.toBeInstanceOf(ValidationError);
+        }
+        expect(calls).toHaveLength(0);
+    });
+
+    test('closed authentication payloads do not forward structural extras', async () => {
+        const { http, calls } = mockHttp();
+        const auth = new AuthenticationResource(http);
+
+        await auth.socialLogin({
+            provider: 'google',
+            token: 'provider-token',
+            has_accepted_terms: true,
+            internal_secret: 'do-not-send',
+        } as never);
+        await auth.linkSocialLogin({
+            provider: 'google',
+            token: 'provider-token',
+            internal_secret: 'do-not-send',
+        } as never);
+        await auth.changePassword({
+            email: 'user@example.com',
+            password: 'old-password',
+            new_password: 'new-password',
+            internal_secret: 'do-not-send',
+        } as never);
+        await auth.resetPassword({
+            email: 'user@example.com',
+            token: 'reset-token',
+            new_password: 'new-password',
+            internal_secret: 'do-not-send',
+        } as never);
+
+        expect(calls.map((call) => call.body)).toEqual([
+            {
+                provider: 'google',
+                token: 'provider-token',
+                has_accepted_terms: true,
+            },
+            { provider: 'google', token: 'provider-token' },
+            {
+                email: 'user@example.com',
+                password: 'old-password',
+                new_password: 'new-password',
+            },
+            {
+                email: 'user@example.com',
+                token: 'reset-token',
+                new_password: 'new-password',
+            },
+        ]);
+    });
+
+    test('closed authentication fields reject truthy non-strings before requesting', async () => {
+        const { http, calls } = mockHttp();
+        const auth = new AuthenticationResource(http);
+        const requests = [
+            () => auth.login(42 as never, 'password'),
+            () => auth.login('user@example.com', {} as never),
+            () => auth.socialLogin({
+                provider: 'google',
+                token: 42,
+                has_accepted_terms: true,
+            } as never),
+            () => auth.linkSocialLogin({ provider: 'google', token: {} } as never),
+            () => auth.createApiKey(42 as never),
+            () => auth.changePassword({
+                email: 42,
+                password: 'old-password',
+                new_password: 'new-password',
+            } as never),
+            () => auth.requestPasswordReset({} as never),
+            () => auth.resetPassword({
+                email: 'user@example.com',
+                token: 42,
+                new_password: 'new-password',
+            } as never),
+        ];
+
+        for (const request of requests) {
+            await expect(request()).rejects.toBeInstanceOf(ValidationError);
+        }
+        expect(calls).toHaveLength(0);
+    });
+
+    test('email-formatted authentication fields reject malformed addresses before requesting', async () => {
+        const { http, calls } = mockHttp();
+        const auth = new AuthenticationResource(http);
+        const requests = [
+            () => auth.login('not-an-email', 'password'),
+            () => auth.changePassword({
+                email: 'not-an-email',
+                password: 'old-password',
+                new_password: 'new-password',
+            }),
+            () => auth.requestPasswordReset('not-an-email'),
+            () => auth.resetPassword({
+                email: 'not-an-email',
+                token: 'reset-token',
+                new_password: 'new-password',
+            }),
+        ];
+
+        for (const request of requests) {
+            await expect(request()).rejects.toBeInstanceOf(ValidationError);
+        }
+        expect(calls).toHaveLength(0);
+    });
+
     test('linkSocialLogin validates, POSTs the payload, and resolves void', async () => {
         const { http, calls } = mockHttp();
         const auth = new AuthenticationResource(http);
 
-        await expect(auth.linkSocialLogin({ provider: '', token: 'token' })).rejects.toThrow(
-            ValidationError,
-        );
+        await expect(
+            auth.linkSocialLogin({ provider: '' as never, token: 'token' }),
+        ).rejects.toThrow(ValidationError);
+        await expect(
+            auth.linkSocialLogin({ provider: 'github' as never, token: 'token' }),
+        ).rejects.toThrow(ValidationError);
         await expect(auth.linkSocialLogin({ provider: 'google', token: '' })).rejects.toThrow(
             ValidationError,
         );

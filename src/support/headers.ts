@@ -14,7 +14,15 @@ export function readHeader(
     const lower = name.toLowerCase();
     for (const [key, value] of Object.entries(headers)) {
         if (key.toLowerCase() === lower && value != null) {
-            return Array.isArray(value) ? String(value[0]) : String(value);
+            const first = Array.isArray(value) ? value[0] : value;
+            if (
+                typeof first === 'string'
+                || typeof first === 'number'
+                || typeof first === 'boolean'
+            ) {
+                return String(first);
+            }
+            return undefined;
         }
     }
     return undefined;

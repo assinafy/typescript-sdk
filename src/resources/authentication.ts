@@ -1,13 +1,16 @@
 import type { AxiosInstance } from 'axios';
 import type {
-    AnyString,
     IApiKeyResponse,
     ILoginResponse,
     IMaskedApiKeyResponse,
     Logger,
 } from '../types';
 import { ValidationError } from '../errors';
+import { assertNonEmptyString, assertRecord } from '../utils';
 import { BaseResource } from './base';
+import { withoutCredentials } from '../support/transport';
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 /**
  * Authentication endpoints (login, social login, password management) and
@@ -18,18 +21,24 @@ import { BaseResource } from './base';
  * `X-Api-Key` and skip this resource entirely.
  */
 export class AuthenticationResource extends BaseResource {
+    private readonly publicHttp: AxiosInstance;
+
     constructor(
         http: AxiosInstance,
         defaultAccountId?: string,
         logger?: Logger,
-        private readonly publicHttp: AxiosInstance = http,
+        publicHttp?: AxiosInstance,
     ) {
         super(http, defaultAccountId, logger);
+        this.publicHttp = withoutCredentials(publicHttp ?? http);
     }
 
     /**
      * Build the browser-facing OAuth start URL
      * (`GET /auth/authenticate?authclient=…`).
+     *
+     * This is a compatibility browser route. Confirm availability on the
+     * configured host before exposing it in a login flow.
      *
      * This endpoint responds with `302` to the provider consent screen, so the
      * SDK returns the URL for your web framework to redirect to instead of
@@ -38,20 +47,25 @@ export class AuthenticationResource extends BaseResource {
      * @param authClient - Provider key; currently `google`.
      * @returns An absolute URL, for example
      * `https://api.assinafy.com.br/v1/auth/authenticate?authclient=google`.
-     * @throws {ValidationError} If `authClient` is empty.
+     * @throws {ValidationError} If `authClient` is not `google`.
      *
      * @example
      * ```ts
      * response.redirect(client.auth.getSocialLoginUrl('google'));
      * ```
      */
-    getSocialLoginUrl(authClient: 'google' | AnyString = 'google'): string {
-        if (!authClient) throw new ValidationError('authClient is required');
+    getSocialLoginUrl(authClient: 'google' = 'google'): string {
+        if (authClient !== 'google') {
+            throw new ValidationError('authClient must be google');
+        }
         return this.absoluteUrl('/auth/authenticate', { authclient: authClient });
     }
 
     /**
      * Return the Assinafy browser callback URL (`GET /login-callback`).
+     *
+     * This is a compatibility browser route. Confirm availability on the
+     * configured host before use.
      *
      * The callback response payload is intentionally unspecified by the API;
      * OAuth providers call it in a browser. Use this URL when a provider setup
@@ -118,8 +132,8 @@ export class AuthenticationResource extends BaseResource {
      * ```
      */
     async login(email: string, password: string): Promise<ILoginResponse> {
-        if (!email) throw new ValidationError('email is required');
-        if (!password) throw new ValidationError('password is required');
+        assertEmail(email);
+        assertNonEmptyString(password, 'password');
         return this.call('Login failed', () =>
             this.publicHttp.post('/login', { email, password }),
         );
@@ -133,8 +147,7 @@ export class AuthenticationResource extends BaseResource {
      * {@link AuthenticationResource.login}.
      *
      * @param payload - The social-login body.
-     * @param payload.provider - OAuth provider. The API currently accepts
-     * `'google'`; the type is left open for forward-compatibility.
+     * @param payload.provider - OAuth provider; currently exactly `'google'`.
      * @param payload.token - The provider-issued OAuth/ID token.
      * @param payload.has_accepted_terms - Whether the user has accepted the
      * terms of service.
@@ -147,8 +160,12 @@ export class AuthenticationResource extends BaseResource {
      *     "id": "md3j6p9w8b7y6qvqaoy5er42",
      *     "name": "Multica Test",
      *     "email": "user@example.com",
+     *     "telephone": null,
+     *     "government_id": "",
      *     "is_email_verified": true,
-     *     "has_accepted_terms": true
+     *     "has_accepted_terms": true,
+     *     "created_at": "2026-05-12T13:45:11Z",
+     *     "to_be_deleted_at": null
      *   },
      *   "accounts": [
      *     {
@@ -161,7 +178,8 @@ export class AuthenticationResource extends BaseResource {
      *   ]
      * }
      * ```
-     * @throws {ValidationError} If `provider` or `token` is missing.
+     * @throws {ValidationError} If `provider` is not `google`, `token` is
+     * missing, or `has_accepted_terms` is not a boolean.
      * @throws {ApiError} `400` if the provider token is rejected.
      *
      * @example
@@ -174,15 +192,25 @@ export class AuthenticationResource extends BaseResource {
      * ```
      */
     async socialLogin(payload: {
-        /** OAuth provider. The API currently accepts `google`; typed open for forward-compat. */
-        provider: 'google' | AnyString;
+        /** OAuth provider. The current API accepts only `google`. */
+        provider: 'google';
         token: string;
         has_accepted_terms: boolean;
     }): Promise<ILoginResponse> {
-        if (!payload.provider) throw new ValidationError('provider is required');
-        if (!payload.token) throw new ValidationError('token is required');
+        assertRecord(payload, 'social login payload');
+        if (payload.provider !== 'google') {
+            throw new ValidationError('provider must be google');
+        }
+        assertNonEmptyString(payload.token, 'token');
+        if (typeof payload.has_accepted_terms !== 'boolean') {
+            throw new ValidationError('has_accepted_terms must be a boolean');
+        }
         return this.call('Social login failed', () =>
-            this.publicHttp.post('/authentication/social-login', payload),
+            this.publicHttp.post('/authentication/social-login', {
+                provider: payload.provider,
+                token: payload.token,
+                has_accepted_terms: payload.has_accepted_terms,
+            }),
         );
     }
 
@@ -199,7 +227,7 @@ export class AuthenticationResource extends BaseResource {
      *
      * @param payload - Social provider and provider-issued access/ID token.
      * @returns Resolves when the API acknowledges that the identity was linked.
-     * @throws {ValidationError} If either field is empty.
+     * @throws {ValidationError} If `provider` is not `google` or `token` is empty.
      * @throws {ApiError} `400` for an invalid provider token or `401` for
      * missing/invalid Assinafy credentials.
      *
@@ -212,13 +240,19 @@ export class AuthenticationResource extends BaseResource {
      * ```
      */
     async linkSocialLogin(payload: {
-        provider: 'google' | AnyString;
+        provider: 'google';
         token: string;
     }): Promise<void> {
-        if (!payload.provider) throw new ValidationError('provider is required');
-        if (!payload.token) throw new ValidationError('token is required');
+        assertRecord(payload, 'social login link payload');
+        if (payload.provider !== 'google') {
+            throw new ValidationError('provider must be google');
+        }
+        assertNonEmptyString(payload.token, 'token');
         return this.callVoid('Failed to link social login', () =>
-            this.http.post('/auth/link-social-login', payload),
+            this.http.post('/auth/link-social-login', {
+                provider: payload.provider,
+                token: payload.token,
+            }),
         );
     }
 
@@ -250,7 +284,7 @@ export class AuthenticationResource extends BaseResource {
      * ```
      */
     async createApiKey(password: string): Promise<IApiKeyResponse> {
-        if (!password) throw new ValidationError('password is required');
+        assertNonEmptyString(password, 'password');
         return this.call('Failed to create API key', () =>
             this.http.post('/users/api-keys', { password }),
         );
@@ -348,11 +382,16 @@ export class AuthenticationResource extends BaseResource {
         password: string;
         new_password: string;
     }): Promise<{ email: string }> {
-        if (!payload.email) throw new ValidationError('email is required');
-        if (!payload.password) throw new ValidationError('password is required');
-        if (!payload.new_password) throw new ValidationError('new_password is required');
+        assertRecord(payload, 'change password payload');
+        assertEmail(payload.email);
+        assertNonEmptyString(payload.password, 'password');
+        assertNonEmptyString(payload.new_password, 'new_password');
         return this.call('Failed to change password', () =>
-            this.http.put('/authentication/change-password', payload),
+            this.http.put('/authentication/change-password', {
+                email: payload.email,
+                password: payload.password,
+                new_password: payload.new_password,
+            }),
         );
     }
 
@@ -380,7 +419,7 @@ export class AuthenticationResource extends BaseResource {
      * ```
      */
     async requestPasswordReset(email: string): Promise<{ email: string }> {
-        if (!email) throw new ValidationError('email is required');
+        assertEmail(email);
         return this.call('Failed to request password reset', () =>
             this.publicHttp.put('/authentication/request-password-reset', { email }),
         );
@@ -396,7 +435,9 @@ export class AuthenticationResource extends BaseResource {
      *
      * @param payload - The reset-password body.
      * @param payload.email - The user's email address.
-     * @param payload.token - The reset token from the emailed link.
+     * @param payload.token - The reset token from the emailed link. The current
+     * schema leaves it optional even though the operation description says the
+     * reset uses that token.
      * @param payload.new_password - The new password to set.
      * @returns `{ email }` — the address whose password was reset. Response
      * shape:
@@ -422,10 +463,19 @@ export class AuthenticationResource extends BaseResource {
         token?: string;
         new_password: string;
     }): Promise<{ email: string }> {
-        if (!payload.email) throw new ValidationError('email is required');
-        if (!payload.new_password) throw new ValidationError('new_password is required');
+        assertRecord(payload, 'reset password payload');
+        assertEmail(payload.email);
+        assertNonEmptyString(payload.new_password, 'new_password');
+        const body: { email: string; token?: string; new_password: string } = {
+            email: payload.email,
+            new_password: payload.new_password,
+        };
+        if (payload.token !== undefined) {
+            assertNonEmptyString(payload.token, 'token');
+            body.token = payload.token;
+        }
         return this.call('Failed to reset password', () =>
-            this.publicHttp.put('/authentication/reset-password', payload),
+            this.publicHttp.put('/authentication/reset-password', body),
         );
     }
 
@@ -436,5 +486,11 @@ export class AuthenticationResource extends BaseResource {
             url.searchParams.set(key, value);
         }
         return url.toString();
+    }
+}
+
+function assertEmail(value: unknown): asserts value is string {
+    if (typeof value !== 'string' || !EMAIL_RE.test(value)) {
+        throw new ValidationError('email must be a valid email address');
     }
 }

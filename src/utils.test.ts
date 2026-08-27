@@ -1,13 +1,70 @@
 import { describe, test, expect } from 'bun:test';
 import {
+    assertRecord,
+    assertDateTime,
+    assertNonEmptyString,
     cleanListParams,
     cleanParams,
     createSafeLogger,
     handleAssinafyResponse,
+    serializeJsonRecord,
     toSdkError,
 } from './utils';
 import { ApiError, AssinafyError, NetworkError, ValidationError } from './errors';
 import type { AxiosError } from 'axios';
+
+describe('assertRecord', () => {
+    test('rejects malformed JavaScript object inputs with ValidationError', () => {
+        for (const value of [null, undefined, 'payload', 1, [], () => undefined]) {
+            expect(() => assertRecord(value, 'payload')).toThrow(ValidationError);
+        }
+        expect(() => assertRecord({}, 'payload')).not.toThrow();
+    });
+});
+
+describe('assertNonEmptyString', () => {
+    test('accepts visible text and rejects non-string or blank runtime values', () => {
+        expect(() => assertNonEmptyString('value', 'field')).not.toThrow();
+        for (const value of ['', '   ', null, 1]) {
+            expect(() => assertNonEmptyString(value, 'field')).toThrow(ValidationError);
+        }
+    });
+});
+
+describe('assertDateTime', () => {
+    test('accepts RFC 3339 date-times and rejects malformed or impossible values', () => {
+        for (const value of [
+            '2028-02-29T23:59:59Z',
+            '2027-12-31T20:59:00-03:00',
+            '2027-12-31T23:59:60Z',
+        ]) {
+            expect(() => assertDateTime(value, 'expires_at')).not.toThrow();
+        }
+        for (const value of [
+            'not-a-date',
+            '2027-12-31',
+            '2027-02-29T00:00:00Z',
+            '2027-13-01T00:00:00Z',
+            '2027-01-01T24:00:00Z',
+            null,
+        ]) {
+            expect(() => assertDateTime(value, 'expires_at')).toThrow(ValidationError);
+        }
+    });
+});
+
+describe('serializeJsonRecord', () => {
+    test('requires serialization to remain a JSON object', () => {
+        expect(serializeJsonRecord({ id: 1 }, 'metadata')).toBe('{"id":1}');
+        for (const value of [
+            { toJSON: () => undefined },
+            { toJSON: () => null },
+            { toJSON: () => [] },
+        ]) {
+            expect(() => serializeJsonRecord(value, 'metadata')).toThrow(ValidationError);
+        }
+    });
+});
 
 describe('handleAssinafyResponse', () => {
     test('returns data on 2xx envelope', () => {
@@ -105,6 +162,25 @@ describe('toSdkError', () => {
         expect((result.cause as Error).message).toBe('X-Api-Key: [REDACTED]');
     });
 
+    test('redacts signer codes and credentials from network-error URLs and bodies', () => {
+        const raw = {
+            isAxiosError: true,
+            name: 'AxiosError',
+            message:
+                'GET https://api.example/sign?signer-access-code=access-secret&verification-code=654321 body={"password":"password-secret"} signer%2Daccess%2Dcode=encoded-secret',
+            toJSON: () => ({}),
+        } as unknown as AxiosError;
+
+        const result = toSdkError(raw, 'request');
+        const rendered = `${result.message} ${(result.cause as Error).message}`;
+
+        expect(rendered).not.toContain('access-secret');
+        expect(rendered).not.toContain('654321');
+        expect(rendered).not.toContain('password-secret');
+        expect(rendered).not.toContain('encoded-secret');
+        expect(rendered.match(/\[REDACTED\]/gu)?.length).toBe(8);
+    });
+
     test('preserves the original value as `cause` when a non-Error is thrown', () => {
         // Regression: this path previously passed `{ cause }` into the *context*
         // parameter, so `error.cause` was silently dropped for non-Error throws.
@@ -116,6 +192,17 @@ describe('toSdkError', () => {
 });
 
 describe('createSafeLogger', () => {
+    test('provides callable no-op methods when no logger is configured', () => {
+        const logger = createSafeLogger();
+
+        expect(() => {
+            logger.debug('debug');
+            logger.info('info');
+            logger.warn('warn');
+            logger.error('error');
+        }).not.toThrow();
+    });
+
     test('swallows synchronous logger exceptions', () => {
         const throwing = () => {
             throw new Error('logger unavailable');
@@ -182,7 +269,7 @@ describe('cleanParams', () => {
 
 describe('cleanListParams', () => {
     // The API honours only `per-page`; `per_page` is silently ignored and the
-    // response falls back to 20 items. Verified live: ?per-page=2 -> 2 items,
+    // response falls back to 20 items. `?per-page=2` returns 2 items,
     // ?per_page=2 -> 20. Normalising keeps the documented snake_case spelling
     // working instead of failing callers quietly.
     test('rewrites per_page to the per-page spelling the API reads', () => {
@@ -234,6 +321,13 @@ describe('toSdkError binary error bodies', () => {
         const ab = src.buffer.slice(src.byteOffset, src.byteOffset + src.byteLength);
         const err = toSdkError(axiosErr(404, ab), 'Failed');
         expect(err.message).toBe('Documento não encontrado.');
+    });
+
+    test('decodes a JSON error body delivered as a typed-array view', () => {
+        const bytes = new TextEncoder().encode(JSON.stringify({ message: 'Download unavailable.' }));
+        const err = toSdkError(axiosErr(503, bytes), 'Failed');
+
+        expect(err.message).toBe('Download unavailable.');
     });
 
     test('keeps a non-JSON binary body as the message rather than losing it', () => {

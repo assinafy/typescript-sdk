@@ -1,4 +1,6 @@
 node_modules
+.bun-cache/
+.npm-cache/
 dist
 # This is a Bun-first repo (bun.lock is the source of truth; all CI uses Bun).
 # A stray `npm install` would regenerate package-lock.json — keep it untracked
@@ -6,8 +8,7 @@ dist
 package-lock.json
 *.log
 .DS_Store
-.env
-.env.local
+.env*
 .npmrc
 coverage
 *.tsbuildinfo
