@@ -14,7 +14,7 @@ import { SDK_USER_AGENT } from '../src/support/transport';
 const DEFAULT_SPEC_URL = 'https://api.assinafy.com.br/v1/docs/openapi.json';
 const COVERAGE_FILE = new URL('../docs/API_COVERAGE.md', import.meta.url);
 const HTTP_METHODS = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']);
-const EXPECTED_CONTRACT_FINGERPRINT = '263d73389d677f59f8ca59fd58b81e72ccde4eaf5269587cda9c7cd24a8d87b6';
+const EXPECTED_CONTRACT_FINGERPRINT = '6b574dfb8e1de27d8b693c68d79feeb11ac7275c4831bd9f28364b819d8abad3';
 const NON_CONTRACT_KEYS = new Set([
     'description',
     'summary',
@@ -221,6 +221,70 @@ function validateProductionStructure(spec: OpenApiDocument): number {
                 displayRequired.includes(key)),
         'DisplaySettings required geometry changed',
     );
+    const oauthFlow = at(
+        spec,
+        'components',
+        'securitySchemes',
+        'oauth2',
+        'flows',
+        'authorizationCode',
+    );
+    requireValue(
+        at(oauthFlow, 'authorizationUrl') === 'https://auth.assinafy.com.br/oauth/authorize'
+            && at(oauthFlow, 'tokenUrl') === 'https://api.assinafy.com.br/v1/oauth/token',
+        'OAuth authorization/token endpoints changed',
+    );
+    const oauthScopes = at(oauthFlow, 'scopes');
+    requireValue(
+        isRecord(oauthScopes)
+            && [
+                'documents:read',
+                'documents:write',
+                'templates:read',
+                'templates:write',
+                'account:read',
+                'openid',
+                'profile',
+                'email',
+                'offline_access',
+            ].every((scope) => scope in oauthScopes),
+        'OAuth scope catalog changed',
+    );
+    const grantTypes = at(
+        spec,
+        'paths',
+        '/v1/oauth/token',
+        'post',
+        'requestBody',
+        'content',
+        'application/json',
+        'schema',
+        'properties',
+        'grant_type',
+        'enum',
+    );
+    requireValue(
+        Array.isArray(grantTypes)
+            && grantTypes.length === 2
+            && grantTypes.includes('authorization_code')
+            && grantTypes.includes('refresh_token'),
+        'OAuth token endpoint grant types changed',
+    );
+    requireValue(
+        isRecord(at(
+            spec,
+            'paths',
+            '/v1/oauth/token',
+            'post',
+            'requestBody',
+            'content',
+            'application/json',
+            'schema',
+            'properties',
+            'code_verifier',
+        )),
+        'OAuth token endpoint must keep PKCE code_verifier',
+    );
     const statsProperties = at(spec, 'components', 'schemas', 'DocumentStatsRow', 'properties');
     requireValue(
         isRecord(statsProperties)
@@ -346,6 +410,60 @@ function difference(left: Set<string>, right: Set<string>): string[] {
     return [...left].filter((entry) => !right.has(entry)).sort();
 }
 
+/**
+ * Confirm the OAuth discovery documents are actually served and agree with the
+ * spec.
+ *
+ * They are the only part of the OAuth contract that does not live in the
+ * OpenAPI document: an integration reads its endpoint URLs from them, so a
+ * silent change there breaks every client without changing the spec at all.
+ * RFC 8615 requires both to be bare metadata objects, not this API's envelope.
+ */
+async function validateOAuthDiscovery(spec: OpenApiDocument): Promise<number> {
+    const flow = at(spec, 'components', 'securitySchemes', 'oauth2', 'flows', 'authorizationCode');
+    const apiOrigin = new URL(String(at(flow, 'tokenUrl'))).origin;
+
+    const resourceMetadata = await fetchJson(`${apiOrigin}/.well-known/oauth-protected-resource`);
+    const issuer = at(resourceMetadata, 'authorization_servers', 0);
+    assertContract(
+        typeof issuer === 'string' && issuer.length > 0,
+        'protected-resource metadata lists no authorization server',
+    );
+
+    const serverMetadata = await fetchJson(`${issuer}/.well-known/oauth-authorization-server`);
+    for (const [metadataKey, specKey] of [
+        ['issuer', undefined],
+        ['authorization_endpoint', 'authorizationUrl'],
+        ['token_endpoint', 'tokenUrl'],
+    ] as const) {
+        const published = at(serverMetadata, metadataKey);
+        const expected = specKey === undefined ? issuer : at(flow, specKey);
+        assertContract(
+            published === expected,
+            `authorization-server ${metadataKey} (${String(published)}) disagrees with ${String(expected)}`,
+        );
+    }
+    assertContract(
+        Array.isArray(at(serverMetadata, 'code_challenge_methods_supported'))
+            && (at(serverMetadata, 'code_challenge_methods_supported') as string[]).includes('S256'),
+        'authorization server no longer advertises PKCE S256',
+    );
+    assertContract(
+        at(serverMetadata, 'authorization_response_iss_parameter_supported') === true,
+        'authorization server no longer sets the RFC 9207 iss parameter',
+    );
+    return 5;
+}
+
+async function fetchJson(url: string): Promise<unknown> {
+    const response = await fetch(url, {
+        headers: { Accept: 'application/json', 'User-Agent': SDK_USER_AGENT },
+        signal: AbortSignal.timeout(30_000),
+    });
+    assertContract(response.ok, `${url} answered HTTP ${response.status}`);
+    return response.json();
+}
+
 async function main(): Promise<void> {
     const specUrl = process.env['ASSINAFY_OPENAPI_URL'] ?? DEFAULT_SPEC_URL;
     const response = await fetch(specUrl, {
@@ -363,7 +481,8 @@ async function main(): Promise<void> {
         `full contract fingerprint changed (expected ${EXPECTED_CONTRACT_FINGERPRINT}, got ${currentContractFingerprint})`,
     );
     const official = officialOperations(spec);
-    const structuralChecks = validateProductionStructure(spec);
+    const structuralChecks = validateProductionStructure(spec)
+        + (await validateOAuthDiscovery(spec));
     const markdown = await readFile(COVERAGE_FILE, 'utf8');
     const coverage = documentedOperations(markdown);
     const exportedMethods = validateExportedSdkMethods(markdown);

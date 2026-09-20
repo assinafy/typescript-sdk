@@ -7,6 +7,74 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.3.0] - 2026-09-20
+
+### Added
+
+- **OAuth 2.1 support — `client.oauth`.** Applications that act inside *other
+  people's* workspaces can now run the whole authorization-code flow through
+  the SDK instead of assembling it by hand:
+  - `createAuthorizationUrl(options)` mints a fresh PKCE verifier (S256), a
+    `state` and, for `openid`, a `nonce`, then builds the consent URL. It
+    returns everything the callback and token exchange need, so nothing has to
+    be re-derived later.
+  - `readAuthorizationCallback(params, expected)` validates the redirect before
+    anything on it is trusted: `state` in constant time, then `iss` (RFC 9207).
+    A declined consent surfaces as an `OAuthError`, not a silent success. It
+    accepts an Express `req.query`, a `URLSearchParams`, a `URL`, a full
+    callback URL or a bare query string.
+  - `exchangeCode(options)`, `refreshToken(options)` and `revokeToken(options)`
+    call `POST /oauth/token` and `POST /oauth/revoke` on a credential-free
+    transport, so an integrator's own `X-Api-Key` is never sent to a route that
+    authenticates the application.
+  - `getUserInfo(accessToken?)` reads the OpenID Connect claims.
+  - `getProtectedResourceMetadata()` (RFC 9728, served at the API host root)
+    and `getAuthorizationServerMetadata(issuer?)` (RFC 8414) discover the
+    endpoints instead of hardcoding them, and the second one rejects a document
+    whose `issuer` disagrees with where it was fetched from.
+- **`OAuthError`** — the OAuth endpoints answer with a flat
+  `{ error, error_description }` body rather than the `{ status, message, data }`
+  envelope, so the RFC 6749 code is exposed as `error` and the explanation as
+  `errorDescription`. It extends `ApiError`, so existing `catch` blocks keep
+  matching.
+- **`ApiError.challenge`** — the parsed `WWW-Authenticate` header, when the API
+  sends one. On a `403` it names the scope the token is missing
+  (`insufficient_scope`), which is the only way to tell "reconnect asking for
+  more" apart from a permission an OAuth token can never hold. The parser is
+  also exported as `parseWwwAuthenticate`.
+- Both READMEs document the complete OAuth flow: registering the application,
+  the scope catalogue, workspace binding, refresh-token rotation, revocation,
+  and what each failure means.
+
+### Changed
+
+- **Signer verification and notification channels are now validated as a
+  pair.** The API couples them — the verification code travels on the
+  notification channel — so `Email` verification only allows `Email`
+  notification, `Whatsapp` only `Whatsapp`, and `DigitalCertificate` either
+  one. Exactly one notification method is allowed per signer. The SDK rejected
+  unknown channel names but let an impossible pairing (and an empty or
+  two-element `notification_methods`) through to a `400`. The rule now lives in
+  `validateAssignmentSignerOptions()` and therefore applies to assignment
+  creation, cost estimation and template-driven document creation alike; the
+  duplicate one-method check in the template path was removed.
+  - A payload the API would have rejected now fails locally with a
+    `ValidationError` naming the pairing.
+- `AssignmentVerificationMethod` and `AssignmentNotificationMethod` document
+  the channel matrix, its costs and its prerequisites. ICP-Brasil **A1** and
+  **A3** are recorded explicitly as certificate media — a file in software or a
+  token/smartcard, chosen by the signer in the browser — both modelled by the
+  single `DigitalCertificate` value, with no separate field to send.
+- `bun run audit:api` additionally fetches the two OAuth discovery documents
+  and checks the issuer, the authorization and token endpoints, PKCE `S256` and
+  the RFC 9207 `iss` parameter against the published contract. They are the
+  only part of the OAuth surface that does not live in the OpenAPI document.
+- `docs/API_COVERAGE.md` maps the four new OAuth operations, bringing the
+  ledger to 93 of 93.
+- The Portuguese README is now the complete reference rather than a summary
+  pointing at the English one: installation through the end-to-end signature
+  flow, every resource, errors, environments and development.
+
 ## [2.2.0] - 2026-08-27
 
 ### Security
@@ -553,7 +621,8 @@ fields (`cpf`, `whatsapp_phone_number`) with the PHP SDK and n8n node.
 - High-level `uploadAndRequestSignatures` helper on `AssinafyClient`.
 - `PaginatedResult<T>` with parsed `X-Pagination-*` header meta.
 
-[Unreleased]: https://github.com/assinafy/typescript-sdk/compare/v2.2.0...HEAD
+[Unreleased]: https://github.com/assinafy/typescript-sdk/compare/v2.3.0...HEAD
+[2.3.0]: https://github.com/assinafy/typescript-sdk/compare/v2.2.0...v2.3.0
 [2.2.0]: https://github.com/assinafy/typescript-sdk/compare/v2.1.2...v2.2.0
 [2.1.2]: https://github.com/assinafy/typescript-sdk/compare/v2.1.1...v2.1.2
 [2.1.1]: https://github.com/assinafy/typescript-sdk/compare/v2.1.0...v2.1.1

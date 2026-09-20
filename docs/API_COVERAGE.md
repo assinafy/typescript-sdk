@@ -2,10 +2,11 @@
 
 This ledger maps the official
 [`GET /v1/docs/openapi.json`](https://api.assinafy.com.br/v1/docs/openapi.json)
-contract to the public SDK API: 67 paths, 89 HTTP operations, and 39 component
+contract to the public SDK API: 71 paths, 93 HTTP operations, and 39 component
 schemas.
 
-All paths below include the `/v1` prefix shown by the OpenAPI document. The
+All paths below include the `/v1` prefix shown by the OpenAPI document, except
+the RFC 8615 `.well-known` document, which is served at the host root. The
 SDK's default `baseUrl` already ends in `/v1`, so resource implementations use
 the corresponding relative path without repeating that prefix.
 
@@ -13,7 +14,7 @@ Status meanings:
 
 - **Covered** — a public, typed SDK method sends the operation.
 - **Compatibility extension** — route retained for existing integrations but
-  absent from the current OpenAPI path set and excluded from the 89-operation
+  absent from the current OpenAPI path set and excluded from the 93-operation
   total.
 
 ## Accounts — 10/10
@@ -93,6 +94,21 @@ Status meanings:
 | `POST` | `/v1/accounts/{accountId}/fields/validate-multiple` | `client.fields.validateMultiple(entries, options?)` | Covered |
 | `GET` | `/v1/field-types` | `client.fields.listTypes()` | Covered |
 
+## OAuth — 4/4
+
+Endpoints an OAuth application calls. The token, revocation and userinfo
+operations answer with flat RFC 6749 / OIDC bodies rather than the
+`{ status, message, data }` envelope used everywhere else, and the SDK returns
+them unwrapped. The browser-facing `/oauth/authorize` page belongs to the
+authorization server (`https://auth.assinafy.com.br`), not to this API.
+
+| Method | Path | SDK method | Status |
+| --- | --- | --- | --- |
+| `GET` | `/.well-known/oauth-protected-resource` | `client.oauth.getProtectedResourceMetadata()` | Covered |
+| `POST` | `/v1/oauth/token` | `client.oauth.exchangeCode(options)` / `client.oauth.refreshToken(options)` | Covered |
+| `POST` | `/v1/oauth/revoke` | `client.oauth.revokeToken(options)` | Covered |
+| `GET` | `/v1/oauth/userinfo` | `client.oauth.getUserInfo(accessToken?)` | Covered |
+
 ## Signers — 5/5
 
 | Method | Path | SDK method | Status |
@@ -171,7 +187,7 @@ Five additional routes are documented separately under
 ## Template compatibility routes
 
 These routes are available to existing integrations but do not appear in the
-current OpenAPI path set. They are excluded from the official 89-operation
+current OpenAPI path set. They are excluded from the official 93-operation
 coverage count.
 
 | Method | Path | SDK method | Status |
@@ -199,6 +215,14 @@ the endpoint count:
 - `client.webhookVerifier` parses webhook envelopes and optionally verifies a
   caller-configured HMAC contract; signature verification itself is not in the
   current OpenAPI document.
+- `client.oauth.getAuthorizationServerMetadata(issuer?)` reads the RFC 8414
+  document published by the authorization server, and
+  `client.oauth.createAuthorizationUrl(options)` /
+  `client.oauth.readAuthorizationCallback(params, expected)` drive the
+  browser-facing half of the flow. Neither host runs on this API, so they add no
+  operations to the count.
+- `ApiError.challenge` exposes the parsed `WWW-Authenticate` header, which names
+  the scope missing from a `403 insufficient_scope`.
 
 For request and response payload definitions, use the exported TypeScript
 interfaces and each method's JSDoc examples together with the

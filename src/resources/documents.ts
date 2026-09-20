@@ -1268,9 +1268,6 @@ function normaliseTemplateSigners(signers: ITemplateSigner[]): ITemplateSigner[]
             throw new ValidationError(`Template signer ${index + 1} requires id`);
         }
         validateAssignmentSignerOptions(signer, `Template signer ${index + 1}`);
-        if (signer.notification_methods !== undefined && signer.notification_methods.length > 1) {
-            throw new ValidationError(`Template signer ${index + 1} allows one notification method`);
-        }
         const projected: ITemplateSigner = { role_id: signer.role_id, id: signer.id };
         if (signer.verification_method !== undefined) {
             projected.verification_method = signer.verification_method;

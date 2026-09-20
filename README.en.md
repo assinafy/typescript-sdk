@@ -4,12 +4,12 @@
 
 TypeScript SDK for the [Assinafy API](https://api.assinafy.com.br/v1/docs) — a Brazilian digital signature platform.
 
-Covers all 89 operations in the current official OpenAPI document: accounts,
-authentication, users, documents, assignments, signers, signer-side flows,
-templates, tags, fields, webhooks, branding, statistics, and the high-level
-`uploadAndRequestSignatures` workflow. Five additional template-management
-routes used by existing integrations and two legacy browser URL helpers are
-retained for compatibility.
+Covers all 93 operations in the current official OpenAPI document: accounts,
+authentication, OAuth 2.1 applications, users, documents, assignments, signers,
+signer-side flows, templates, tags, fields, webhooks, branding, statistics, and
+the high-level `uploadAndRequestSignatures` workflow. Five additional
+template-management routes used by existing integrations and two legacy browser
+URL helpers are retained for compatibility.
 
 See [API coverage](docs/API_COVERAGE.md) for the operation map and
 [compatibility notes](docs/COMPATIBILITY.md) for deployment-specific request
@@ -23,7 +23,8 @@ afterwards.
 
 **Getting set up** — [Requirements](#requirements) ·
 [Installation](#installation) · [Quick start](#quick-start) ·
-[Authentication](#authentication) · [Configuration](#configuration)
+[Authentication](#authentication) ·
+[OAuth applications](#oauth-applications) · [Configuration](#configuration)
 ([rate limiting](#rate-limiting), [factories](#factories)) ·
 [Endpoint coverage](#endpoint-coverage)
 
@@ -99,7 +100,17 @@ and ICP-Brasil certificate signing have separate prerequisites and costs; see
 
 ## Authentication
 
-The API supports two authentication methods. Prefer `apiKey` — it maps to the `X-Api-Key` header recommended by Assinafy for backend services.
+The API supports three credentials. Which one you need depends on *whose*
+workspace you are acting in.
+
+| Credential | Acts on | Choose it when |
+| --- | --- | --- |
+| `apiKey` (`X-Api-Key`) | **Your own** workspace | You automate your own account. Recommended for back-end services. |
+| `token` (`Authorization: Bearer`) | The logged-in user | You bootstrapped a session with `auth.login()`. |
+| OAuth access token (`Authorization: Bearer`) | **Someone else's** workspace, with their permission | You build an app other people connect. See [OAuth applications](#oauth-applications). |
+
+Prefer `apiKey` for a server-to-server integration — it maps to the `X-Api-Key`
+header recommended by Assinafy for backend services.
 
 ```ts
 // Preferred: X-Api-Key header
@@ -130,6 +141,147 @@ Every SDK transport, including public and signer-access-code requests, sends
 `User-Agent: Assinafy-Typescript-SDK/v<VERSION>`, where `<VERSION>` is the
 installed package version. The exact value is also exported as
 `SDK_USER_AGENT` for custom transport checks and observability rules.
+
+## OAuth applications
+
+Use OAuth when your product is connected by *its users* to *their* Assinafy
+workspaces, so you never hold their password or API key. Automating your own
+workspace needs none of this — keep using an API key.
+
+Register the application in the Assinafy app under **Settings → OAuth
+applications → New application**. You choose its redirect URIs (exact-match
+`https://`, no fragment), the maximum permissions it may ever request, and
+whether it is **confidential** (runs on your server, gets a `client_secret`) or
+**public** (runs on the user's device, PKCE only). Applications cannot be
+created through the API.
+
+The flow spans two hosts on purpose: the consent page lives on the
+authorization server (`https://auth.assinafy.com.br`) while the token,
+revocation and userinfo endpoints live on this API. Read both from discovery
+rather than hardcoding them.
+
+```ts
+import { AssinafyClient, OAuthError } from '@assinafy/sdk';
+
+const client = new AssinafyClient();                 // no credentials needed
+
+// 1 — before redirecting the user. Store the whole request in their session:
+//     `state` and `issuer` prove the callback is yours, `codeVerifier`
+//     completes PKCE, `nonce` validates the id_token.
+const request = await client.oauth.createAuthorizationUrl({
+  clientId: process.env.ASSINAFY_CLIENT_ID!,
+  redirectUri: 'https://myapp.com/oauth/callback',
+  scopes: ['documents:read', 'documents:write', 'offline_access'],
+});
+session.oauth = request;
+response.redirect(request.url);                      // full page navigation
+
+// 2 — on https://myapp.com/oauth/callback
+const { code } = client.oauth.readAuthorizationCallback(query, session.oauth);
+const tokens = await client.oauth.exchangeCode({
+  code,
+  codeVerifier: session.oauth.codeVerifier,
+  redirectUri: 'https://myapp.com/oauth/callback',
+  clientId: process.env.ASSINAFY_CLIENT_ID!,
+  clientSecret: process.env.ASSINAFY_CLIENT_SECRET, // confidential apps only
+});
+// → { access_token, token_type: 'Bearer', expires_in: 3600,
+//     scope: 'documents:read documents:write',
+//     refresh_token?, id_token? }
+
+// 3 — a token covers exactly ONE workspace: the one the user picked.
+const connected = new AssinafyClient({ token: tokens.access_token });
+const { data } = await connected.workspaces.list();
+const accountId = data[0]?.id;                       // store it with the tokens
+
+// 4 — renew before the hour is up (needs `offline_access`)
+const renewed = await client.oauth.refreshToken({
+  refreshToken: connection.refreshToken,
+  clientId: process.env.ASSINAFY_CLIENT_ID!,
+  clientSecret: process.env.ASSINAFY_CLIENT_SECRET,
+});
+await connection.save({ refreshToken: renewed.refresh_token });  // BEFORE using it
+
+// 5 — when the user disconnects
+await client.oauth.revokeToken({
+  token: connection.refreshToken,
+  tokenTypeHint: 'refresh_token',
+  clientId: process.env.ASSINAFY_CLIENT_ID!,
+  clientSecret: process.env.ASSINAFY_CLIENT_SECRET,
+});
+```
+
+Discovery and identity, when you need them:
+
+```ts
+await client.oauth.getProtectedResourceMetadata();   // RFC 9728, at the host root
+await client.oauth.getAuthorizationServerMetadata(); // RFC 8414, on auth.assinafy.com.br
+await client.oauth.getUserInfo(tokens.access_token); // OIDC claims; needs `openid`
+```
+
+### Scopes
+
+| Scope | Lets your app |
+| --- | --- |
+| `documents:read` | Read documents, their signers, assignments and activity |
+| `documents:write` | Create documents and send them for signature |
+| `templates:read` | Read templates |
+| `templates:write` | Create and change templates |
+| `account:read` | Read the workspace's profile, theme and logo |
+| `openid` | Receive an `id_token` identifying the user |
+| `profile` | Read the user's name |
+| `email` | Read the user's email and whether it is verified |
+| `offline_access` | Receive a refresh token |
+
+Request the minimum: the user approves all of them or none. Read the `scope`
+returned by the token endpoint instead of assuming the request was honoured in
+full — `offline_access` never appears there, because it is a request-time
+signal rather than a permission. Billing, workspace membership, credentials and
+administration are never reachable with an OAuth token, whatever its scopes.
+
+### What the SDK enforces for you
+
+- A fresh RFC 7636 verifier (S256) and `state` per attempt.
+- `state` compared in constant time, and `iss` checked (RFC 9207), before the
+  response is trusted at all.
+- The RFC 8414 document's own `issuer` matched against the URL it came from.
+- `redirect_uri` required to be absolute `https://` with no fragment.
+- The RFC 8707 `resource` indicator defaulted to the configured API origin, and
+  kept identical between the authorize and token legs.
+
+### Handling failure
+
+```ts
+try {
+  await connected.documents.upload({ filePath: './contract.pdf' });
+} catch (error) {
+  if (error instanceof ApiError && error.challenge?.error === 'insufficient_scope') {
+    // Reconnect asking for error.challenge.scope, e.g. 'documents:write'.
+  }
+}
+```
+
+| Situation | What you see | What to do |
+| --- | --- | --- |
+| The user declined | `OAuthError` with `error: 'access_denied'` from `readAuthorizationCallback` | Nothing; tell the user |
+| Code spent, expired (60 s) or mismatched | `OAuthError` `invalid_grant` | Restart the authorization flow |
+| Refresh token replayed or expired | `OAuthError` `invalid_grant` | The whole connection ended; ask the user to reconnect |
+| Wrong `client_id` / secret, app disabled | `OAuthError` `invalid_client` | Fix configuration; retrying will not help |
+| Token expired or revoked | `ApiError` `401` | Refresh; if that fails, reconnect |
+| Missing permission | `ApiError` `403` with `challenge.error === 'insufficient_scope'` | Reconnect requesting `challenge.scope` |
+| `403` without a challenge | `ApiError` `403` | Another workspace, or a surface OAuth cannot reach |
+
+Refresh tokens **rotate**: every refresh returns a new one and retires the old
+one, and replaying a retired token ends the entire connection. Persist the new
+value before using the response, treat a timeout as "it may have worked" and
+re-read your stored token instead of retrying blindly, and never refresh one
+connection twice concurrently. A connection lasts 30 days from approval however
+often it is refreshed, and the authorize/token endpoints accept 50 requests per
+minute per IP.
+
+AI assistants such as Claude, Claude Code and ChatGPT connect to Assinafy
+through their own connector settings; your users do not need you to register
+anything for them.
 
 ## Configuration
 
@@ -170,7 +322,7 @@ const client = AssinafyClient.fromConfig({
 
 ## Endpoint coverage
 
-All 89 operations documented at https://api.assinafy.com.br/v1/docs are
+All 93 operations documented at https://api.assinafy.com.br/v1/docs are
 covered. The table below is the resource-level summary; the detailed operation
 ledger is in [docs/API_COVERAGE.md](docs/API_COVERAGE.md).
 
@@ -184,6 +336,7 @@ ledger is in [docs/API_COVERAGE.md](docs/API_COVERAGE.md).
 | `client.workspaces`   | create, list, get, update, delete, getTheme, downloadLogo, uploadLogo, deleteLogo, getStats                                                                                                                                                        |
 | `client.webhooks`     | register, get, inactivate, listEventTypes, listDispatches, retryDispatch                                                                                                                                                                           |
 | `client.fields`       | create, list, get, update, delete, validate, validateMultiple, listTypes                                                                                                                                                                           |
+| `client.oauth`        | **getProtectedResourceMetadata**, **getAuthorizationServerMetadata**, **createAuthorizationUrl**, **readAuthorizationCallback**, **exchangeCode**, **refreshToken**, **revokeToken**, **getUserInfo** |
 | `client.auth`         | getSocialLoginUrl, getSocialLoginCallbackUrl, login, socialLogin, linkSocialLogin, createApiKey, getApiKey, deleteApiKey, changePassword, requestPasswordReset, resetPassword                                                                      |
 | `client.users`        | getCurrent, getStats, getNotificationPreferences, updateNotificationPreferences                                                                                                                                                                  |
 | `client.signerDocuments` | getCurrent, list, **search**, download, signMultiple, declineMultiple, self, acceptTerms, verifyEmail, confirmData, uploadSignature, downloadSignature, getAssignment, sign, decline                                                            |
@@ -1180,15 +1333,20 @@ HTTP methods reject with an `AssinafyError` subclass. Synchronous helpers such
 as `getSocialLoginUrl()` can throw `ValidationError` before any request.
 
 ```ts
-import { ApiError, ValidationError, NetworkError, AssinafyError } from '@assinafy/sdk';
+import { ApiError, OAuthError, ValidationError, NetworkError, AssinafyError } from '@assinafy/sdk';
 
 try {
   await client.documents.upload({ filePath: './x.pdf' });
 } catch (err) {
   if (err instanceof ValidationError) {
     console.error('Validation failed:', err.errors);
+  } else if (err instanceof OAuthError) {
+    // OAuthError extends ApiError; branch on the RFC 6749 code, not the message.
+    console.error('OAuth error:', err.error, err.errorDescription);
   } else if (err instanceof ApiError) {
     console.error(`API error ${err.statusCode}:`, err.responseData);
+    // `err.challenge` carries the parsed WWW-Authenticate header when the API
+    // sent one — on a 403 it names the OAuth scope that is missing.
   } else if (err instanceof NetworkError) {
     console.error('Network error:', err.message);
   } else if (err instanceof AssinafyError) {

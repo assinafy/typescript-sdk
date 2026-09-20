@@ -41,10 +41,42 @@ export type AnyString = string & {};
 /** Assignment methods supported by the API. */
 export type AssignmentMethod = 'virtual' | 'collect';
 
-/** Verification methods accepted by assignment signer entries. */
+/**
+ * How a signer proves who they are before signing.
+ *
+ * | Value | How the signer is verified | Requirements | Cost per signer |
+ * | --- | --- | --- | --- |
+ * | `Email` | One-time code sent by e-mail (the default). | An `email`. | 0 credits |
+ * | `Whatsapp` | One-time code sent over WhatsApp. | A `whatsapp_phone_number`; paid plan. | 0.45 credits |
+ * | `DigitalCertificate` | The signer signs with their own ICP-Brasil certificate — **A1** (software, a file on the machine) or **A3** (hardware, a token or smartcard) — through the Web PKI browser extension, producing a qualified PAdES signature. | Digital Certificate feature (Standard/Pro); `government_id` (CPF, or CNPJ naming the signer as legal representative); the signer must be alone in their signing step. | 2 credits + notification |
+ *
+ * A1 and A3 are certificate *media*, chosen by the signer in their browser at
+ * signing time. The API models both as the single `DigitalCertificate` value —
+ * there is no separate `A1`/`A3` field to send, and the resulting PAdES
+ * signature is qualified either way.
+ *
+ * Verification is coupled to {@link AssignmentNotificationMethod}: the
+ * verification code travels on the notification channel, so `Email` pairs only
+ * with `Email` and `Whatsapp` only with `Whatsapp`. `DigitalCertificate`
+ * carries no code and may be announced over either channel. The SDK rejects an
+ * invalid pairing before the request; the API answers `400`.
+ *
+ * Send neither field to get `Email`/`Email`; send one and the other is
+ * inferred from it.
+ */
 export type AssignmentVerificationMethod = 'Email' | 'Whatsapp' | 'DigitalCertificate';
 
-/** Notification methods accepted by assignment signer entries. */
+/**
+ * How the signing invitation reaches the signer. Exactly one per signer.
+ *
+ * | Value | Requirements | Cost per signer |
+ * | --- | --- | --- |
+ * | `Email` | An `email`. | 0 credits |
+ * | `Whatsapp` | A `whatsapp_phone_number`; paid plan. | 0.45 credits |
+ *
+ * Notifications are charged when the assignment is created and again on every
+ * resend. See {@link AssignmentVerificationMethod} for the pairing rules.
+ */
 export type AssignmentNotificationMethod = 'Email' | 'Whatsapp';
 
 /** Minimal logger contract (compatible with console, pino, winston, etc.). */
@@ -1241,4 +1273,144 @@ export interface IUpdateTagPayload {
     name?: string;
     /** Pass `null` to clear the color; omit to leave unchanged. */
     color?: string | null;
+}
+
+/**
+ * Permission an OAuth application can request.
+ *
+ * Known literals stay suggested in editors while any server-added scope still
+ * type-checks (see {@link AnyString}). The authoritative list is
+ * `scopes_supported` in
+ * {@link IOAuthAuthorizationServerMetadata}.
+ */
+export type OAuthScope =
+    | 'documents:read'
+    | 'documents:write'
+    | 'templates:read'
+    | 'templates:write'
+    | 'account:read'
+    | 'openid'
+    | 'profile'
+    | 'email'
+    | 'offline_access'
+    | AnyString;
+
+/**
+ * RFC 9728 protected-resource metadata served at
+ * `https://api.assinafy.com.br/.well-known/oauth-protected-resource`.
+ *
+ * Served bare, without the `{ status, message, data }` envelope, as RFC 8615
+ * requires. `scopes_supported` omits `offline_access`, which is a request-time
+ * signal to the authorization server rather than a permission this API checks.
+ */
+export interface IOAuthProtectedResourceMetadata {
+    /** Canonical identifier of this API, e.g. `https://api.assinafy.com.br`. */
+    resource: string;
+    /** Issuers allowed to mint tokens for it, e.g. `['https://auth.assinafy.com.br']`. */
+    authorization_servers: string[];
+    /** Scopes this API accepts. */
+    scopes_supported: string[];
+    /** How a token may be presented; Assinafy accepts `header` only. */
+    bearer_methods_supported: string[];
+}
+
+/**
+ * RFC 8414 authorization-server metadata served at
+ * `{issuer}/.well-known/oauth-authorization-server`.
+ *
+ * The browser-facing `authorization_endpoint` lives on the authorization server
+ * while `token_endpoint` and friends live on this API, so read the URLs from
+ * here rather than deriving them from one host.
+ */
+export interface IOAuthAuthorizationServerMetadata {
+    /** Issuer identifier; must equal the URL the document was fetched from. */
+    issuer: string;
+    /** Browser-facing consent URL. */
+    authorization_endpoint: string;
+    /** Token endpoint, on the API host. */
+    token_endpoint: string;
+    revocation_endpoint?: string;
+    userinfo_endpoint?: string;
+    jwks_uri?: string;
+    scopes_supported?: string[];
+    response_types_supported?: string[];
+    grant_types_supported?: string[];
+    /** Assinafy supports `S256` only; plain PKCE is rejected. */
+    code_challenge_methods_supported?: string[];
+    token_endpoint_auth_methods_supported?: string[];
+    /** RFC 9207. `true` means the callback carries `iss` and clients must check it. */
+    authorization_response_iss_parameter_supported?: boolean;
+    client_id_metadata_document_supported?: boolean;
+}
+
+/**
+ * Everything one authorization attempt needs, returned by
+ * {@link OAuthResource.createAuthorizationUrl}.
+ *
+ * Store every field except `url` in the user's session: the callback handler
+ * needs `state` and `issuer` to prove the response is yours, the token exchange
+ * needs `codeVerifier`, and `nonce` validates the `id_token`.
+ */
+export interface IOAuthAuthorizationRequest {
+    /** Absolute URL to send the browser to with a full page navigation. */
+    url: string;
+    /** Single-use CSRF value echoed back on the redirect URI. */
+    state: string;
+    /** RFC 7636 code verifier; never leaves your server after this. */
+    codeVerifier: string;
+    /** Issuer expected in the callback's `iss` parameter. */
+    issuer: string;
+    /** Present when `openid` was requested; compare it to the `id_token` claim. */
+    nonce?: string;
+}
+
+/**
+ * Validated authorization response read off the redirect URI by
+ * {@link OAuthResource.readAuthorizationCallback}.
+ */
+export interface IOAuthAuthorizationCallback {
+    /** Single-use authorization code. Expires 60 seconds after approval. */
+    code: string;
+    /** The `state` value, already checked against the stored one. */
+    state: string;
+    /** The `iss` value, already checked against the expected issuer. */
+    issuer?: string;
+}
+
+/**
+ * RFC 6749 §5.1 token response. Returned flat, without this API's
+ * `{ status, message, data }` envelope.
+ */
+export interface IOAuthTokenResponse {
+    access_token: string;
+    /** Always `Bearer`. */
+    token_type: string;
+    /** Access-token lifetime in seconds; Assinafy issues 3600. */
+    expires_in: number;
+    /**
+     * Present only when `offline_access` was requested and granted. Every
+     * refresh returns a new one and retires the old one — persist it before
+     * using the access token.
+     */
+    refresh_token?: string | null;
+    /**
+     * Scopes actually granted to the access token. Read this instead of
+     * assuming the request was honoured in full; `offline_access` never appears
+     * here because it is a request-time signal, not a permission.
+     */
+    scope?: string;
+    /** Signed OIDC identity token (RS256). Present only when `openid` was granted. */
+    id_token?: string | null;
+}
+
+/** OpenID Connect claims returned by `GET /oauth/userinfo`. */
+export interface IOAuthUserInfo {
+    /** Stable user identifier. Always present. */
+    sub: string;
+    /** Requires the `profile` scope. */
+    name?: string | null;
+    /** Requires the `email` scope. */
+    email?: string | null;
+    /** Requires the `email` scope. */
+    email_verified?: boolean | null;
 }

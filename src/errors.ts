@@ -1,3 +1,5 @@
+import type { IAuthenticateChallenge } from './support/headers';
+
 /** Used when a failure response carries nothing that explains it. */
 const FALLBACK_MESSAGE = 'API request failed';
 
@@ -45,6 +47,29 @@ export class AssinafyError extends Error {
 export class ApiError extends AssinafyError {
     public readonly statusCode: number;
     public readonly responseData: unknown;
+    /**
+     * Parsed `WWW-Authenticate` challenge, when the response carried one.
+     *
+     * A `403` whose challenge is `{ error: 'insufficient_scope', scope: '…' }`
+     * means the OAuth token is valid but was never granted that permission:
+     * send the user through the authorization flow again asking for the scope
+     * named in `scope`. A `403` without a challenge has a different cause —
+     * another workspace, the user's role, or a surface OAuth tokens never
+     * reach — and reconnecting will not fix it.
+     *
+     * @example
+     * ```ts
+     * try {
+     *   await connected.documents.upload({ filePath: './contract.pdf' });
+     * } catch (error) {
+     *   if (error instanceof ApiError && error.challenge?.error === 'insufficient_scope') {
+     *     return reconnect(error.challenge.scope);   // 'documents:write'
+     *   }
+     *   throw error;
+     * }
+     * ```
+     */
+    public challenge?: IAuthenticateChallenge;
 
     /**
      * Create an error representing a non-success API response.
@@ -95,6 +120,85 @@ export class ApiError extends AssinafyError {
                     ? rawError
                     : FALLBACK_MESSAGE;
         return new ApiError(message, statusCode, responseData);
+    }
+}
+
+/**
+ * Thrown when an OAuth endpoint returns an RFC 6749 error object, or when an
+ * authorization response comes back on the redirect URI carrying `?error=`.
+ *
+ * The OAuth endpoints answer with a flat `{ error, error_description }` body
+ * instead of this API's `{ status, message, data }` envelope, because no
+ * standard OAuth client would look for `error` inside a `data` key. This class
+ * still extends {@link ApiError}, so existing `catch (err) { if (err instanceof
+ * ApiError) … }` blocks keep matching.
+ *
+ * Branch on {@link OAuthError.error}, not on the message:
+ *
+ * | `error` | What to do |
+ * | --- | --- |
+ * | `invalid_grant` | The code or refresh token is spent, expired, or bound to other parameters. Send the user through the authorization flow again. |
+ * | `invalid_client` | Wrong `client_id`/`client_secret`, or the application was disabled. Fix the configuration; retrying will not help. |
+ * | `invalid_target` | The `resource` does not match the one that was authorized. |
+ * | `unsupported_grant_type` | Only `authorization_code` and `refresh_token` exist. |
+ * | `access_denied` | The user declined on the consent screen. |
+ * | `invalid_scope` | A scope the application is not registered for. |
+ * | `invalid_request` | Missing or malformed PKCE / request parameters. |
+ */
+export class OAuthError extends ApiError {
+    /** RFC 6749 error code, e.g. `invalid_grant`. */
+    public readonly error: string;
+    /** The server's human-readable explanation, when it sent one. */
+    public readonly errorDescription: string | null;
+
+    /**
+     * Create an OAuth protocol error.
+     *
+     * @param error - RFC 6749 error code.
+     * @param errorDescription - Server-provided explanation, or `null`.
+     * @param statusCode - HTTP status that carried it. Authorization responses
+     * arrive as redirect query parameters rather than an HTTP response, so
+     * {@link OAuthResource.readAuthorizationCallback} reports them as `400`.
+     * @param responseData - The raw error object.
+     *
+     * @example
+     * ```ts
+     * throw new OAuthError('invalid_grant', 'Authorization code expired.', 400);
+     * ```
+     */
+    constructor(
+        error: string,
+        errorDescription: string | null = null,
+        statusCode = 400,
+        responseData: unknown = null,
+    ) {
+        super(errorDescription ? `${error}: ${errorDescription}` : error, statusCode, responseData);
+        this.name = 'OAuthError';
+        this.error = error;
+        this.errorDescription = errorDescription;
+    }
+
+    /**
+     * Upgrade an {@link ApiError} to an {@link OAuthError} when its body is an
+     * RFC 6749 error object; otherwise return the value untouched.
+     *
+     * @param error - Any thrown value.
+     * @returns An `OAuthError` when the body carries a non-empty string
+     * `error`, else the original value.
+     */
+    static upgrade(error: unknown): unknown {
+        if (!(error instanceof ApiError) || error instanceof OAuthError) return error;
+        const body = error.responseData;
+        if (body === null || typeof body !== 'object') return error;
+        const code = (body as Record<string, unknown>)['error'];
+        if (typeof code !== 'string' || code.length === 0) return error;
+        const description = (body as Record<string, unknown>)['error_description'];
+        return new OAuthError(
+            code,
+            typeof description === 'string' && description.length > 0 ? description : null,
+            error.statusCode,
+            body,
+        );
     }
 }
 

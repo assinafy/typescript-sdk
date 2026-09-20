@@ -1,6 +1,7 @@
 import axios from 'axios';
 import { ApiError, AssinafyError, NetworkError, ValidationError } from './errors';
 import type { DocumentArtifactName, Logger } from './types';
+import { parseWwwAuthenticate, readHeader } from './support/headers';
 
 const SAFE_LOG_NUMBER_FIELDS = new Set([
     'attempt',
@@ -80,7 +81,16 @@ export function toSdkError(error: unknown, fallbackMessage: string): AssinafyErr
         const status = error.response?.status;
         if (status) {
             const body = decodeBinaryErrorBody(error.response?.data ?? null);
-            return ApiError.fromResponse(status, body ?? null);
+            const apiError = ApiError.fromResponse(status, body ?? null);
+            // A 401/403 can carry `WWW-Authenticate: Bearer error="…", scope="…"`.
+            // It is the only machine-readable signal telling a missing OAuth
+            // scope apart from a permission the token can never hold, so keep it
+            // rather than discarding the response headers wholesale.
+            const challenge = parseWwwAuthenticate(
+                readHeader(error.response?.headers as Record<string, unknown>, 'www-authenticate'),
+            );
+            if (challenge) apiError.challenge = challenge;
+            return apiError;
         }
         // AxiosError retains the entire request config, including Authorization
         // and X-Api-Key headers. Never attach that object to a public SDK error:

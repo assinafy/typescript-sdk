@@ -48,6 +48,19 @@ opportunity to upgrade.
   rejected unless its host is loopback, so a credential cannot be sent in the
   clear to a remote host. Debug logging and error telemetry must be reviewed
   for response data before being enabled in production.
+- An OAuth `client_secret` belongs only on a server you control: never in
+  browser code, a mobile application, or a repository. A public application has
+  no secret and authenticates with PKCE alone. The SDK sends the token and
+  revocation requests on the credential-free transport, so a workspace
+  `X-Api-Key` is never attached to a route that authenticates the application.
+- Treat OAuth refresh tokens as single-use. Each refresh returns a new one and
+  retires the old one, and replaying a retired token ends the whole connection
+  for that user. Persist the new value before acting on the response, and never
+  refresh one connection concurrently.
+- Authorization responses are validated before they are trusted: `state` is
+  compared in constant time and `iss` must match the expected issuer. Do not
+  bypass `readAuthorizationCallback()` and exchange a code straight from the
+  query string.
 - The webhook HMAC helper is an opt-in utility, not proof of an official
   Assinafy signing contract. Confirm the header, algorithm, encoding, and secret
   delivery mechanism with Assinafy before enforcing it. See

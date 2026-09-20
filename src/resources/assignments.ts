@@ -21,6 +21,35 @@ const ASSIGNMENT_METHODS = new Set(['virtual', 'collect']);
 const VERIFICATION_METHODS = new Set(['Email', 'Whatsapp', 'DigitalCertificate']);
 const NOTIFICATION_METHODS = new Set(['Email', 'Whatsapp']);
 
+/**
+ * Notification channel each verification method may be paired with.
+ *
+ * The API couples the two: verification `Email` always notifies by e-mail and
+ * `Whatsapp` always notifies over WhatsApp, because the verification code
+ * travels on the notification channel. Only `DigitalCertificate` — where the
+ * signer proves identity with their own ICP-Brasil certificate (A1 in software
+ * or A3 on a token/smartcard) rather than with a code — is free to be announced
+ * either way. Any other pairing is rejected with `400`.
+ */
+const ALLOWED_NOTIFICATION_METHODS: Record<string, ReadonlySet<string>> = {
+    Email: new Set(['Email']),
+    Whatsapp: new Set(['Whatsapp']),
+    DigitalCertificate: NOTIFICATION_METHODS,
+};
+
+/**
+ * Validate the per-signer channel and ordering options shared by assignment
+ * creation, cost estimation, and template-driven document creation.
+ *
+ * Enforces the published contract locally so an invalid combination fails
+ * before a billable request: the `verification_method` and
+ * `notification_methods` vocabularies, the one-notification-per-signer rule,
+ * the verification/notification coupling table, and a positive integer `step`.
+ *
+ * @param signer - The signer descriptor to check, in its wire shape.
+ * @param label - Prefix used in error messages, e.g. `Template signer 2`.
+ * @throws {ValidationError} If any of the above rules is violated.
+ */
 export function validateAssignmentSignerOptions(
     signer: {
         verification_method?: unknown;
@@ -36,14 +65,28 @@ export function validateAssignmentSignerOptions(
     ) {
         throw new ValidationError(`${label} has an invalid verification_method`);
     }
-    if (
-        signer.notification_methods !== undefined
-        && (!Array.isArray(signer.notification_methods)
-            || signer.notification_methods.some(
+    if (signer.notification_methods !== undefined) {
+        const methods = signer.notification_methods;
+        if (
+            !Array.isArray(methods)
+            || methods.some(
                 (method) => typeof method !== 'string' || !NOTIFICATION_METHODS.has(method),
-            ))
-    ) {
-        throw new ValidationError(`${label} has invalid notification_methods`);
+            )
+        ) {
+            throw new ValidationError(`${label} has invalid notification_methods`);
+        }
+        if (methods.length !== 1) {
+            throw new ValidationError(`${label} allows exactly one notification method`);
+        }
+        const verification = signer.verification_method;
+        if (typeof verification === 'string') {
+            const allowed = ALLOWED_NOTIFICATION_METHODS[verification];
+            if (allowed && !allowed.has(methods[0] as string)) {
+                throw new ValidationError(
+                    `${label} cannot pair ${verification} verification with ${String(methods[0])} notification`,
+                );
+            }
+        }
     }
     if (
         signer.step !== undefined

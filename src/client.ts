@@ -23,6 +23,7 @@ import { WebhookResource } from './resources/webhooks';
 import { TemplateResource } from './resources/templates';
 import { TagResource } from './resources/tags';
 import { AuthenticationResource } from './resources/authentication';
+import { OAuthResource } from './resources/oauth';
 import { FieldsResource } from './resources/fields';
 import { SignerDocumentsResource } from './resources/signer-documents';
 import { UserResource } from './resources/users';
@@ -79,6 +80,7 @@ export class AssinafyClient {
     public readonly templates: TemplateResource;
     public readonly tags: TagResource;
     public readonly auth: AuthenticationResource;
+    public readonly oauth: OAuthResource;
     public readonly fields: FieldsResource;
     public readonly signerDocuments: SignerDocumentsResource;
     public readonly users: UserResource;
@@ -192,6 +194,12 @@ export class AssinafyClient {
         this.templates = new TemplateResource(this.axiosInstance, this.defaultAccountId, this.logger);
         this.tags = new TagResource(this.axiosInstance, this.defaultAccountId, this.logger);
         this.auth = new AuthenticationResource(
+            this.axiosInstance,
+            undefined,
+            this.logger,
+            this.publicAxiosInstance,
+        );
+        this.oauth = new OAuthResource(
             this.axiosInstance,
             undefined,
             this.logger,

@@ -58,6 +58,69 @@ method counters. Notification counters are not mutually exclusive.
 are mutually exclusive and sum to `signature_requests`. Older unsuffixed email
 and WhatsApp counters remain optional.
 
+## OAuth spans two hosts, and sandbox discovery is unreachable
+
+The flow deliberately spans two hosts, which no other part of this SDK does:
+
+```text
+GET   https://api.assinafy.com.br/.well-known/oauth-protected-resource   # host root, NOT /v1
+GET   https://auth.assinafy.com.br/.well-known/oauth-authorization-server
+GET   https://auth.assinafy.com.br/oauth/authorize                       # browser only
+POST  https://api.assinafy.com.br/v1/oauth/token
+POST  https://api.assinafy.com.br/v1/oauth/revoke
+GET   https://api.assinafy.com.br/v1/oauth/userinfo
+```
+
+`getProtectedResourceMetadata()` therefore builds its URL from the configured
+base URL's **origin**, not from `baseUrl` itself, and
+`getAuthorizationServerMetadata()` issues a cross-host request on the
+credential-free transport.
+
+The sandbox has its own authorization server at
+`https://auth-sandbox.assinafy.com.br`, whose `/oauth/authorize` consent screen
+is live. Its discovery documents, however, cannot be fetched: nginx on the
+sandbox hosts rejects **any** path beginning with a dot — `/.anything` answers
+`403` while `/anything` answers `404` — so `/.well-known/…` never reaches the
+application. Skip discovery there by naming the endpoints explicitly; both
+`createAuthorizationUrl` options exist for exactly this case:
+
+```ts
+const client = new AssinafyClient({ baseUrl: 'https://sandbox.assinafy.com.br/v1' });
+
+const request = await client.oauth.createAuthorizationUrl({
+  clientId: process.env.ASSINAFY_CLIENT_ID!,
+  redirectUri: 'https://myapp.example.com/oauth/callback',
+  scopes: ['documents:read'],
+  issuer: 'https://auth-sandbox.assinafy.com.br',
+  authorizationEndpoint: 'https://auth-sandbox.assinafy.com.br/oauth/authorize',
+});
+```
+
+The token, revocation and userinfo endpoints are resolved against the
+configured `baseUrl`, so they follow whichever host the client points at.
+Confirm the sandbox deployment exposes them before running the exchange leg
+there: at the time of writing its OpenAPI document publishes 67 paths and does
+not list `/v1/oauth/…`, while production publishes 71 and does. A `404` from
+this API is byte-identical for a bad id and for a route that does not exist, so
+it is never on its own proof that a route is missing.
+
+Response shapes diverge from the rest of the API on purpose:
+
+| Operation | Success body | Error body |
+| --- | --- | --- |
+| Discovery documents | bare metadata object (RFC 8615) | — |
+| `POST /oauth/token`, `POST /oauth/revoke` | flat, no envelope (RFC 6749 §5.1) | flat `{ error, error_description }` (§5.2) |
+| `GET /oauth/userinfo` | flat claims object (OIDC Core §5.3.2) | the usual `{ status, message, data }` envelope |
+
+Both JSON and `application/x-www-form-urlencoded` bodies are accepted by the
+token and revocation endpoints; the SDK sends JSON because that is what the
+published `requestBody` documents.
+
+The RFC 8707 `resource` indicator defaults to the configured API origin, and is
+omitted when that origin is a loopback `http://` host — the shape used by mock
+servers and the packed-consumer smoke test, which has no valid resource
+identifier.
+
 ## List pagination
 
 Two behaviours of the list endpoints are silent rather than loud, so neither

@@ -38,7 +38,35 @@ describe('AssinafyClient', () => {
         expect(client.assignments).toBeDefined();
         expect(client.webhooks).toBeDefined();
         expect(client.users).toBeDefined();
+        expect(client.oauth).toBeDefined();
         expect(client.webhookVerifier).toBeDefined();
+    });
+
+    test('never sends the workspace credential to the OAuth token endpoint', async () => {
+        const client = new AssinafyClient({ apiKey: 'k', accountId: 'acc', maxRetries: 0 });
+        let headers: Record<string, unknown> = {};
+        client.oauth['publicHttp'].defaults.adapter = async (config) => {
+            headers = { ...config.headers } as Record<string, unknown>;
+            return {
+                data: { access_token: 'a', token_type: 'Bearer', expires_in: 3600 },
+                status: 200,
+                statusText: '',
+                headers: {},
+                config,
+            };
+        };
+
+        await client.oauth.exchangeCode({
+            code: 'c',
+            codeVerifier: 'a'.repeat(43),
+            redirectUri: 'https://myapp.example.com/oauth/callback',
+            clientId: 'cli',
+            clientSecret: 'secret',
+        });
+
+        // The token endpoint authenticates the application, not the workspace.
+        expect(headers['X-Api-Key']).toBeUndefined();
+        expect(headers['Authorization']).toBeUndefined();
     });
 
     test('accepts Bearer token credentials', () => {
@@ -112,7 +140,9 @@ describe('AssinafyClient', () => {
         ).publicHttp;
         const expected = `Assinafy-Typescript-SDK/v${packageJson.version}`;
 
-        expect(packageJson.version).toBe('2.2.0');
+        // Shape, not a pinned literal: the release workflow already asserts that
+        // the tag equals this version, so pinning it here only adds a chore.
+        expect(packageJson.version).toMatch(/^\d+\.\d+\.\d+$/u);
         expect(authenticated['User-Agent']).toBe(expected);
         expect(publicHttp.defaults.headers['User-Agent']).toBe(expected);
     });

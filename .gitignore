@@ -14,3 +14,8 @@ coverage
 *.tsbuildinfo
 *.tgz
 SHA256SUMS
+
+# Local agent working notes. They document this repository for AI assistants and
+# are intentionally not part of the published package or the git history.
+AGENTS.md
+CLAUDE.md
