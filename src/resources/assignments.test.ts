@@ -111,22 +111,22 @@ describe('buildAssignmentPayload', () => {
         });
         expect(buildAssignmentEstimatePayload({
             method: 'collect',
+            signers: [{}],
             entries,
         })).toEqual({
             method: 'collect',
+            signers: [{}],
             entries: expectedEntries,
         });
     });
 
-    test('allows collect estimates with entries and no signer list', () => {
-        const body = buildAssignmentEstimatePayload({
+    test('requires a signer list for collect estimates', () => {
+        // The API prices per signer in both modes and rejects a signer-less estimate.
+        expect(() => buildAssignmentEstimatePayload({
             method: 'collect',
+            signers: [],
             entries: [{ page_id: 'page-1', fields: [] }],
-        });
-        expect(body).toEqual({
-            method: 'collect',
-            entries: [{ page_id: 'page-1', fields: [] }],
-        });
+        })).toThrow(ValidationError);
     });
 
     test('requires entries for collect requests', () => {
@@ -236,10 +236,11 @@ describe('buildAssignmentPayload', () => {
         expect(() =>
             buildAssignmentEstimatePayload({ method: 'other' as never, signers: [{}] }),
         ).toThrow(ValidationError);
-        expect(() => buildAssignmentEstimatePayload({ method: 'virtual' })).toThrow(
+        // JavaScript callers can still omit `signers` that the type now requires.
+        expect(() => buildAssignmentEstimatePayload({ method: 'virtual' } as never)).toThrow(
             ValidationError,
         );
-        expect(() => buildAssignmentEstimatePayload({ method: 'collect' })).toThrow(
+        expect(() => buildAssignmentEstimatePayload({ method: 'collect' } as never)).toThrow(
             ValidationError,
         );
         expect(() =>
@@ -359,7 +360,7 @@ describe('AssignmentResource', () => {
         });
     });
 
-    test('estimateCost accepts official collect payloads without signers', async () => {
+    test('estimateCost sends signers alongside collect entries', async () => {
         let capturedBody: unknown;
         const axiosMock = {
             post: async (_url: string, body: unknown) => {
@@ -367,16 +368,26 @@ describe('AssignmentResource', () => {
                 return { status: 200, data: { status: 200, data: { total_credits: 0 } } };
             },
         } as unknown as AxiosInstance;
+        const resource = new AssignmentResource(axiosMock, 'acc');
 
-        await new AssignmentResource(axiosMock, 'acc').estimateCost('doc-1', {
+        await resource.estimateCost('doc-1', {
             method: 'collect',
+            signers: [{ verification_method: 'Email' }],
             entries: [{ page_id: 'page-1', fields: [] }],
         });
 
         expect(capturedBody).toEqual({
             method: 'collect',
+            signers: [{ verification_method: 'Email' }],
             entries: [{ page_id: 'page-1', fields: [] }],
         });
+
+        // The API rejects a signer-less estimate in either mode.
+        await expect(resource.estimateCost('doc-1', {
+            method: 'collect',
+            signers: [],
+            entries: [{ page_id: 'page-1', fields: [] }],
+        })).rejects.toThrow(/At least one signer/);
     });
 
     test('estimateCost returns the full ICostEstimate shape', async () => {

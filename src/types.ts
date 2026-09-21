@@ -353,9 +353,13 @@ export interface IAssignmentCostSigner {
  */
 export interface IEstimateAssignmentCostPayload {
     method?: AssignmentMethod;
-    /** Required for `virtual`; `{}` prices the default Email channel. */
-    signers?: IAssignmentCostSigner[];
-    /** Required for `collect`; signer descriptors are optional in that mode. */
+    /**
+     * Required for both methods — the API rejects an estimate without it, and
+     * per-signer `verification_method` is what the estimate prices. `{}` prices
+     * the default Email channel.
+     */
+    signers: IAssignmentCostSigner[];
+    /** Required for `collect`. */
     entries?: IAssignmentEntry[];
 }
 

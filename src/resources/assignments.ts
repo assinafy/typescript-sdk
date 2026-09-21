@@ -197,12 +197,12 @@ export function buildAssignmentPayload(
 /**
  * Build the narrower official cost-estimate body without create-only fields.
  *
- * @param payload - Assignment method plus channel descriptors for `virtual`,
- * or field-placement entries for `collect`.
- * @returns A JSON-ready `{ method, signers?, entries? }` request body. Signer
+ * @param payload - Assignment method plus channel descriptors, and, for
+ * `collect`, the field-placement entries.
+ * @returns A JSON-ready `{ method, signers, entries? }` request body. Signer
  * IDs and create-only step fields are never forwarded to pricing.
- * @throws {ValidationError} If a virtual estimate has no signer descriptor or
- * a collect estimate has no placement entry.
+ * @throws {ValidationError} If the estimate has no signer descriptor, or a
+ * collect estimate has no placement entry.
  *
  * @example
  * ```ts
@@ -221,8 +221,9 @@ export function buildAssignmentEstimatePayload(
         throw new ValidationError('method must be virtual or collect');
     }
     const signers = Array.isArray(payload.signers) ? payload.signers : [];
-    if (method === 'virtual' && signers.length === 0) {
-        throw new ValidationError('At least one signer is required for a virtual cost estimate');
+    // Both methods are priced per signer; `collect` additionally carries entries.
+    if (signers.length === 0) {
+        throw new ValidationError('At least one signer is required for a cost estimate');
     }
     const entries = payload.entries === undefined
         ? undefined
@@ -233,9 +234,7 @@ export function buildAssignmentEstimatePayload(
 
     return cleanParams({
         method,
-        signers: signers.length > 0
-            ? signers.map((signer) => normaliseEstimateSigner(signer))
-            : undefined,
+        signers: signers.map((signer) => normaliseEstimateSigner(signer)),
         entries,
     });
 }
@@ -650,7 +649,8 @@ export class AssignmentResource extends BaseResource {
      * }
      * ```
      * @throws {ValidationError} If `documentId` is missing, a `virtual` request
-     * has no signer entry, or a `collect` request has no field-placement entry.
+     * has no signer entry, or a `collect` request has no signer entry or no
+     * field-placement entry.
      * @throws {ApiError} If the API rejects the request.
      *
      * @example

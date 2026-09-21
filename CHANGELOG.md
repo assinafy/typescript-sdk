@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.4.0] - 2026-09-21
+
+### Fixed
+
+- **`assignments.estimateCost` now sends `signers` for `collect` too.** The
+  published contract marks `signers` as required only for `virtual`, but the
+  API rejects *any* estimate without it — `collect` requests came back as
+  `400 Pelo menos um signatários precisa ser informado.` Pricing is per signer
+  in both modes (`Whatsapp` costs 0.45 credits per signer,
+  `DigitalCertificate` two), so a signer-less body could never be priced.
+
+### Changed
+
+- `IEstimateAssignmentCostPayload.signers` is now required. TypeScript callers
+  that omitted it for `collect` will stop compiling; those calls were already
+  failing at runtime, so no working code changes behaviour. Pass one descriptor
+  per signer —
+  `{}` prices the default Email channel:
+
+  ```ts
+  await client.assignments.estimateCost(documentId, {
+    method: 'collect',
+    signers: [{}, { verification_method: 'Whatsapp' }],
+    entries,
+  });
+  ```
+
+- `buildAssignmentEstimatePayload` throws `ValidationError` for an empty
+  signer list in either mode, so JavaScript callers get a local error instead
+  of an opaque upstream rejection. The message is now method-neutral:
+  `At least one signer is required for a cost estimate`.
+
 ## [2.3.0] - 2026-09-20
 
 ### Added
@@ -621,7 +653,8 @@ fields (`cpf`, `whatsapp_phone_number`) with the PHP SDK and n8n node.
 - High-level `uploadAndRequestSignatures` helper on `AssinafyClient`.
 - `PaginatedResult<T>` with parsed `X-Pagination-*` header meta.
 
-[Unreleased]: https://github.com/assinafy/typescript-sdk/compare/v2.3.0...HEAD
+[Unreleased]: https://github.com/assinafy/typescript-sdk/compare/v2.4.0...HEAD
+[2.4.0]: https://github.com/assinafy/typescript-sdk/compare/v2.3.0...v2.4.0
 [2.3.0]: https://github.com/assinafy/typescript-sdk/compare/v2.2.0...v2.3.0
 [2.2.0]: https://github.com/assinafy/typescript-sdk/compare/v2.1.2...v2.2.0
 [2.1.2]: https://github.com/assinafy/typescript-sdk/compare/v2.1.1...v2.1.2
