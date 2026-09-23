@@ -134,7 +134,7 @@ export class OAuthResource extends BaseResource {
      *   "scopes_supported": [
      *     "documents:read", "documents:write",
      *     "templates:read", "templates:write",
-     *     "account:read", "openid", "profile", "email"
+     *     "account:read", "webhooks:write", "openid", "profile", "email"
      *   ],
      *   "bearer_methods_supported": ["header"]
      * }
@@ -176,16 +176,19 @@ export class OAuthResource extends BaseResource {
      *   "userinfo_endpoint": "https://api.assinafy.com.br/v1/oauth/userinfo",
      *   "jwks_uri": "https://auth.assinafy.com.br/.well-known/jwks.json",
      *   "scopes_supported": ["documents:read", "documents:write", "templates:read",
-     *                        "templates:write", "account:read", "openid",
+     *                        "templates:write", "account:read", "webhooks:write", "openid",
      *                        "profile", "email", "offline_access"],
      *   "response_types_supported": ["code"],
-     *   "grant_types_supported": ["authorization_code", "refresh_token"],
+     *   "grant_types_supported": ["authorization_code", "refresh_token",
+     *                             "urn:ietf:params:oauth:grant-type:token-exchange"],
      *   "code_challenge_methods_supported": ["S256"],
      *   "token_endpoint_auth_methods_supported": ["client_secret_post", "none"],
      *   "authorization_response_iss_parameter_supported": true,
      *   "client_id_metadata_document_supported": true
      * }
      * ```
+     * The token-exchange grant is reserved for Assinafy's internal service
+     * clients; integrations use `authorization_code` and `refresh_token`.
      * @throws {ValidationError} If `issuer` is not an absolute `https://` URL,
      * or the document's own `issuer` disagrees with where it was fetched from
      * (RFC 8414 §3.3 — a mismatch means the document is not authoritative).
@@ -236,6 +239,7 @@ export class OAuthResource extends BaseResource {
      * `['documents:read', 'documents:write', 'offline_access']`. Ask for the
      * minimum: the user approves all of them or none. Add `offline_access` to
      * receive a refresh token and `openid` to receive an `id_token`.
+     * `webhooks:write` permits subscription updates and inactivation.
      * @param options.authorizationEndpoint - Skip discovery by supplying the
      * endpoint yourself. Defaults to the discovered
      * `authorization_endpoint`.

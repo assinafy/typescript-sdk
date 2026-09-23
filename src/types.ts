@@ -1293,6 +1293,7 @@ export type OAuthScope =
     | 'templates:read'
     | 'templates:write'
     | 'account:read'
+    | 'webhooks:write'
     | 'openid'
     | 'profile'
     | 'email'

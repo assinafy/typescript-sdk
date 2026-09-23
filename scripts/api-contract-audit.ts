@@ -14,7 +14,7 @@ import { SDK_USER_AGENT } from '../src/support/transport';
 const DEFAULT_SPEC_URL = 'https://api.assinafy.com.br/v1/docs/openapi.json';
 const COVERAGE_FILE = new URL('../docs/API_COVERAGE.md', import.meta.url);
 const HTTP_METHODS = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']);
-const EXPECTED_CONTRACT_FINGERPRINT = '6b574dfb8e1de27d8b693c68d79feeb11ac7275c4831bd9f28364b819d8abad3';
+const EXPECTED_CONTRACT_FINGERPRINT = '144bd132a436905d610148d53d284089a736b116009527ead215511594640a82';
 const NON_CONTRACT_KEYS = new Set([
     'description',
     'summary',
@@ -243,6 +243,7 @@ function validateProductionStructure(spec: OpenApiDocument): number {
                 'templates:read',
                 'templates:write',
                 'account:read',
+                'webhooks:write',
                 'openid',
                 'profile',
                 'email',
@@ -265,9 +266,11 @@ function validateProductionStructure(spec: OpenApiDocument): number {
     );
     requireValue(
         Array.isArray(grantTypes)
-            && grantTypes.length === 2
+            && grantTypes.length === 3
             && grantTypes.includes('authorization_code')
-            && grantTypes.includes('refresh_token'),
+            && grantTypes.includes('refresh_token')
+            // The third grant is reserved for Assinafy's internal service clients.
+            && grantTypes.includes('urn:ietf:params:oauth:grant-type:token-exchange'),
         'OAuth token endpoint grant types changed',
     );
     requireValue(
@@ -431,6 +434,15 @@ async function validateOAuthDiscovery(spec: OpenApiDocument): Promise<number> {
     );
 
     const serverMetadata = await fetchJson(`${issuer}/.well-known/oauth-authorization-server`);
+    for (const [document, scopes] of [
+        ['protected resource', at(resourceMetadata, 'scopes_supported')],
+        ['authorization server', at(serverMetadata, 'scopes_supported')],
+    ] as const) {
+        assertContract(
+            Array.isArray(scopes) && scopes.includes('webhooks:write'),
+            `${document} no longer advertises webhooks:write`,
+        );
+    }
     for (const [metadataKey, specKey] of [
         ['issuer', undefined],
         ['authorization_endpoint', 'authorizationUrl'],
@@ -452,7 +464,7 @@ async function validateOAuthDiscovery(spec: OpenApiDocument): Promise<number> {
         at(serverMetadata, 'authorization_response_iss_parameter_supported') === true,
         'authorization server no longer sets the RFC 9207 iss parameter',
     );
-    return 5;
+    return 7;
 }
 
 async function fetchJson(url: string): Promise<unknown> {

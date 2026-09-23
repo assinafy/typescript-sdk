@@ -32,6 +32,7 @@ export class WebhookResource extends BaseResource {
      * When `events` is omitted or empty, {@link DEFAULT_WEBHOOK_EVENTS} is used
      * (`document_ready`, `document_prepared`, `signer_signed_document`,
      * `signer_rejected_document`, `document_processing_failed`).
+     * OAuth tokens need the `webhooks:write` scope.
      *
      * @param payload - Subscription details. `url` and `email` are required;
      * `events` defaults to {@link DEFAULT_WEBHOOK_EVENTS} and `is_active`
@@ -55,7 +56,8 @@ export class WebhookResource extends BaseResource {
      * ```
      * @throws {ValidationError} If `url` / `email` is invalid, `events` /
      * `is_active` has the wrong type, or no account ID is available.
-     * @throws {ApiError} If the API rejects the subscription.
+     * @throws {ApiError} If the API rejects the subscription, including `403`
+     * when an OAuth token lacks `webhooks:write`.
      *
      * @example
      * ```ts
@@ -167,6 +169,7 @@ export class WebhookResource extends BaseResource {
      * subscription-delete route. The subscription is retained (with its `url`
      * and `events`) and simply stops firing; re-enable it by calling
      * {@link WebhookResource.register} again with `is_active: true`.
+     * OAuth tokens need the `webhooks:write` scope.
      *
      * @param accountId - Override the client's default account ID.
      * @returns The subscription with `is_active` flipped to `false`. Response
@@ -187,7 +190,8 @@ export class WebhookResource extends BaseResource {
      * }
      * ```
      * @throws {ValidationError} If no account ID is available.
-     * @throws {ApiError} If the API rejects the request.
+     * @throws {ApiError} If the API rejects the request, including `403` when
+     * an OAuth token lacks `webhooks:write`.
      *
      * @example
      * ```ts

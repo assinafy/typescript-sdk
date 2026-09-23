@@ -9,7 +9,7 @@ const ISSUER = 'https://auth.assinafy.com.br';
 const PROTECTED_RESOURCE = {
     resource: 'https://api.assinafy.com.br',
     authorization_servers: [ISSUER],
-    scopes_supported: ['documents:read', 'documents:write', 'openid'],
+    scopes_supported: ['documents:read', 'documents:write', 'webhooks:write', 'openid'],
     bearer_methods_supported: ['header'],
 };
 
@@ -184,7 +184,7 @@ describe('OAuthResource.createAuthorizationUrl', () => {
     const base = {
         clientId: 'cli_1a2b3c',
         redirectUri: 'https://myapp.example.com/oauth/callback',
-        scopes: ['documents:read', 'documents:write'],
+        scopes: ['documents:read', 'documents:write', 'webhooks:write'],
         authorizationEndpoint: `${ISSUER}/oauth/authorize`,
         issuer: ISSUER,
     };
@@ -198,7 +198,7 @@ describe('OAuthResource.createAuthorizationUrl', () => {
         expect(url.searchParams.get('response_type')).toBe('code');
         expect(url.searchParams.get('client_id')).toBe('cli_1a2b3c');
         expect(url.searchParams.get('redirect_uri')).toBe(base.redirectUri);
-        expect(url.searchParams.get('scope')).toBe('documents:read documents:write');
+        expect(url.searchParams.get('scope')).toBe('documents:read documents:write webhooks:write');
         expect(url.searchParams.get('state')).toBe(request.state);
         expect(url.searchParams.get('code_challenge_method')).toBe('S256');
         expect(url.searchParams.get('resource')).toBe('https://api.assinafy.com.br');

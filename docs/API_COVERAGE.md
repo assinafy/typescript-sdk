@@ -101,6 +101,8 @@ operations answer with flat RFC 6749 / OIDC bodies rather than the
 `{ status, message, data }` envelope used everywhere else, and the SDK returns
 them unwrapped. The browser-facing `/oauth/authorize` page belongs to the
 authorization server (`https://auth.assinafy.com.br`), not to this API.
+The token endpoint also advertises an internal-service token-exchange grant;
+ordinary OAuth applications use the two SDK methods listed below.
 
 | Method | Path | SDK method | Status |
 | --- | --- | --- | --- |

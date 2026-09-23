@@ -228,6 +228,7 @@ await client.oauth.getUserInfo(tokens.access_token); // OIDC claims; needs `open
 | `templates:read` | Read templates |
 | `templates:write` | Create and change templates |
 | `account:read` | Read the workspace's profile, theme and logo |
+| `webhooks:write` | Update or inactivate the workspace's webhook subscription |
 | `openid` | Receive an `id_token` identifying the user |
 | `profile` | Read the user's name |
 | `email` | Read the user's email and whether it is verified |
@@ -1094,6 +1095,8 @@ await client.users.updateNotificationPreferences({
 ```
 
 ### Webhooks
+
+OAuth tokens need `webhooks:write` for `register()` and `inactivate()`.
 
 ```ts
 await client.webhooks.register({
