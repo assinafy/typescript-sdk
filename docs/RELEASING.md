@@ -47,25 +47,6 @@ The `publish-gh` job uses the workflow-scoped `GITHUB_TOKEN` with
 the `@assinafy` scope and that the package remains linked to this repository.
 No separate personal access token should be stored.
 
-### Sandbox integration environment
-
-Create a protected GitHub environment named `sandbox`. Restrict deployments to
-the mirrored `main` branch, require reviewer approval, and store these required
-environment secrets:
-
-- `ASSINAFY_API_KEY`
-- `ASSINAFY_ACCOUNT_ID`
-
-The `disposable-full` mode also requires `ASSINAFY_TEST_EMAIL_PRIMARY` and
-`ASSINAFY_TEST_EMAIL_SECONDARY`. Optional coverage uses
-`ASSINAFY_TEST_WEBHOOK_URL`, `ASSINAFY_TEST_LOGIN_EMAIL`,
-`ASSINAFY_TEST_LOGIN_PASSWORD`, `ASSINAFY_SIGNER_ACCESS_CODE`,
-`ASSINAFY_SIGNER_OTP`, and `ASSINAFY_PUBLIC_DOCUMENT_ID`.
-
-Keep secret values out of repository variables, files, and logs. Run the manual
-**Sandbox integration** workflow from mirrored `main`; use `read-only` first
-and select `disposable-full` only for a deliberate reversible test run.
-
 ### Mirror and tag protection
 
 The GitLab push mirror must include tags and be able to update the GitHub
