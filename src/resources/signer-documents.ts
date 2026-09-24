@@ -62,18 +62,18 @@ export class SignerDocumentsResource extends BaseResource {
      *   "name": "Service agreement.pdf",
      *   "status": "pending_signature",
      *   "artifacts": {
-     *     "original": "https://sandbox.assinafy.com.br/v1/documents/103acccd.../download/original",
-     *     "thumbnail": "https://sandbox.assinafy.com.br/v1/documents/103acccd.../thumbnail"
+     *     "original": "https://api.assinafy.com.br/v1/documents/103acccd.../download/original",
+     *     "thumbnail": "https://api.assinafy.com.br/v1/documents/103acccd.../thumbnail"
      *   },
      *   "is_closed": false,
-     *   "signing_url": "https://app-sandbox.assinafy.com.br/sign/103acccd...",
+     *   "signing_url": "https://app.assinafy.com.br/sign/103acccd...",
      *   "decline_reason": null,
      *   "declined_by": null,
      *   "tags": [],
      *   "assignment": null,          // an IAssignment once signing has started
      *   "pages": [
      *     { "id": "103acccd5c73...", "number": 1, "height": 1651, "width": 1275,
-     *       "download_url": "https://sandbox.assinafy.com.br/v1/documents/103acccd.../pages/103acccd5c73.../download" }
+     *       "download_url": "https://api.assinafy.com.br/v1/documents/103acccd.../pages/103acccd5c73.../download" }
      *   ],
      *   "created_at": "2026-07-19T14:56:54Z",
      *   "updated_at": "2026-07-19T14:56:56Z"
@@ -124,7 +124,7 @@ export class SignerDocumentsResource extends BaseResource {
      *       "status": "pending_signature",
      *       "artifacts": { "original": "https://...", "thumbnail": "https://..." },
      *       "is_closed": false,
-     *       "signing_url": "https://app-sandbox.assinafy.com.br/sign/103acccd...",
+     *       "signing_url": "https://app.assinafy.com.br/sign/103acccd...",
      *       "decline_reason": null,
      *       "declined_by": null,
      *       "tags": [],

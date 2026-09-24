@@ -195,9 +195,9 @@ describe('AssinafyClient', () => {
         const client = new AssinafyClient({
             apiKey: 'k',
             accountId: 'acc',
-            baseUrl: 'https://sandbox.assinafy.com.br/v1/',
+            baseUrl: 'https://api.assinafy.com.br/v1/',
         });
-        expect(client.getAxiosInstance().defaults.baseURL).toBe('https://sandbox.assinafy.com.br/v1');
+        expect(client.getAxiosInstance().defaults.baseURL).toBe('https://api.assinafy.com.br/v1');
     });
 
     test('canonicalizes dot segments in a custom baseUrl', () => {
@@ -782,10 +782,10 @@ describe('AssinafyClient', () => {
                         status: 'uploaded',
                         artifacts: {
                             original:
-                                'https://sandbox.assinafy.com.br/v1/documents/doc-123/download/original',
+                                'https://api.assinafy.com.br/v1/documents/doc-123/download/original',
                         },
                         is_closed: false,
-                        signing_url: 'https://app-sandbox.assinafy.com.br/sign/doc-123',
+                        signing_url: 'https://app.assinafy.com.br/sign/doc-123',
                         decline_reason: null,
                         declined_by: null,
                         tags: [],
@@ -844,12 +844,12 @@ describe('AssinafyClient', () => {
                         status: 'metadata_ready',
                         artifacts: {
                             original:
-                                'https://sandbox.assinafy.com.br/v1/documents/doc-123/download/original',
+                                'https://api.assinafy.com.br/v1/documents/doc-123/download/original',
                             thumbnail:
-                                'https://sandbox.assinafy.com.br/v1/documents/doc-123/thumbnail',
+                                'https://api.assinafy.com.br/v1/documents/doc-123/thumbnail',
                         },
                         is_closed: false,
-                        signing_url: 'https://app-sandbox.assinafy.com.br/sign/doc-123',
+                        signing_url: 'https://app.assinafy.com.br/sign/doc-123',
                         decline_reason: null,
                         declined_by: null,
                         tags: [],
@@ -863,7 +863,7 @@ describe('AssinafyClient', () => {
                                 height: 1651,
                                 width: 1275,
                                 download_url:
-                                    'https://sandbox.assinafy.com.br/v1/documents/doc-123/pages/page-1/download',
+                                    'https://api.assinafy.com.br/v1/documents/doc-123/pages/page-1/download',
                             },
                         ],
                     });
@@ -934,7 +934,7 @@ describe('AssinafyClient', () => {
                         status: 'uploaded',
                         artifacts: {
                             original:
-                                'https://sandbox.assinafy.com.br/v1/documents/doc-123/download/original',
+                                'https://api.assinafy.com.br/v1/documents/doc-123/download/original',
                         },
                         pages: [],
                     });

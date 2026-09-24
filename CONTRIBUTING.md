@@ -84,15 +84,15 @@ them. Do not merge directly into the GitHub mirror.
 Keep diffs focused. Do not reformat unrelated files or overwrite another
 contributor's uncommitted work.
 
-## Sandbox tests
+## Live tests
 
 Unit tests are the default. Live tests are an additional verification step and
-must use a dedicated sandbox account with short-lived credentials:
+must use a dedicated account with short-lived credentials:
 
 ```sh
 ASSINAFY_API_KEY='...' \
 ASSINAFY_ACCOUNT_ID='...' \
-ASSINAFY_BASE_URL='https://sandbox.assinafy.com.br/v1' \
+ASSINAFY_BASE_URL='https://api.assinafy.com.br/v1' \
 bun scripts/live-smoke.ts
 ```
 
@@ -102,17 +102,17 @@ PDF/PNG fixtures and two controlled notification recipients:
 ```sh
 ASSINAFY_API_KEY='...' \
 ASSINAFY_ACCOUNT_ID='...' \
-ASSINAFY_BASE_URL='https://sandbox.assinafy.com.br/v1' \
+ASSINAFY_BASE_URL='https://api.assinafy.com.br/v1' \
 ASSINAFY_TEST_EMAIL_PRIMARY='first@example.com' \
 ASSINAFY_TEST_EMAIL_SECONDARY='second@example.com' \
-bun scripts/live-smoke.ts --all
+bun scripts/live-smoke.ts --all --confirm-production
 ```
 
 `--all` creates a disposable workspace, attempts cleanup of every tracked
-resource, and force-deletes that workspace in `finally`. It refuses to mutate
-any host other than the exact Assinafy sandbox unless the operator also passes
-`--confirm-production`. An interrupted process can still leave fixtures behind,
-so inspect the sandbox after a run.
+resource, and force-deletes that workspace in `finally`. It always requires
+`--confirm-production` on any host, because it creates and deletes resources.
+An interrupted process can still leave fixtures behind, so inspect the account
+after a run.
 
 Optional fixtures extend coverage: `ASSINAFY_TEST_LOGIN_EMAIL` plus
 `ASSINAFY_TEST_LOGIN_PASSWORD`; `ASSINAFY_SIGNER_ACCESS_CODE` and optionally
@@ -120,7 +120,7 @@ Optional fixtures extend coverage: `ASSINAFY_TEST_LOGIN_EMAIL` plus
 `ASSINAFY_TEST_WEBHOOK_URL`. Missing prerequisites are printed as `SKIP`, never
 silently treated as passing coverage.
 
-Do not use the production override for routine tests. Do not print, paste into an issue,
+Use a dedicated account for manual live tests. Do not print, paste into an issue,
 or commit API keys, access codes, account identifiers, documents, recipient
 addresses, or response payloads containing personal data. Rotate any test
 credential that is exposed.
@@ -128,6 +128,6 @@ credential that is exposed.
 ## Merge requests
 
 Describe the API operations affected, compatibility decisions, tests run, and
-whether sandbox verification was performed. Include sanitized failure details
+whether live verification was performed. Include sanitized failure details
 when a live behavior differs from the published contract. Security reports must
 follow [SECURITY.md](SECURITY.md), not a public issue or merge request.

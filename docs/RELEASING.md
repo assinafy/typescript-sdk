@@ -91,7 +91,7 @@ deleting the same pattern to the mirror/release maintainers. Protect the GitHub
    ASSINAFY_BASE_URL='https://sandbox.assinafy.com.br/v1' \
    ASSINAFY_TEST_EMAIL_PRIMARY='first@example.com' \
    ASSINAFY_TEST_EMAIL_SECONDARY='second@example.com' \
-   bun scripts/live-smoke.ts --all
+   bun scripts/live-smoke.ts --all --confirm-production
    ```
 
    The suite creates and force-deletes a disposable workspace, but an

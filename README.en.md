@@ -126,7 +126,7 @@ operations, so an API key or Bearer token is never attached accidentally:
 
 ```ts
 const publicClient = new AssinafyClient({
-  baseUrl: 'https://sandbox.assinafy.com.br/v1',
+  baseUrl: 'https://api.assinafy.com.br/v1',
 });
 
 await publicClient.auth.login('me@example.com', 'password');

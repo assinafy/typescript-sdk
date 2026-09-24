@@ -358,7 +358,7 @@ export class AssinafyClient {
      *       { "id": "1032becb82a279550bc3e5df9bbb", "step": 1, "email": "ana@example.com", "full_name": "Ana Souza", "notified": true, "completed": false }
      *     ],
      *     "signing_urls": [
-     *       { "signer_id": "1032becb82a279550bc3e5df9bbb", "url": "https://app-sandbox.assinafy.com.br/sign/103ad216846e6b90710cb9acef59?email=ana%40example.com" }
+     *       { "signer_id": "1032becb82a279550bc3e5df9bbb", "url": "https://app.assinafy.com.br/sign/103ad216846e6b90710cb9acef59?email=ana%40example.com" }
      *     ]
      *   },
      *   "signer_ids": ["1032becb82a279550bc3e5df9bbb"]

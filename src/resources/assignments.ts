@@ -466,7 +466,7 @@ export class AssignmentResource extends BaseResource {
      *   "signing_urls": [
      *     {
      *       "signer_id": "19e6b92e7895332ed9708535d8c",
-     *       "url": "https://app-sandbox.assinafy.com.br/sign/103033c950d865a248a11c5cf96c?email=signer%40example.com"
+     *       "url": "https://app.assinafy.com.br/sign/103033c950d865a248a11c5cf96c?email=signer%40example.com"
      *     }
      *   ]
      * }
@@ -572,7 +572,7 @@ export class AssignmentResource extends BaseResource {
      *   "signing_urls": [
      *     {
      *       "signer_id": "19e6b92e7895332ed9708535d8c",
-     *       "url": "https://app-sandbox.assinafy.com.br/sign/103033c950d865a248a11c5cf96c?email=signer%40example.com"
+     *       "url": "https://app.assinafy.com.br/sign/103033c950d865a248a11c5cf96c?email=signer%40example.com"
      *     }
      *   ]
      * }
@@ -712,7 +712,7 @@ export class AssignmentResource extends BaseResource {
      *   ],
      *   "summary": { "signer_count": 1, "completed_count": 0 },
      *   "signing_urls": [
-     *     { "signer_id": "19e6b92e7895332ed9708535d8c", "url": "https://app-sandbox.assinafy.com.br/sign/103033c950d865a248a11c5cf96c" }
+     *     { "signer_id": "19e6b92e7895332ed9708535d8c", "url": "https://app.assinafy.com.br/sign/103033c950d865a248a11c5cf96c" }
      *   ]
      * }
      * ```
@@ -862,7 +862,7 @@ export class AssignmentResource extends BaseResource {
      *     "header": "Assinafy",
      *     "body": "Você tem um documento para assinar.",
      *     "buttons": [
-     *       { "text": "Assinar documento", "url": "https://app-sandbox.assinafy.com.br/sign/103033c950d865a248a11c5cf96c" }
+     *       { "text": "Assinar documento", "url": "https://app.assinafy.com.br/sign/103033c950d865a248a11c5cf96c" }
      *     ],
      *     "phone_number": "+5511999998888",
      *     "signer_id": "19e6b92e7895332ed9708535d8c"

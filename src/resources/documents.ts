@@ -115,7 +115,7 @@ export class DocumentResource extends BaseResource {
      *   "status": "uploaded",               // NOT metadata_processing yet
      *   "artifacts": { "original": "https://…/documents/103ad216…/download/original" },
      *   "is_closed": false,
-     *   "signing_url": "https://app-sandbox.assinafy.com.br/sign/103ad216…",
+     *   "signing_url": "https://app.assinafy.com.br/sign/103ad216…",
      *   "decline_reason": null,
      *   "declined_by": null,
      *   "tags": [],
@@ -191,7 +191,7 @@ export class DocumentResource extends BaseResource {
      *     "thumbnail": "https://…/documents/103acccd…/thumbnail"
      *   },
      *   "is_closed": false,
-     *   "signing_url": "https://app-sandbox.assinafy.com.br/sign/103acccd…",
+     *   "signing_url": "https://app.assinafy.com.br/sign/103acccd…",
      *   "decline_reason": null,
      *   "declined_by": null,
      *   "tags": [],
@@ -368,7 +368,7 @@ export class DocumentResource extends BaseResource {
      *     "thumbnail": "https://…/documents/103ad216…/thumbnail"
      *   },
      *   "is_closed": false,
-     *   "signing_url": "https://app-sandbox.assinafy.com.br/sign/103ad216…",
+     *   "signing_url": "https://app.assinafy.com.br/sign/103ad216…",
      *   "decline_reason": null,
      *   "declined_by": null,
      *   "tags": [],
@@ -876,7 +876,7 @@ export class DocumentResource extends BaseResource {
      *   "status": "pending_signature",
      *   "artifacts": { "original": "https://…/download/original", "thumbnail": "https://…/thumbnail" },
      *   "is_closed": false,
-     *   "signing_url": "https://app-sandbox.assinafy.com.br/sign/19f675b7…",
+     *   "signing_url": "https://app.assinafy.com.br/sign/19f675b7…",
      *   "tags": [{ "id": "103a0992…", "name": "agreements", "color": null }],
      *   "assignment": { "id": "103a09a1…", "method": "virtual", "summary": { "signer_count": 1, "completed_count": 0 } },
      *   "pages": [{ "id": "103a0992…", "number": 1, "height": 1651, "width": 1275, "download_url": "https://…/download" }],

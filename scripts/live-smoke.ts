@@ -5,10 +5,10 @@
  *   ASSINAFY_BASE_URL=... ASSINAFY_API_KEY=... ASSINAFY_ACCOUNT_ID=... \
  *     bun scripts/live-smoke.ts
  *
- * Full disposable-workspace checks (sandbox only by default):
+ * Full disposable-workspace checks (require --confirm-production on every host):
  *   ASSINAFY_BASE_URL=... ASSINAFY_API_KEY=... ASSINAFY_ACCOUNT_ID=... \
  *   ASSINAFY_TEST_EMAIL_PRIMARY=... ASSINAFY_TEST_EMAIL_SECONDARY=... \
- *     bun scripts/live-smoke.ts --all
+ *     bun scripts/live-smoke.ts --all --confirm-production
  *
  * The script intentionally never prints credentials, resource IDs, names,
  * e-mail addresses, webhook URLs, response bodies, request payloads, or raw
@@ -29,10 +29,9 @@ import {
 } from '../src';
 import { isEmail } from '../src/utils';
 
-const SANDBOX_HOST = 'sandbox.assinafy.com.br';
 const TEMPLATE_WAIT_MS = 90_000;
 const DISPATCH_WAIT_MS = 20_000;
-// The sandbox allows 120 requests/minute; leave headroom for polling calls.
+// Space requests to leave headroom for polling calls.
 const INTEGRATION_STEP_INTERVAL_MS = 650;
 
 type AuditStatus = 'PASS' | 'FAIL' | 'SKIP';
@@ -196,11 +195,8 @@ function loadConfig(): AuditConfig {
 
     const fullAudit = args.has('--all');
     const confirmProduction = args.has('--confirm-production');
-    if (
-        fullAudit &&
-        parsedBaseUrl.host.toLowerCase() !== SANDBOX_HOST &&
-        !confirmProduction
-    ) {
+    // --all creates and force-deletes a workspace on the configured host.
+    if (fullAudit && !confirmProduction) {
         throw new AuditConfigurationError();
     }
 
@@ -341,7 +337,7 @@ async function runGlobalReads(
     const notificationPreferences = await reporter.stepWithKnownApiStatusSkip(
         'users.notification-preferences-read',
         404,
-        'official route is not deployed in sandbox',
+        'official route is not deployed on this host',
         async () => {
             const preferences = await client.users.getNotificationPreferences();
             assertCondition(
@@ -370,7 +366,7 @@ async function runGlobalReads(
     await reporter.stepWithKnownApiStatusSkip(
         'users.stats-monthly',
         404,
-        'official route is not deployed in sandbox',
+        'official route is not deployed on this host',
         async () => {
             assertArray(await client.users.getStats());
         },
@@ -378,7 +374,7 @@ async function runGlobalReads(
     await reporter.stepWithKnownApiStatusSkip(
         'users.stats-daily',
         404,
-        'official route is not deployed in sandbox',
+        'official route is not deployed on this host',
         async () => {
             assertArray(
                 await client.users.getStats({ granularity: 'daily', month: currentMonth() }),
@@ -401,7 +397,7 @@ async function runGlobalReads(
     await reporter.stepWithKnownApiStatusSkip(
         'workspaces.stats-source-monthly',
         404,
-        'official route is not deployed in sandbox',
+        'official route is not deployed on this host',
         async () => {
             assertArray(await client.workspaces.getStats(config.accountId));
         },
@@ -409,7 +405,7 @@ async function runGlobalReads(
     await reporter.stepWithKnownApiStatusSkip(
         'workspaces.stats-source-daily',
         404,
-        'official route is not deployed in sandbox',
+        'official route is not deployed on this host',
         async () => {
             assertArray(
                 await client.workspaces.getStats(config.accountId, {
@@ -601,7 +597,7 @@ async function runFullSandboxAudit(
             return workspace;
         });
         if (!workspaceCreated.ok) {
-            reporter.skip('sandbox.mutable-resource-suite', 'disposable workspace was not created');
+            reporter.skip('live.mutable-resource-suite', 'disposable workspace was not created');
             return;
         }
 
@@ -644,7 +640,7 @@ async function runFullSandboxAudit(
         await reporter.stepWithKnownApiStatusSkip(
             'workspaces.stats-disposable-monthly',
             404,
-            'official route is not deployed in sandbox',
+            'official route is not deployed on this host',
             async () => {
                 assertArray(await client.workspaces.getStats(workspaceId));
             },
@@ -652,7 +648,7 @@ async function runFullSandboxAudit(
         await reporter.stepWithKnownApiStatusSkip(
             'workspaces.stats-disposable-daily',
             404,
-            'official route is not deployed in sandbox',
+            'official route is not deployed on this host',
             async () => {
                 assertArray(
                     await client.workspaces.getStats(workspaceId, {
@@ -818,7 +814,7 @@ async function runFullSandboxAudit(
             await reporter.stepWithKnownApiStatusSkip(
                 'signers.update-government-id',
                 400,
-                'production-only field is not deployed or enabled in sandbox',
+                'production-only field is not deployed or enabled on this host',
                 async () => {
                     const signer = await client.signers.update(firstSigner.value.id, {
                         government_id: '390.533.447-05',
@@ -1179,7 +1175,7 @@ async function runAssignmentSuite(
     await reporter.stepWithKnownApiStatusSkip(
         'assignments.estimate-cost-digital-certificate',
         400,
-        'Digital Certificate feature is unavailable on the sandbox plan',
+        'Digital Certificate feature is unavailable on this plan',
         async () => {
             const estimate = await client.assignments.estimateCost(documentId, {
                 method: 'virtual',
@@ -1250,7 +1246,7 @@ async function runAssignmentSuite(
     ) {
         reporter.skip(
             'assignments.copy-receivers-persisted',
-            'sandbox plan accepted but did not persist the signer ID',
+            'plan accepted but did not persist the signer ID',
         );
     } else {
         await reporter.step('assignments.copy-receivers-persisted', async () => undefined);
@@ -1373,7 +1369,7 @@ async function runTemplateSuite(
         await reporter.stepWithKnownApiStatusSkip(
             'templates.documents.estimate-cost-digital-certificate',
             400,
-            'Digital Certificate feature is unavailable on the sandbox plan',
+            'Digital Certificate feature is unavailable on this plan',
             async () => {
                 const estimate = await client.documents.estimateCostFromTemplate(
                     fixtureTemplateId,

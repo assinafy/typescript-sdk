@@ -123,7 +123,7 @@ uma chave de API ou token Bearer nunca é anexada por acidente:
 
 ```ts
 const clientePublico = new AssinafyClient({
-  baseUrl: 'https://sandbox.assinafy.com.br/v1',
+  baseUrl: 'https://api.assinafy.com.br/v1',
 });
 
 await clientePublico.auth.login('eu@exemplo.com.br', 'senha');
@@ -1365,13 +1365,9 @@ try {
 | Produção | `https://api.assinafy.com.br/v1` |
 | Sandbox | `https://sandbox.assinafy.com.br/v1` |
 
-O sandbox é gratuito e espelha a produção para testar a integração de ponta a ponta, com a exceção
-das rotas de certificado digital, que existem apenas em produção.
-
 O sandbox tem servidor de autorização próprio em `https://auth-sandbox.assinafy.com.br`, com a tela
-de consentimento em `/oauth/authorize`. Os documentos de descoberta dele, porém, não são
-alcançáveis: o nginx do sandbox recusa qualquer caminho iniciado por ponto, então `/.well-known/…`
-nunca chega à aplicação. Informe os endpoints explicitamente para pular a descoberta:
+de consentimento em `/oauth/authorize`. Os documentos de descoberta dele não são alcançáveis:
+o nginx recusa caminhos iniciados por ponto, então informe os endpoints explicitamente:
 
 ```ts
 const client = new AssinafyClient({ baseUrl: 'https://sandbox.assinafy.com.br/v1' });
@@ -1385,8 +1381,8 @@ const requisicao = await client.oauth.createAuthorizationUrl({
 });
 ```
 
-Os endpoints de token, revogação e userinfo seguem o `baseUrl` configurado. Confirme que o deploy de
-sandbox os expõe antes de rodar a etapa de troca por lá — veja
+Os endpoints de token, revogação e userinfo seguem o `baseUrl` configurado. Confirme que o sandbox
+os expõe antes de rodar a etapa de troca por lá — veja
 [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md).
 
 ## Desenvolvimento

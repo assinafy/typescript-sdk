@@ -70,15 +70,15 @@ function mockHttp(
 describe('AuthenticationResource', () => {
     test('builds the documented OAuth start and callback URLs', () => {
         const http = {
-            defaults: { baseURL: 'https://sandbox.assinafy.com.br/v1/' },
+            defaults: { baseURL: 'https://api.assinafy.com.br/v1/' },
         } as unknown as AxiosInstance;
         const auth = new AuthenticationResource(http);
 
         expect(auth.getSocialLoginUrl()).toBe(
-            'https://sandbox.assinafy.com.br/v1/auth/authenticate?authclient=google',
+            'https://api.assinafy.com.br/v1/auth/authenticate?authclient=google',
         );
         expect(auth.getSocialLoginCallbackUrl()).toBe(
-            'https://sandbox.assinafy.com.br/v1/login-callback',
+            'https://api.assinafy.com.br/v1/login-callback',
         );
         expect(() => auth.getSocialLoginUrl('' as never)).toThrow(ValidationError);
         expect(() => auth.getSocialLoginUrl('github' as never)).toThrow(ValidationError);
