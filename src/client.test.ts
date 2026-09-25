@@ -396,6 +396,28 @@ describe('AssinafyClient', () => {
         expect(calls).toBe(1);
     });
 
+    test('never replays the OAuth token endpoint after a 429', async () => {
+        // A replayed refresh token the server may already have rotated ends the
+        // whole connection, so the token request is sent exactly once.
+        const client = new AssinafyClient({ maxRetries: 2 });
+        let calls = 0;
+        client.oauth['publicHttp'].defaults.adapter = async (config) => {
+            calls++;
+            throw new axios.AxiosError('Too Many Requests', 'ERR_BAD_RESPONSE', config, {}, {
+                status: 429,
+                statusText: 'Too Many Requests',
+                headers: { 'retry-after': '0' },
+                data: {},
+                config,
+            });
+        };
+
+        await expect(
+            client.oauth.refreshToken({ refreshToken: 'current', clientId: 'cli' }),
+        ).rejects.toMatchObject({ statusCode: 429 });
+        expect(calls).toBe(1);
+    });
+
     test('retries every supported read/delete method after a 429', async () => {
         for (const method of ['head', 'options', 'delete']) {
             const client = new AssinafyClient({ apiKey: 'k', accountId: 'acc', maxRetries: 1 });

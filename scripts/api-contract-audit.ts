@@ -14,7 +14,7 @@ import { SDK_USER_AGENT } from '../src/support/transport';
 const DEFAULT_SPEC_URL = 'https://api.assinafy.com.br/v1/docs/openapi.json';
 const COVERAGE_FILE = new URL('../docs/API_COVERAGE.md', import.meta.url);
 const HTTP_METHODS = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']);
-const EXPECTED_CONTRACT_FINGERPRINT = '144bd132a436905d610148d53d284089a736b116009527ead215511594640a82';
+const EXPECTED_CONTRACT_FINGERPRINT = '7bbdd9880c14bedc7af54a819436150eafcff90383c1a6bd521da53b48b95bb4';
 const NON_CONTRACT_KEYS = new Set([
     'description',
     'summary',
@@ -213,6 +213,18 @@ function validateProductionStructure(spec: OpenApiDocument): number {
             'notification_history',
         )),
         'AssignmentSigner must include notification_history',
+    );
+    const agreementCode = at(
+        spec,
+        'components',
+        'schemas',
+        'DocumentVerification',
+        'properties',
+        'agreement_code',
+    );
+    requireValue(
+        at(agreementCode, 'type') === 'string' && at(agreementCode, 'nullable') === true,
+        'DocumentVerification must expose a nullable agreement_code',
     );
     const displayRequired = at(spec, 'components', 'schemas', 'DisplaySettings', 'required');
     requireValue(

@@ -21,6 +21,9 @@ const PROTECTED_RESOURCE_PATH = '/.well-known/oauth-protected-resource';
 /** RFC 8414 path of the authorization server's own metadata. */
 const AUTHORIZATION_SERVER_PATH = '/.well-known/oauth-authorization-server';
 
+/** Issuer Assinafy's production callbacks carry in `iss`. */
+const ASSINAFY_ISSUER = 'https://auth.assinafy.com.br';
+
 /** RFC 7636 code-verifier grammar: 43–128 unreserved characters. */
 const CODE_VERIFIER_PATTERN = /^[A-Za-z0-9\-._~]{43,128}$/u;
 
@@ -71,8 +74,9 @@ type TokenEndpointAuthOptions = {
  *    disconnects.
  *
  * Two facts that cause most integration bugs: a token works for exactly one
- * workspace (any other answers `403`), and a connection expires 30 days after
- * approval no matter how often it is refreshed.
+ * workspace (any other answers `403`), and every refresh returns a new refresh
+ * token that retires the old one. Each new refresh token is valid for a fresh
+ * 30 days, so a connection only expires after 30 days without a refresh.
  *
  * @example
  * ```ts
@@ -366,8 +370,7 @@ export class OAuthResource extends BaseResource {
      *
      * The `iss` check is strict because the authorization server advertises
      * RFC 9207 support and always sends the parameter: a missing `iss` is
-     * treated exactly like a wrong one. Omit `expected.issuer` only if
-     * something between the browser and your handler strips query parameters.
+     * treated exactly like a wrong one, on success and error responses alike.
      *
      * This performs no network I/O.
      *
@@ -375,7 +378,9 @@ export class OAuthResource extends BaseResource {
      * `req.query` record, a `URLSearchParams`, a `URL`, a full callback URL
      * string, or a bare `a=b&c=d` query string.
      * @param expected - The stored {@link IOAuthAuthorizationRequest} (or any
-     * object carrying its `state` and `issuer`).
+     * object carrying its `state` and `issuer`). Without `issuer`, `iss` must
+     * equal `https://auth.assinafy.com.br`; pass the stored one for any other
+     * authorization server, such as the sandbox's.
      * @returns The validated response:
      * ```jsonc
      * {
@@ -422,20 +427,17 @@ export class OAuthResource extends BaseResource {
             );
         }
 
-        const issuer = query.get('iss') ?? undefined;
-        if (expected.issuer !== undefined) {
-            // RFC 9207. The authorization server advertises
-            // `authorization_response_iss_parameter_supported: true`, so a
-            // response without `iss` is as suspect as one with the wrong `iss`:
-            // both mean it may have been minted somewhere else. Callers that
-            // must tolerate a proxy stripping the parameter omit
-            // `expected.issuer` instead.
-            if (issuer === undefined || normaliseIssuer(issuer) !== normaliseIssuer(expected.issuer)) {
-                throw new ValidationError(
-                    'OAuth callback issuer is missing or does not match the expected issuer',
-                    { expected: expected.issuer, received: issuer ?? null },
-                );
-            }
+        const issuer = query.get('iss');
+        const expectedIssuer = expected.issuer ?? ASSINAFY_ISSUER;
+        // RFC 9207. The authorization server advertises
+        // `authorization_response_iss_parameter_supported: true`, so a response
+        // without `iss` is as suspect as one with the wrong `iss`: both mean it
+        // may have been minted somewhere else.
+        if (issuer === null || normaliseIssuer(issuer) !== normaliseIssuer(expectedIssuer)) {
+            throw new ValidationError(
+                'OAuth callback issuer is missing or does not match the expected issuer',
+                { expected: expectedIssuer, received: issuer },
+            );
         }
 
         const error = query.get('error');
@@ -451,9 +453,7 @@ export class OAuthResource extends BaseResource {
             throw new ValidationError('OAuth callback carries neither a code nor an error');
         }
 
-        const result: IOAuthAuthorizationCallback = { code, state };
-        if (issuer !== undefined) result.issuer = issuer;
-        return result;
+        return { code, state, issuer };
     }
 
     /**
@@ -541,7 +541,9 @@ export class OAuthResource extends BaseResource {
      * and re-read your stored token instead of retrying blindly, and never run
      * two refreshes concurrently for one connection.
      *
-     * Refreshing does not extend the connection's 30-day life.
+     * Each returned refresh token is valid for a fresh 30 days, so a connection
+     * only expires if it goes 30 days without a refresh; after that the user
+     * has to reconnect.
      *
      * @param options - Refresh options.
      * @param options.refreshToken - The current refresh token.
@@ -549,7 +551,8 @@ export class OAuthResource extends BaseResource {
      * @param options.clientSecret - The `client_secret`, for confidential
      * applications only.
      * @param options.resource - RFC 8707 resource indicator. Defaults to this
-     * API's origin; pass `null` to omit it.
+     * API's origin; pass `null` to omit it. A refresh may repeat the value the
+     * connection was authorized with but never change it (`invalid_target`).
      * @returns A fresh token set, identical in shape to
      * {@link OAuthResource.exchangeCode}:
      * ```jsonc
@@ -584,12 +587,21 @@ export class OAuthResource extends BaseResource {
         assertRecord(options, 'refresh options');
         assertNonEmptyString(options.refreshToken, 'refreshToken');
 
-        return this.requestToken('Failed to refresh the OAuth access token', {
+        const tokens = await this.requestToken('Failed to refresh the OAuth access token', {
             grant_type: 'refresh_token',
             refresh_token: options.refreshToken,
             ...this.clientAuth(options),
             ...this.resourceParam(options.resource),
         });
+        // The server has already retired the token that was sent; without a
+        // replacement the caller would persist nothing and lose the connection.
+        if (typeof tokens.refresh_token !== 'string' || tokens.refresh_token.length === 0) {
+            throw new ValidationError(
+                'Failed to refresh the OAuth access token: the token endpoint returned no replacement refresh_token; the connection must be re-established',
+                { fields: Object.keys(tokens) },
+            );
+        }
+        return tokens;
     }
 
     /**
@@ -610,14 +622,9 @@ export class OAuthResource extends BaseResource {
      * @param options.tokenTypeHint - Optional `access_token` or
      * `refresh_token` hint that lets the server skip a lookup.
      * @returns Nothing; resolves once the API acknowledges the request.
-     * Request body:
-     * ```jsonc
-     * {
-     *   "token": "def50200f1e2…",
-     *   "token_type_hint": "refresh_token",
-     *   "client_id": "cli_1a2b3c",
-     *   "client_secret": "…"
-     * }
+     * Request body (`application/x-www-form-urlencoded`):
+     * ```text
+     * token=def50200f1e2…&token_type_hint=refresh_token&client_id=cli_1a2b3c&client_secret=…
      * ```
      * @throws {ValidationError} If `token` or `clientId` is missing, or
      * `tokenTypeHint` is not one of the two documented values.
@@ -647,7 +654,7 @@ export class OAuthResource extends BaseResource {
             throw new ValidationError('tokenTypeHint must be access_token or refresh_token');
         }
 
-        const body = cleanParams({
+        const body = formBody({
             token: options.token,
             token_type_hint: options.tokenTypeHint,
             ...this.clientAuth(options),
@@ -707,15 +714,20 @@ export class OAuthResource extends BaseResource {
         );
     }
 
-    /** POST the token endpoint and assert the response actually carries a token. */
+    /**
+     * POST the token endpoint once and assert the response carries a token.
+     *
+     * Never retried: the code is single-use, and replaying a refresh token the
+     * server may already have rotated ends the whole connection.
+     */
     private async requestToken(
         label: string,
-        body: Record<string, unknown>,
+        body: Record<string, string | undefined>,
     ): Promise<IOAuthTokenResponse> {
         let tokens: IOAuthTokenResponse;
         try {
             tokens = await this.call<IOAuthTokenResponse>(label, () =>
-                this.publicHttp.post('/oauth/token', cleanParams(body)),
+                this.publicHttp.post('/oauth/token', formBody(body)),
             );
         } catch (error) {
             throw OAuthError.upgrade(error);
@@ -782,6 +794,15 @@ export class OAuthResource extends BaseResource {
         }
         return new URL(baseUrl).origin;
     }
+}
+
+/**
+ * RFC 6749 §4.1.3 / RFC 7009 §2.1 request body, without absent optional
+ * fields. Axios sends a `URLSearchParams` as
+ * `application/x-www-form-urlencoded`, the encoding the OAuth guide uses.
+ */
+function formBody(fields: Record<string, string | undefined>): URLSearchParams {
+    return new URLSearchParams(cleanParams(fields) as Record<string, string>);
 }
 
 /** RFC 7636 verifier: 32 random bytes rendered as 43 base64url characters. */

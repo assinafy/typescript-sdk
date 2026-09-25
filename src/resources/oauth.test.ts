@@ -52,7 +52,10 @@ function mockTransport(
             calls.push({
                 method: (config.method ?? 'get').toUpperCase(),
                 url,
-                body: config.data === undefined ? undefined : JSON.parse(String(config.data)),
+                // The token and revocation endpoints take a form-encoded body.
+                body: config.data === undefined
+                    ? undefined
+                    : Object.fromEntries(new URLSearchParams(String(config.data))),
                 headers: { ...config.headers } as Record<string, unknown>,
             });
             const reply = route(url, config);
@@ -331,10 +334,20 @@ describe('OAuthResource.readAuthorizationCallback', () => {
         }
     });
 
-    test('accepts a callback without iss when none is expected', () => {
+    test('checks iss against the Assinafy issuer when none is stored', () => {
+        const stored = { state: 'stored-state' };
         expect(
-            oauth.readAuthorizationCallback({ code: 'c', state: 'stored-state' }, { state: 'stored-state' }),
-        ).toEqual({ code: 'c', state: 'stored-state' });
+            oauth.readAuthorizationCallback({ code: 'c', state: 'stored-state', iss: ISSUER }, stored),
+        ).toEqual({ code: 'c', state: 'stored-state', issuer: ISSUER });
+
+        for (const params of [
+            { code: 'c', state: 'stored-state' },
+            { code: 'c', state: 'stored-state', iss: 'https://auth-sandbox.assinafy.com.br' },
+            // An error return is refused the same way before its error is surfaced.
+            { error: 'access_denied', state: 'stored-state' },
+        ]) {
+            expect(() => oauth.readAuthorizationCallback(params, stored)).toThrow(ValidationError);
+        }
     });
 
     test('refuses a response whose state is missing or does not match', () => {
@@ -422,6 +435,9 @@ describe('OAuthResource token endpoints', () => {
         const tokens = await resourceFor(transport).exchangeCode(exchange);
 
         expect(tokens).toEqual(TOKENS);
+        expect(String(transport.calls[0]?.headers['Content-Type'])).toStartWith(
+            'application/x-www-form-urlencoded',
+        );
         expect(transport.calls[0]).toMatchObject({
             method: 'POST',
             url: '/oauth/token',
@@ -471,6 +487,18 @@ describe('OAuthResource token endpoints', () => {
             client_secret: 'shhh',
             resource: 'https://api.assinafy.com.br',
         });
+    });
+
+    test.each([
+        ['missing', { access_token: 'new-access', token_type: 'Bearer', expires_in: 3600 }],
+        ['null', { access_token: 'new-access', token_type: 'Bearer', expires_in: 3600, refresh_token: null }],
+        ['empty', { access_token: 'new-access', token_type: 'Bearer', expires_in: 3600, refresh_token: '' }],
+    ])('refreshToken rejects a success without a replacement refresh_token (%s)', async (_label, body) => {
+        const transport = discoveryTransport({ '/oauth/token': { status: 200, data: body } });
+        await expect(
+            resourceFor(transport).refreshToken({ refreshToken: 'current-refresh-token', clientId: 'cli_1a2b3c' }),
+        ).rejects.toThrow(/no replacement refresh_token/);
+        expect(transport.calls).toHaveLength(1);
     });
 
     test('maps an RFC 6749 error body to a typed OAuthError', async () => {
@@ -548,6 +576,9 @@ describe('OAuthResource.revokeToken', () => {
             clientSecret: 'shhh',
         });
 
+        expect(String(transport.calls[0]?.headers['Content-Type'])).toStartWith(
+            'application/x-www-form-urlencoded',
+        );
         expect(transport.calls[0]).toMatchObject({
             method: 'POST',
             url: '/oauth/revoke',

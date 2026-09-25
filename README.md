@@ -49,6 +49,7 @@ recurso. Leia na ordem na primeira vez; use como referência depois.
   empacotados são testados no 22 (LTS de manutenção), 24 (LTS ativo) e 26 (Current). O Node 20
   chegou ao fim da vida em abril de 2026 e não é suportado.
 - ou Bun 1.4.0 (versão fixada no desenvolvimento e na CI)
+- HTTPS com TLS 1.2 ou superior, exigido pela API; o Node.js 22+ e o Bun já negociam isso por padrão
 
 ## Instalação
 
@@ -196,9 +197,10 @@ const renovado = await client.oauth.refreshToken({
 });
 await conexao.save({ refreshToken: renovado.refresh_token });  // ANTES de usar
 
-// 5 — quando o usuário desconectar
+// 5 — quando o usuário desconectar: revogue o token salvo mais recentemente
+const atual = await conexao.load();                   // nunca uma cópia aposentada
 await client.oauth.revokeToken({
-  token: conexao.refreshToken,
+  token: atual.refreshToken,
   tokenTypeHint: 'refresh_token',
   clientId: process.env.ASSINAFY_CLIENT_ID!,
   clientSecret: process.env.ASSINAFY_CLIENT_SECRET,
@@ -267,10 +269,13 @@ try {
 
 Refresh tokens **rotacionam**: cada renovação devolve um novo e aposenta o anterior, e reutilizar um
 token aposentado encerra a conexão inteira. Persista o novo valor antes de usar a resposta, trate um
-timeout como "talvez tenha funcionado" — releia o token guardado em vez de repetir às cegas — e
-nunca renove a mesma conexão duas vezes em paralelo. Uma conexão dura 30 dias a partir da aprovação,
-por mais que seja renovada, e os endpoints de autorização e token aceitam 50 requisições por minuto
-por IP.
+timeout como "talvez tenha funcionado" e nunca renove a mesma conexão duas vezes em paralelo. Após
+um timeout, releia o token guardado; se ainda for o enviado, nunca o envie de novo — peça ao
+usuário para reconectar. Só uma falha que comprovadamente ocorreu antes do envio (DNS, conexão
+recusada, handshake TLS) pode ser repetida. Um refresh token vale 30 dias, e cada renovação
+devolve um novo com mais 30 dias: a conexão só expira se o seu app passar 30 dias sem renová-la, e
+aí o usuário precisa conectar de novo. Os endpoints de autorização e token aceitam 50 requisições
+por minuto por IP.
 
 Assistentes de IA como Claude, Claude Code e ChatGPT se conectam à Assinafy pelas próprias
 configurações de conector; seus usuários não precisam que você registre nada para eles.

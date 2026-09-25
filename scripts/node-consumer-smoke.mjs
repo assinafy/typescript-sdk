@@ -3,6 +3,7 @@ import { Buffer } from 'node:buffer';
 import { once } from 'node:events';
 import { createServer } from 'node:http';
 import { createRequire } from 'node:module';
+import { URLSearchParams } from 'node:url';
 
 import {
     ApiError,
@@ -130,7 +131,8 @@ assert.equal(tokenRequest.path, '/v1/oauth/token');
 // The token endpoint authenticates the OAuth application, never the workspace.
 assert.equal(tokenRequest.headers['x-api-key'], undefined);
 assert.equal(tokenRequest.headers['authorization'], undefined);
-assert.deepEqual(JSON.parse(tokenRequest.body.toString('utf8')), {
+assert.match(tokenRequest.headers['content-type'] ?? '', /^application\/x-www-form-urlencoded/u);
+assert.deepEqual(Object.fromEntries(new URLSearchParams(tokenRequest.body.toString('utf8'))), {
     grant_type: 'authorization_code',
     code: 'consumer-code',
     redirect_uri: 'https://consumer.example.com/oauth/callback',

@@ -113,8 +113,9 @@ Response shapes diverge from the rest of the API on purpose:
 | `GET /oauth/userinfo` | flat claims object (OIDC Core §5.3.2) | the usual `{ status, message, data }` envelope |
 
 Both JSON and `application/x-www-form-urlencoded` bodies are accepted by the
-token and revocation endpoints; the SDK sends JSON because that is what the
-published `requestBody` documents.
+token and revocation endpoints. The published `requestBody` lists only JSON,
+but the SDK sends `application/x-www-form-urlencoded`: the encoding RFC 6749
+and RFC 7009 define and the OAuth Integration Guide uses.
 
 The RFC 8707 `resource` indicator defaults to the configured API origin, and is
 omitted when that origin is a loopback `http://` host — the shape used by mock

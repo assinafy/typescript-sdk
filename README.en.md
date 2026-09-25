@@ -53,6 +53,8 @@ afterwards.
   CJS and ESM imports are tested on 22 (maintenance LTS), 24 (active LTS), and
   26 (Current); Node 20 reached end-of-life in April 2026 and is unsupported.
 - or Bun 1.4.0 (the version pinned for development and CI)
+- HTTPS with TLS 1.2 or higher, which the API requires; Node.js 22+ and Bun
+  negotiate it by default
 
 ## Installation
 
@@ -202,9 +204,10 @@ const renewed = await client.oauth.refreshToken({
 });
 await connection.save({ refreshToken: renewed.refresh_token });  // BEFORE using it
 
-// 5 — when the user disconnects
+// 5 — when the user disconnects: revoke the token you saved most recently
+const current = await connection.load();             // never a retired copy
 await client.oauth.revokeToken({
-  token: connection.refreshToken,
+  token: current.refreshToken,
   tokenTypeHint: 'refresh_token',
   clientId: process.env.ASSINAFY_CLIENT_ID!,
   clientSecret: process.env.ASSINAFY_CLIENT_SECRET,
@@ -274,11 +277,15 @@ try {
 
 Refresh tokens **rotate**: every refresh returns a new one and retires the old
 one, and replaying a retired token ends the entire connection. Persist the new
-value before using the response, treat a timeout as "it may have worked" and
-re-read your stored token instead of retrying blindly, and never refresh one
-connection twice concurrently. A connection lasts 30 days from approval however
-often it is refreshed, and the authorize/token endpoints accept 50 requests per
-minute per IP.
+value before using the response, and never refresh one connection twice
+concurrently. Treat a timeout as "it may have worked": re-read your stored
+token, and if it is still the one you sent, never send it again — ask the user
+to reconnect. Only a failure that provably happened before sending (DNS,
+refused connection, TLS handshake) is safe to retry. A refresh token is valid for 30 days, and every
+refresh returns a new one with a fresh 30 days: a connection only expires if
+your app goes 30 days without refreshing it, after which the user has to
+connect again. The authorize/token endpoints accept 50 requests per minute per
+IP.
 
 AI assistants such as Claude, Claude Code and ChatGPT connect to Assinafy
 through their own connector settings; your users do not need you to register

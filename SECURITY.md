@@ -43,11 +43,12 @@ opportunity to upgrade.
 - Protected resources require explicit account credentials. Public,
   authentication, and signer-access-code flows use an auth-free transport so
   configured account credentials are not sent to public endpoints.
-- Consumers must use HTTPS endpoints and protect all SDK configuration as
-  secrets. The client enforces this: a `baseUrl` using plaintext `http` is
-  rejected unless its host is loopback, so a credential cannot be sent in the
-  clear to a remote host. Debug logging and error telemetry must be reviewed
-  for response data before being enabled in production.
+- Consumers must use HTTPS endpoints (TLS 1.2 or higher) and protect all SDK
+  configuration as secrets. The client enforces this: a `baseUrl` using
+  plaintext `http` is rejected unless its host is loopback, so a credential
+  cannot be sent in the clear to a remote host. Debug logging and error
+  telemetry must be reviewed for response data before being enabled in
+  production.
 - An OAuth `client_secret` belongs only on a server you control: never in
   browser code, a mobile application, or a repository. A public application has
   no secret and authenticates with PKCE alone. The SDK sends the token and

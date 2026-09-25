@@ -1075,6 +1075,11 @@ export interface IPublicDocumentInfo
 export interface IDocumentVerification {
     hash: string;
     id: string | null;
+    /**
+     * Agreement code printed on the document certificate; `null` when the hash
+     * does not verify. Absent from deployments that predate the field.
+     */
+    agreement_code?: string | null;
     status: DocumentStatus | AnyString | null;
     page_count: string | null;
     signer_count: string | null;

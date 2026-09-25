@@ -726,7 +726,13 @@ describe('DocumentResource public request contracts', () => {
             get: async (url: string) => {
                 urls.push(url);
                 if (url.endsWith('/verify')) {
-                    return envelope({ hash: 'hash-1', is_valid: true, verified_at: 'now', message: '' });
+                    return envelope({
+                        hash: 'hash-1',
+                        agreement_code: 'AGREEMENT-1',
+                        is_valid: true,
+                        verified_at: 'now',
+                        message: '',
+                    });
                 }
                 if (url === '/documents/statuses') {
                     return envelope([{ code: 'metadata_ready', deletable: true }]);
@@ -742,7 +748,9 @@ describe('DocumentResource public request contracts', () => {
         } as unknown as AxiosInstance;
         const resource = new DocumentResource(http, 'acc');
 
-        expect((await resource.verify('hash-1')).is_valid).toBe(true);
+        const verification = await resource.verify('hash-1');
+        expect(verification.is_valid).toBe(true);
+        expect(verification.agreement_code).toBe('AGREEMENT-1');
         expect(await resource.statuses()).toEqual([{ code: 'metadata_ready', deletable: true }]);
         expect((await resource.getPublic('doc-1')).page_count).toBe(1);
         expect(urls).toEqual([

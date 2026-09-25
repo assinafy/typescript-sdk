@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.5.0] - 2026-09-25
+
+### Added
+
+- `IDocumentVerification.agreement_code`: the agreement code printed on the
+  document certificate, returned by `documents.verify()` (`null` when the hash
+  does not verify).
+
+### Changed
+
+- `oauth.exchangeCode()`, `oauth.refreshToken()` and `oauth.revokeToken()` send
+  `application/x-www-form-urlencoded` bodies, the encoding RFC 6749 and RFC 7009
+  define. The fields are unchanged.
+- `oauth.readAuthorizationCallback()` always checks `iss`. When the stored
+  request carries no `issuer`, the callback must come from
+  `https://auth.assinafy.com.br`; pass the stored request for any other
+  authorization server, such as the sandbox's.
+
+### Security
+
+- `oauth.refreshToken()` rejects a successful response that carries no
+  replacement `refresh_token` instead of returning it: the token that was sent
+  has already been retired, so the connection must be re-established.
+- Migration: callers of `oauth.readAuthorizationCallback()` that stored only
+  `state` now get the production issuer check; callbacks without `iss` are
+  refused. Store and pass the whole authorization request.
+
+### Fixed
+
+- The OAuth documentation describes the refresh-token lifetime correctly: a
+  refresh token is valid for 30 days and every refresh returns a new one with a
+  fresh 30 days, so a connection only expires after 30 days without a refresh.
+- The README OAuth example revokes the most recently saved refresh token, and
+  the docs say never to resend a refresh token after an ambiguous timeout.
+
 ## [2.4.2] - 2026-09-23
 
 ### Changed
