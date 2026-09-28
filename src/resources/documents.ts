@@ -386,8 +386,7 @@ export class DocumentResource extends BaseResource {
      *   "updated_at": "2026-07-19T17:24:46Z"
      * }
      * ```
-     * @throws {ValidationError} If `documentId` is missing or `artifactName` is
-     * not one of the five documented artifact names.
+     * @throws {ValidationError} If `documentId` is missing.
      * @throws {ApiError} `404` if the document does not exist.
      *
      * @example
@@ -1189,7 +1188,8 @@ export class DocumentResource extends BaseResource {
     }
 
     /**
-     * Quick boolean check: has every signer completed their assignment?
+     * Quick boolean check (`GET /documents/{documentId}`): has every signer
+     * completed their assignment?
      *
      * A computed convenience over {@link DocumentResource.details} (one `GET
      * /documents/{documentId}`). Returns `true` when the document status is
@@ -1220,7 +1220,8 @@ export class DocumentResource extends BaseResource {
     }
 
     /**
-     * Summarise signing progress for UI display.
+     * Summarise signing progress for UI display
+     * (`GET /documents/{documentId}`).
      *
      * A computed convenience over {@link DocumentResource.details} (one `GET
      * /documents/{documentId}`). `total` and `signed` come from the assignment

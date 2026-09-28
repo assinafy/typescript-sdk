@@ -9,7 +9,7 @@ describe('UserResource', () => {
         const user = {
             id: 'u1',
             name: 'Test User',
-            email: 'bill@example.com',
+            email: 'ana@example.com',
             telephone: null,
             government_id: null,
             is_email_verified: true,

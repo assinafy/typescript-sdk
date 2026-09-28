@@ -538,7 +538,7 @@ describe('SignerDocumentsResource — signer-access-code query auth', () => {
             itemId: 'i1',
             fieldId: 'f1',
             pageId: 'p1',
-            value: 'Bill',
+            value: 'Ana Souza',
             internal_secret: 'do-not-send',
         }];
         const result: Record<string, unknown> = await new SignerDocumentsResource(http).sign(
@@ -550,7 +550,7 @@ describe('SignerDocumentsResource — signer-access-code query auth', () => {
         expect(calls[0]?.method).toBe('POST');
         expect(calls[0]?.url).toBe('/documents/doc-1/assignments/asg-1');
         expect(calls[0]?.body).toEqual([
-            { itemId: 'i1', fieldId: 'f1', pageId: 'p1', value: 'Bill' },
+            { itemId: 'i1', fieldId: 'f1', pageId: 'p1', value: 'Ana Souza' },
         ]);
         expect(paramsOf(calls[0])).toEqual({ 'signer-access-code': 'code-xyz' });
         expect(result).toEqual({ signed: true });

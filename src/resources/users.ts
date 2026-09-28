@@ -148,8 +148,20 @@ export class UserResource extends BaseResource {
      * ```json
      * { "DocumentCompleted": true, "SignerDeclined": false }
      * ```
-     * @returns The complete updated map; its shape is identical to
-     * {@link UserResource.getNotificationPreferences}.
+     * @returns The complete updated nine-key preference map:
+     * ```json
+     * {
+     *   "DocumentCompleted": true,
+     *   "SignerDeclined": false,
+     *   "DocumentCancelled": true,
+     *   "DocumentAboutToExpire": true,
+     *   "DocumentExpired": false,
+     *   "DocumentExpirationReset": true,
+     *   "DocumentProcessingFailed": true,
+     *   "TemplateProcessingFailed": true,
+     *   "SignerWhatsappFailed": true
+     * }
+     * ```
      * @throws {ValidationError} Before requesting when the map is empty, has an
      * unknown key, or contains a non-boolean value.
      * @throws {ApiError} `400` if the API rejects the map, `401` for invalid

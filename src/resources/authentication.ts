@@ -98,7 +98,7 @@ export class AuthenticationResource extends BaseResource {
      *   "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9…",
      *   "user": {
      *     "id": "md3j6p9w8b7y6qvqaoy5er42",
-     *     "name": "Multica Test",
+     *     "name": "Empresa Exemplo",
      *     "email": "user@example.com",
      *     "telephone": null,
      *     "government_id": "",
@@ -110,7 +110,7 @@ export class AuthenticationResource extends BaseResource {
      *   "accounts": [
      *     {
      *       "id": "acc_example",
-     *       "name": "Multica Test",
+     *       "name": "Empresa Exemplo",
      *       "roles": ["Owner"],
      *       "is_delete_allowed": true,
      *       "created_at": "2026-05-12T13:45:11Z"
@@ -156,7 +156,7 @@ export class AuthenticationResource extends BaseResource {
      *   "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9…",
      *   "user": {
      *     "id": "md3j6p9w8b7y6qvqaoy5er42",
-     *     "name": "Multica Test",
+     *     "name": "Empresa Exemplo",
      *     "email": "user@example.com",
      *     "telephone": null,
      *     "government_id": "",
@@ -168,7 +168,7 @@ export class AuthenticationResource extends BaseResource {
      *   "accounts": [
      *     {
      *       "id": "acc_example",
-     *       "name": "Multica Test",
+     *       "name": "Empresa Exemplo",
      *       "roles": ["Owner"],
      *       "is_delete_allowed": true,
      *       "created_at": "2026-05-12T13:45:11Z"

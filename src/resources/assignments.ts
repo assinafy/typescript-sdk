@@ -628,11 +628,11 @@ export class AssignmentResource extends BaseResource {
      * @param documentId - The document the assignment would be created on.
      * @param payload - `method` plus channel-only signer descriptors and/or
      * `collect`-mode `entries`. Create-only fields and signer IDs are not part
-     * of this request schema. `blocking_reason` may be `PendingPayment`,
-     * `InsufficientDocuments`, or `InsufficientCredits`.
+     * of this request schema.
      * @returns an {@link ICostEstimate} with `total_credits`, balances, a
-     * line-item `breakdown`, and a `has_sufficient_resources` gate. Response
-     * shape:
+     * line-item `breakdown`, and a `has_sufficient_resources` gate.
+     * `blocking_reason` may be `PendingPayment`, `InsufficientDocuments`, or
+     * `InsufficientCredits`. Response shape:
      * ```jsonc
      * {
      *   "documents": 1,

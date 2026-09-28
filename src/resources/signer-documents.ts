@@ -79,8 +79,7 @@ export class SignerDocumentsResource extends BaseResource {
      *   "updated_at": "2026-07-19T14:56:56Z"
      * }
      * ```
-     * @throws {ValidationError} If `signerId` or `signerAccessCode` is missing,
-     * or a supplied `search` value is not a string.
+     * @throws {ValidationError} If `signerId` or `signerAccessCode` is missing.
      * @throws {ApiError} If the access code is invalid or expired.
      *
      * @example
@@ -172,7 +171,29 @@ export class SignerDocumentsResource extends BaseResource {
      * @param signerAccessCode - The signer's access code, from their signing link.
      * @param search - Free-text term matched against the document name.
      * @returns Matching documents for that signer, in the compact
-     * {@link IDocumentListItem} shape, with pagination in `meta`.
+     * {@link IDocumentListItem} shape, with pagination in `meta`:
+     * ```jsonc
+     * {
+     *   "data": [
+     *     {
+     *       "id": "103acccd24234c07858ffddf6d84",
+     *       "account_id": "acc_example",
+     *       "template_id": null,
+     *       "name": "Service agreement.pdf",
+     *       "status": "pending_signature",
+     *       "artifacts": { "original": "https://...", "thumbnail": "https://..." },
+     *       "is_closed": false,
+     *       "signing_url": "https://app.assinafy.com.br/sign/103acccd...",
+     *       "decline_reason": null,
+     *       "declined_by": null,
+     *       "tags": [],
+     *       "created_at": "2026-07-19T14:56:54Z",
+     *       "updated_at": "2026-07-19T14:56:56Z"
+     *     }
+     *   ],
+     *   "meta": { "current_page": 1, "per_page": 20, "total": 1, "last_page": 1 }
+     * }
+     * ```
      * @throws {ValidationError} If `signerId` or `signerAccessCode` is missing.
      * @throws {ApiError} If the access code is invalid or expired.
      *
@@ -294,13 +315,7 @@ export class SignerDocumentsResource extends BaseResource {
      * ```
      */
     async signMultiple(documentIds: string[], signerAccessCode: string): Promise<void> {
-        if (
-            !Array.isArray(documentIds)
-            || documentIds.length === 0
-            || documentIds.some((id) => typeof id !== 'string' || !id.trim())
-        ) {
-            throw new ValidationError('documentIds must be a non-empty array of non-empty IDs');
-        }
+        assertDocumentIds(documentIds);
         const code = this.requireId(signerAccessCode, 'signer-access-code');
         return this.callVoid('Failed to sign multiple documents', () =>
             this.http.put(
@@ -344,16 +359,8 @@ export class SignerDocumentsResource extends BaseResource {
         declineReason: string,
         signerAccessCode: string,
     ): Promise<void> {
-        if (
-            !Array.isArray(documentIds)
-            || documentIds.length === 0
-            || documentIds.some((id) => typeof id !== 'string' || !id.trim())
-        ) {
-            throw new ValidationError('documentIds must be a non-empty array of non-empty IDs');
-        }
-        if (typeof declineReason !== 'string' || !declineReason.trim()) {
-            throw new ValidationError('declineReason is required');
-        }
+        assertDocumentIds(documentIds);
+        assertDeclineReason(declineReason);
         const code = this.requireId(signerAccessCode, 'signer-access-code');
         return this.callVoid('Failed to decline multiple documents', () =>
             this.http.put(
@@ -504,7 +511,17 @@ export class SignerDocumentsResource extends BaseResource {
      * @param payload - Any of the official `full_name`, `email`, or
      *   `government_id`, or `has_accepted_terms` fields. Fields left out are not
      *   sent.
-     * @returns The confirmed signer in the full {@link ISigner} response shape.
+     * @returns The confirmed signer in the full {@link ISigner} response shape:
+     * ```jsonc
+     * {
+     *   "resource": "signer",
+     *   "id": "19e6b92e7895332ed9708535d8c",
+     *   "full_name": "Example Signer",
+     *   "email": "signer@example.com",
+     *   "whatsapp_phone_number": null,
+     *   "has_accepted_terms": true
+     * }
+     * ```
      * @throws {ValidationError} If `documentId` or `signerAccessCode` is missing,
      * or a supplied identity value is malformed.
      * @throws {ApiError} If the access code is invalid/expired or a value fails
@@ -701,7 +718,48 @@ export class SignerDocumentsResource extends BaseResource {
      * @returns The document to sign, including its `assignment` (the
      *   {@link IAssignment} shape: `signers`, `items`, `summary`, `signing_urls`)
      *   from which the `itemId` / `fieldId` / `pageId` values for
-     *   {@link SignerDocumentsResource.sign} are read.
+     *   {@link SignerDocumentsResource.sign} are read:
+     * ```jsonc
+     * {
+     *   "resource": "document",
+     *   "id": "103acccd24234c07858ffddf6d84",
+     *   "account_id": "acc_example",
+     *   "template_id": null,
+     *   "name": "Service agreement.pdf",
+     *   "status": "pending_signature",
+     *   "artifacts": {
+     *     "original": "https://api.assinafy.com.br/v1/documents/103acccd.../download/original",
+     *     "thumbnail": "https://api.assinafy.com.br/v1/documents/103acccd.../thumbnail"
+     *   },
+     *   "is_closed": false,
+     *   "signing_url": "https://app.assinafy.com.br/sign/103acccd...",
+     *   "decline_reason": null,
+     *   "declined_by": null,
+     *   "tags": [],
+     *   "assignment": {
+     *     "id": "1032c55c58bb00a8dc35db916751",
+     *     "method": "virtual",
+     *     "sender_email": "sender@example.com",
+     *     "expires_at": null,
+     *     "signers": [
+     *       { "id": "19e6b92e7895332ed9708535d8c", "step": 1, "email": "signer@example.com",
+     *         "full_name": "Example Signer", "notified": true, "completed": false }
+     *     ],
+     *     "items": [
+     *       { "id": "item-1", "page": { "id": "page-1", "number": 1, "height": 1651, "width": 1275,
+     *         "download_url": "https://..." }, "signer": { "id": "19e6b92e..." },
+     *         "field": { "id": "field-1", "type": "signature" }, "value": null, "completed": false }
+     *     ],
+     *     "summary": { "signer_count": 1, "completed_count": 0, "signers": [] }
+     *   },
+     *   "pages": [
+     *     { "id": "103acccd5c73...", "number": 1, "height": 1651, "width": 1275,
+     *       "download_url": "https://api.assinafy.com.br/v1/documents/103acccd.../pages/103acccd5c73.../download" }
+     *   ],
+     *   "created_at": "2026-07-19T14:56:54Z",
+     *   "updated_at": "2026-07-19T14:56:56Z"
+     * }
+     * ```
      * @throws {ValidationError} If `signerAccessCode` is missing.
      * @throws {ApiError} `400` when DigitalCertificate identity/terms are not
      *   confirmed; `401`/`403` if the access code is invalid or expired; `409`
@@ -850,9 +908,7 @@ export class SignerDocumentsResource extends BaseResource {
         const did = this.requireId(documentId, 'Document ID');
         const aid = this.requireId(assignmentId, 'Assignment ID');
         const code = this.requireId(signerAccessCode, 'signer-access-code');
-        if (typeof declineReason !== 'string' || !declineReason.trim()) {
-            throw new ValidationError('declineReason is required');
-        }
+        assertDeclineReason(declineReason);
         return this.callVoid('Failed to decline assignment', () =>
             this.http.put(
                 `/documents/${this.pathSegment(did, 'Document ID')}/assignments/${this.pathSegment(aid, 'Assignment ID')}/reject`,
@@ -860,6 +916,22 @@ export class SignerDocumentsResource extends BaseResource {
                 { params: { 'signer-access-code': code } },
             ),
         );
+    }
+}
+
+function assertDocumentIds(documentIds: string[]): void {
+    if (
+        !Array.isArray(documentIds)
+        || documentIds.length === 0
+        || documentIds.some((id) => typeof id !== 'string' || !id.trim())
+    ) {
+        throw new ValidationError('documentIds must be a non-empty array of non-empty IDs');
+    }
+}
+
+function assertDeclineReason(declineReason: string): void {
+    if (typeof declineReason !== 'string' || !declineReason.trim()) {
+        throw new ValidationError('declineReason is required');
     }
 }
 

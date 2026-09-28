@@ -45,7 +45,8 @@ afterwards.
 [signer-side endpoints](#signer-side-endpoints)
 
 **Everything else** — [High-level helper](#high-level-helper) ·
-[Errors](#errors) · [Development](#development) · [License](#license)
+[Errors](#errors) · [Environments](#environments) ·
+[Development](#development) · [License](#license)
 
 ## Requirements
 
@@ -172,18 +173,18 @@ const client = new AssinafyClient();                 // no credentials needed
 //     completes PKCE, `nonce` validates the id_token.
 const request = await client.oauth.createAuthorizationUrl({
   clientId: process.env.ASSINAFY_CLIENT_ID!,
-  redirectUri: 'https://myapp.com/oauth/callback',
+  redirectUri: 'https://myapp.example.com/oauth/callback',
   scopes: ['documents:read', 'documents:write', 'offline_access'],
 });
 session.oauth = request;
 response.redirect(request.url);                      // full page navigation
 
-// 2 — on https://myapp.com/oauth/callback
+// 2 — on https://myapp.example.com/oauth/callback
 const { code } = client.oauth.readAuthorizationCallback(query, session.oauth);
 const tokens = await client.oauth.exchangeCode({
   code,
   codeVerifier: session.oauth.codeVerifier,
-  redirectUri: 'https://myapp.com/oauth/callback',
+  redirectUri: 'https://myapp.example.com/oauth/callback',
   clientId: process.env.ASSINAFY_CLIENT_ID!,
   clientSecret: process.env.ASSINAFY_CLIENT_SECRET, // confidential apps only
 });
@@ -575,8 +576,8 @@ can sign in parallel.
 accessCode, entries)` with a non-empty array of
 `{ itemId, fieldId, pageId, value }`. A virtual signer must confirm their data
 before signing. A `DigitalCertificate` signer cannot call `sign`; that branch
-uses Assinafy's certificate-start and certificate-complete flow, which is not
-part of this SDK's current 89-operation surface.
+uses Assinafy's certificate flow, described in
+[ICP-Brasil digital certificate](#icp-brasil-digital-certificate).
 
 ### 5. Observe completion and download artifacts
 
@@ -826,6 +827,19 @@ Keep the email flow as the default. Enable either branch below only after the
 workspace has the required plan or feature and the returned cost estimate is
 acceptable.
 
+The verification method and the notification method are **coupled**: send one,
+both, or neither — the missing side is inferred. With neither, both default
+to `Email`.
+
+| Verification | How the signer proves who they are | Allowed notification | Cost per signer |
+| --- | --- | --- | --- |
+| `Email` *(default)* | One-time code (OTP) by email | `Email` | Free |
+| `Whatsapp` | One-time code (OTP) by WhatsApp | `Whatsapp` | 0.45 credit (the notification), paid plans only |
+| `DigitalCertificate` | The signer signs with their **own ICP-Brasil certificate — A1 or A3 —** through the Web PKI extension, producing a **qualified PAdES signature** | `Email` **or** `Whatsapp` | 2 credits + the notification |
+
+Exactly one notification method per signer. The SDK rejects an invalid
+combination before the request; the API would answer `400`.
+
 #### WhatsApp verification and notification
 
 WhatsApp is available only on paid subscriptions and costs 0.45 credit per
@@ -870,6 +884,14 @@ forward them outside the signing flow.
 signer's `government_id`, and exactly one certificate signer in that signing
 step. It costs two credits per certificate signer in addition to the selected
 notification cost.
+
+**A1 and A3 are certificate media**, chosen by the signer in their browser at
+signing time: A1 lives in software (a file on the machine) and A3 in hardware
+(a token or smartcard). The API models both with the single
+`DigitalCertificate` value — there is no `A1`/`A3` field to send, and the
+resulting PAdES signature is qualified in either case. Certificate signers
+complete a Web PKI handshake on two production-only routes that are not part
+of this SDK.
 
 ```ts
 const certificateSigner = await client.signers.update(signerId, {
@@ -1340,7 +1362,8 @@ whether to retry the workflow.
 ## Errors
 
 HTTP methods reject with an `AssinafyError` subclass. Synchronous helpers such
-as `getSocialLoginUrl()` can throw `ValidationError` before any request.
+as `getSocialLoginUrl()` and `readAuthorizationCallback()` can throw
+`ValidationError` before any request.
 
 ```ts
 import { ApiError, OAuthError, ValidationError, NetworkError, AssinafyError } from '@assinafy/sdk';
@@ -1364,6 +1387,34 @@ try {
   }
 }
 ```
+
+## Environments
+
+| | |
+| --- | --- |
+| Production | `https://api.assinafy.com.br/v1` |
+| Sandbox | `https://sandbox.assinafy.com.br/v1` |
+
+The sandbox runs its own authorization server at
+`https://auth-sandbox.assinafy.com.br`, with the consent screen at
+`/oauth/authorize`. Its discovery documents are unreachable: nginx refuses
+paths that start with a dot, so pass the endpoints explicitly:
+
+```ts
+const client = new AssinafyClient({ baseUrl: 'https://sandbox.assinafy.com.br/v1' });
+
+const request = await client.oauth.createAuthorizationUrl({
+  clientId: process.env.ASSINAFY_CLIENT_ID!,
+  redirectUri: 'https://myapp.example.com/oauth/callback',
+  scopes: ['documents:read'],
+  issuer: 'https://auth-sandbox.assinafy.com.br',
+  authorizationEndpoint: 'https://auth-sandbox.assinafy.com.br/oauth/authorize',
+});
+```
+
+The token, revocation and userinfo endpoints follow the configured `baseUrl`.
+Confirm that the sandbox exposes them before running the exchange step
+there — see [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md).
 
 ## Development
 

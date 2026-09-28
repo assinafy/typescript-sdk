@@ -54,6 +54,8 @@ export function applySdkTransportDefaults(http: AxiosInstance): AxiosInstance {
                 && new URL(request.url).origin === new URL(options['href']).origin
             ) {
                 current(options, response, request);
+                // The re-check is deliberate: the caller hook just ran and may
+                // have rewritten options.href to a cross-origin destination.
                 guardRedirect(options, response, request);
             }
         };

@@ -97,7 +97,9 @@ export class ApiError extends AssinafyError {
      * ones with no structured body to explain them. Anything else falls back to
      * the stable message.
      * @returns An `ApiError` retaining the original response body in
-     * {@link ApiError.responseData}; `message` is truncated for legibility.
+     * {@link ApiError.responseData}. A JSON `message` is used verbatim; only an
+     * unstructured text body is whitespace-collapsed and truncated for
+     * legibility.
      *
      * @example
      * ```ts
@@ -185,6 +187,16 @@ export class OAuthError extends ApiError {
      * @param error - Any thrown value.
      * @returns An `OAuthError` when the body carries a non-empty string
      * `error`, else the original value.
+     *
+     * @example
+     * ```ts
+     * const apiError = ApiError.fromResponse(400, {
+     *   error: 'invalid_grant',
+     *   error_description: 'The provided authorization grant is invalid.',
+     * });
+     * const upgraded = OAuthError.upgrade(apiError);
+     * // upgraded instanceof OAuthError → true, .error → 'invalid_grant'
+     * ```
      */
     static upgrade(error: unknown): unknown {
         if (!(error instanceof ApiError) || error instanceof OAuthError) return error;

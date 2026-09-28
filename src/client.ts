@@ -374,7 +374,10 @@ export class AssinafyClient {
      * the upload is empty / non-PDF / larger than 25 MB, or `waitForReady` is
      * enabled and processing exceeds the {@link DocumentResource.waitUntilReady}
      * timeout.
-     * @throws {ApiError} If any underlying API call is rejected.
+     * @throws {ApiError} If any underlying API call is rejected — see the
+     * `@throws` of {@link DocumentResource.upload}, {@link SignerResource.create},
+     * {@link AssignmentResource.create}, and
+     * {@link DocumentResource.waitUntilReady} for the per-step statuses.
      *
      * @example
      * ```ts

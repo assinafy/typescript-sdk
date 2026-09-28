@@ -35,7 +35,7 @@ GET /v1/login-callback
 
 They map to `auth.getSocialLoginUrl()` and
 `auth.getSocialLoginCallbackUrl()` and are not part of the official
-89-operation total.
+93-operation total.
 
 The SDK also includes the production contract additions for:
 

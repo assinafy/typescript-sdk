@@ -165,18 +165,18 @@ const client = new AssinafyClient();                  // nenhuma credencial nece
 //     PKCE e `nonce` valida o id_token.
 const requisicao = await client.oauth.createAuthorizationUrl({
   clientId: process.env.ASSINAFY_CLIENT_ID!,
-  redirectUri: 'https://meuapp.com.br/oauth/callback',
+  redirectUri: 'https://meuapp.exemplo.com.br/oauth/callback',
   scopes: ['documents:read', 'documents:write', 'offline_access'],
 });
 sessao.oauth = requisicao;
 resposta.redirect(requisicao.url);                    // navegação de página inteira
 
-// 2 — em https://meuapp.com.br/oauth/callback
+// 2 — em https://meuapp.exemplo.com.br/oauth/callback
 const { code } = client.oauth.readAuthorizationCallback(query, sessao.oauth);
 const tokens = await client.oauth.exchangeCode({
   code,
   codeVerifier: sessao.oauth.codeVerifier,
-  redirectUri: 'https://meuapp.com.br/oauth/callback',
+  redirectUri: 'https://meuapp.exemplo.com.br/oauth/callback',
   clientId: process.env.ASSINAFY_CLIENT_ID!,
   clientSecret: process.env.ASSINAFY_CLIENT_SECRET,   // só aplicações confidenciais
 });
@@ -1379,7 +1379,7 @@ const client = new AssinafyClient({ baseUrl: 'https://sandbox.assinafy.com.br/v1
 
 const requisicao = await client.oauth.createAuthorizationUrl({
   clientId: process.env.ASSINAFY_CLIENT_ID!,
-  redirectUri: 'https://meuapp.com.br/oauth/callback',
+  redirectUri: 'https://meuapp.exemplo.com.br/oauth/callback',
   scopes: ['documents:read'],
   issuer: 'https://auth-sandbox.assinafy.com.br',
   authorizationEndpoint: 'https://auth-sandbox.assinafy.com.br/oauth/authorize',

@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.5.1] - 2026-09-28
+
+### Fixed
+
+- JSDoc reference corrections: missing response payloads and examples added to
+  public methods (`OAuthError.upgrade()`, `parseWwwAuthenticate()`,
+  `signerDocuments.search()`, `signerDocuments.confirmData()`,
+  `signerDocuments.getAssignment()`, `users.updateNotificationPreferences()`),
+  and stale `@throws` clauses corrected on `documents.details()` and
+  `signerDocuments.getCurrent()`. No behavior changes.
+- `README.en.md` reaches parity with the pt-BR README: the Environments
+  section (sandbox base URL and explicit `issuer`/`authorizationEndpoint`
+  configuration), the verification/notification channel table with per-signer
+  costs, and the A1/A3 certificate-media note.
+- The two browser URL helpers (`auth.getSocialLoginUrl()`,
+  `auth.getSocialLoginCallbackUrl()`) are listed in the coverage ledger's
+  compatibility extensions.
+- OAuth callback examples use reserved example domains, and the CONTRIBUTING
+  live-test examples point at the sandbox API.
+
 ## [2.5.0] - 2026-09-25
 
 ### Added
@@ -305,8 +325,9 @@ type, or API surface changed.
   request credentials or user payloads.
 - Restored the official name-only signer request and account
   `notification_sender_type` field. Both are now represented exactly as the
-  OpenAPI defines them; the live audit records the sandbox's lagging rejection
-  of `notification_sender_type` without blocking unrelated endpoint tests.
+  OpenAPI defines them; the sandbox's lagging rejection of
+  `notification_sender_type` is recorded as a known deployment divergence
+  without blocking unrelated endpoint tests.
 - Restored the official public, code-free signer artifact download while
   retaining an optional access-code argument for legacy deployments, and made
   owner-only assignment-signer fields optional in signer-context responses.
@@ -320,12 +341,13 @@ type, or API surface changed.
 - Clarified that webhook HMAC verification is an opt-in utility: the current
   Assinafy OpenAPI document does not specify a signing header or algorithm.
 
-### Earlier 2.1.0 audit work (completed 2026-07-19)
+### Additional fixes (completed 2026-07-19)
 
-Full audit against the live sandbox API (`https://sandbox.assinafy.com.br/v1`)
-and the OpenAPI reference: every safely runnable operation was probed, fixture-
-or legal-consent-dependent operations were recorded as explicit skips, and the
-SDK was reconciled against the observed request/response shapes.
+Validated against the live sandbox API (`https://sandbox.assinafy.com.br/v1`)
+and the OpenAPI reference: every safely runnable operation was exercised live,
+operations that depend on fixtures or legal consent were recorded as explicit
+skips, and the SDK was brought in line with the observed request/response
+shapes.
 
 #### Fixed
 
@@ -506,10 +528,11 @@ SDK was reconciled against the observed request/response shapes.
 
 ## [1.5.0] - 2026-06-05
 
-Full production-readiness audit against [the live API docs](https://api.assinafy.com.br/v1/docs),
-re-verified end-to-end against the live **sandbox** (`https://sandbox.assinafy.com.br/v1`).
-Closes the last coverage gap (Template create/update/delete), removes a dead
-endpoint, tightens types to the real wire shapes, and modernises the toolchain.
+Full coverage of [the live API docs](https://api.assinafy.com.br/v1/docs),
+re-validated end-to-end against the live **sandbox**
+(`https://sandbox.assinafy.com.br/v1`). Closes the last coverage gap (Template
+create/update/delete), removes a dead endpoint, tightens types to the real
+wire shapes, and modernises the toolchain.
 
 ### Removed
 
@@ -584,9 +607,9 @@ including template create/get/update/downloadPage/delete.
 
 ## [1.4.0] - 2026-05-27
 
-Full file-by-file audit against [the live API docs](https://api.assinafy.com.br/v1/docs),
-re-validated end-to-end against the live API. Closes the last coverage gap (Tags)
-and fixes signer-creation and type accuracy.
+Full coverage of [the live API docs](https://api.assinafy.com.br/v1/docs),
+re-validated end-to-end against the live API. Closes the last coverage gap
+(Tags) and fixes signer-creation and type accuracy.
 
 ### Added
 
@@ -628,8 +651,8 @@ CPF normalisation. All read and write paths re-verified against the live API
 
 ## [1.3.0] - 2026-05-12
 
-100% endpoint coverage of [the live API docs](https://api.assinafy.com.br/v1/docs).
-Audited file-by-file and validated end-to-end against the live API.
+100% endpoint coverage of [the live API docs](https://api.assinafy.com.br/v1/docs),
+validated end-to-end against the live API.
 
 ### Added
 
@@ -669,8 +692,8 @@ live API.
 
 ## [1.2.0] - 2026-05-06
 
-Full API parity audit. Adds the Template resource and missing Document operations, and aligns signer
-fields (`cpf`, `whatsapp_phone_number`) with the PHP SDK and n8n node.
+Adds the Template resource and missing Document operations, and expands the
+signer fields with `cpf` and `whatsapp_phone_number`.
 
 ### Added
 
@@ -681,7 +704,7 @@ fields (`cpf`, `whatsapp_phone_number`) with the PHP SDK and n8n node.
   - `createFromTemplate(templateId, signers, options?, accountId?)` — `POST /accounts/{accountId}/templates/{templateId}/documents`
   - `estimateCostFromTemplate(templateId, signers, accountId?)` — `POST /accounts/{accountId}/templates/{templateId}/documents/estimate-cost`
   - `verify(hash)` — `GET /documents/{hash}/verify`
-- **`cpf` field** in `ICreateSignerPayload`, `IUpdateSignerPayload`, `ISigner`, and `IUploadAndRequestSignaturesSigner`. The `normaliseSignerPayload` helper strips non-digit characters before sending (mirrors PHP SDK `sanitizeDocument` behaviour).
+- **`cpf` field** in `ICreateSignerPayload`, `IUpdateSignerPayload`, `ISigner`, and `IUploadAndRequestSignaturesSigner`. The `normaliseSignerPayload` helper strips non-digit characters before sending.
 - New types: `ITemplateListItem`, `ITemplateListResponse`, `ITemplateDetailsResponse`, `ITemplateRole`, `ITemplateSigner`, `ICreateDocumentFromTemplateOptions`.
 - `TemplateResource` exported from `index.ts`.
 
@@ -702,7 +725,11 @@ fields (`cpf`, `whatsapp_phone_number`) with the PHP SDK and n8n node.
 - High-level `uploadAndRequestSignatures` helper on `AssinafyClient`.
 - `PaginatedResult<T>` with parsed `X-Pagination-*` header meta.
 
-[Unreleased]: https://github.com/assinafy/typescript-sdk/compare/v2.4.0...HEAD
+[Unreleased]: https://github.com/assinafy/typescript-sdk/compare/v2.5.1...HEAD
+[2.5.1]: https://github.com/assinafy/typescript-sdk/compare/v2.5.0...v2.5.1
+[2.5.0]: https://github.com/assinafy/typescript-sdk/compare/v2.4.2...v2.5.0
+[2.4.2]: https://github.com/assinafy/typescript-sdk/compare/v2.4.1...v2.4.2
+[2.4.1]: https://github.com/assinafy/typescript-sdk/compare/v2.4.0...v2.4.1
 [2.4.0]: https://github.com/assinafy/typescript-sdk/compare/v2.3.0...v2.4.0
 [2.3.0]: https://github.com/assinafy/typescript-sdk/compare/v2.2.0...v2.3.0
 [2.2.0]: https://github.com/assinafy/typescript-sdk/compare/v2.1.2...v2.2.0

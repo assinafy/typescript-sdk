@@ -108,7 +108,7 @@ export class WebhookResource extends BaseResource {
             is_active: payload.is_active ?? true,
         };
 
-        this.logger.info('Registering webhook', { url: payload.url });
+        this.logger.info('Registering webhook');
 
         return this.call('Failed to register webhook', () =>
             this.http.put(

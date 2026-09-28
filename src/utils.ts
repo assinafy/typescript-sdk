@@ -333,7 +333,7 @@ export function assertDateTime(value: unknown, label: string): asserts value is 
     }
 }
 
-/** Strip undefined values from a params record (Axios sends `undefined` as literal). */
+/** Strip undefined and null values from a params record (Axios sends `undefined` as literal). */
 export function cleanParams(params: Record<string, unknown>): Record<string, unknown> {
     assertRecord(params, 'params');
     const out: Record<string, unknown> = {};

@@ -200,6 +200,17 @@ coverage count.
 | `DELETE` | `/v1/accounts/{accountId}/templates/{templateId}` | `client.templates.delete(templateId, accountId?)` | Compatibility extension |
 | `GET` | `/v1/accounts/{accountId}/templates/{templateId}/pages/{pageId}/download` | `client.templates.downloadPage(templateId, pageId, accountId?)` | Compatibility extension |
 
+## Browser URL helpers
+
+Two browser URL helpers used by older deployments are live but absent from the
+current OpenAPI path set, so they are likewise excluded from the official
+93-operation coverage count.
+
+| Method | Path | SDK method | Status |
+| --- | --- | --- | --- |
+| `GET` | `/v1/auth/authenticate` | `client.auth.getSocialLoginUrl()` | Compatibility extension |
+| `GET` | `/v1/login-callback` | `client.auth.getSocialLoginCallbackUrl()` | Compatibility extension |
+
 ## SDK conveniences
 
 These helpers compose or derive official operations and therefore do not add to

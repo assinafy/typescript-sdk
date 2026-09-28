@@ -61,7 +61,16 @@ const CHALLENGE_PARAM = /([A-Za-z0-9_-]+)\s*=\s*(?:"([^"]*)"|([^\s,]+))/gu;
  *
  * @param value - Raw header value, or `undefined` when absent.
  * @returns The parsed challenge, or `undefined` when there is no header or it
- * carries no scheme.
+ * carries no scheme. Malformed input never throws; it yields `undefined` or a
+ * scheme-only challenge.
+ *
+ * @example
+ * ```ts
+ * const challenge = parseWwwAuthenticate(
+ *   'Bearer error="insufficient_scope", scope="documents:read"',
+ * );
+ * // → { scheme: 'Bearer', error: 'insufficient_scope', scope: 'documents:read' }
+ * ```
  */
 export function parseWwwAuthenticate(
     value: string | undefined,

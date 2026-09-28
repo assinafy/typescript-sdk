@@ -415,6 +415,7 @@ export interface IAssignment {
     sender_email?: string;
     method: AssignmentMethod;
     expires_at?: string | null;
+    /** Compatibility extension; absent from the OpenAPI Assignment schema. */
     expiration?: string;
     message?: string | null;
     signers: IAssignmentSigner[];
@@ -1227,6 +1228,7 @@ export interface IWhatsAppNotification {
     sent_at: number;
     header: string;
     body: string;
+    /** Compatibility extension: the spec documents only `text`; `url` is retained for deployments that send link buttons. */
     buttons: Array<{ text: string; url?: string }>;
     phone_number: string;
     signer_id: string;

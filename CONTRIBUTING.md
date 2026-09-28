@@ -92,7 +92,7 @@ must use a dedicated account with short-lived credentials:
 ```sh
 ASSINAFY_API_KEY='...' \
 ASSINAFY_ACCOUNT_ID='...' \
-ASSINAFY_BASE_URL='https://api.assinafy.com.br/v1' \
+ASSINAFY_BASE_URL='https://sandbox.assinafy.com.br/v1' \
 bun scripts/live-smoke.ts
 ```
 
@@ -102,7 +102,7 @@ PDF/PNG fixtures and two controlled notification recipients:
 ```sh
 ASSINAFY_API_KEY='...' \
 ASSINAFY_ACCOUNT_ID='...' \
-ASSINAFY_BASE_URL='https://api.assinafy.com.br/v1' \
+ASSINAFY_BASE_URL='https://sandbox.assinafy.com.br/v1' \
 ASSINAFY_TEST_EMAIL_PRIMARY='first@example.com' \
 ASSINAFY_TEST_EMAIL_SECONDARY='second@example.com' \
 bun scripts/live-smoke.ts --all --confirm-production
