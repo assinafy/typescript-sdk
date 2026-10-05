@@ -59,7 +59,7 @@ const DEFAULT_BASE_URL = 'https://api.assinafy.com.br/v1';
  * const client = new AssinafyClient({
  *   apiKey: process.env.ASSINAFY_API_KEY!,
  *   accountId: process.env.ASSINAFY_ACCOUNT_ID!,
- *   webhookSecret: process.env.ASSINAFY_WEBHOOK_SECRET,
+ *   webhookSecret: process.env.ASSINAFY_WEBHOOK_SECRET!,
  * });
  *
  * const document = await client.documents.upload({ filePath: './contract.pdf' });

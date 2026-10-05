@@ -1,4 +1,4 @@
-import type { AxiosInstance, AxiosResponse, AxiosResponseHeaders } from 'axios';
+import { AxiosError, type AxiosInstance, type AxiosResponse, type AxiosResponseHeaders } from 'axios';
 import { ApiError, AssinafyError, ValidationError } from '../errors';
 import type { Logger, PaginatedResult, PaginationMeta } from '../types';
 import { createNoopLogger, createSafeLogger, handleAssinafyResponse, toSdkError } from '../utils';
@@ -174,7 +174,12 @@ type RequestFn = () => Promise<AxiosResponse>;
 
 function assertSuccessful<T extends AxiosResponse>(response: T): T {
     if (response.status < 200 || response.status >= 300) {
-        throw ApiError.fromResponse(response.status, response.data);
+        // Custom adapters and validateStatus can resolve error responses; keep
+        // binary decoding and authentication challenges on the same error path.
+        throw toSdkError(
+            new AxiosError('Request failed', undefined, response.config, undefined, response),
+            'API request failed',
+        );
     }
     return response;
 }

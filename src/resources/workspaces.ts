@@ -38,6 +38,16 @@ export class WorkspaceResource extends BaseResource {
     /**
      * Create a new workspace (`POST /accounts`).
      *
+     * Request body (`application/json`):
+     * ```jsonc
+     * {
+     *   "name": "Example Workspace",
+     *   "notification_sender_type": "Account",
+     *   "primary_color": "336699",
+     *   "secondary_color": "ffffff"
+     * }
+     * ```
+     *
      * @param payload - Official fields are workspace `name` (required) and
      * optional `notification_sender_type` (`User` or `Account`). Optional brand
      * colours use six hex characters without
@@ -322,6 +332,16 @@ export class WorkspaceResource extends BaseResource {
     /**
      * Update a workspace (`PUT /accounts/{accountId}`).
      *
+     * Request body (`application/json`):
+     * ```jsonc
+     * {
+     *   "name": "Example Workspace",
+     *   "notification_sender_type": "Account",
+     *   "primary_color": "336699",
+     *   "secondary_color": null
+     * }
+     * ```
+     *
      * @param accountId - The workspace to update.
      * @param payload - Official fields are `name` and
      * `notification_sender_type` (`User` or `Account`). Brand colours use six
@@ -381,6 +401,13 @@ export class WorkspaceResource extends BaseResource {
      * a `restrictions` list. `{ force: true }` cancels that subscription and
      * proceeds with deletion; it is not documented as a blanket override for
      * unrelated restrictions. The flag is sent in the request body.
+     *
+     * Request body (`application/json`):
+     * ```jsonc
+     * {
+     *   "force": true
+     * }
+     * ```
      *
      * @param accountId - The workspace to delete.
      * @param options - Set `force: true` to cancel an active paid subscription

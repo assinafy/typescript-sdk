@@ -143,6 +143,21 @@ export class UserResource extends BaseResource {
      * (`PUT /users/self/notification-preferences`). Omitted keys retain their
      * current values; account/security e-mails are not configurable here.
      *
+     * Request body (`application/json`):
+     * ```jsonc
+     * {
+     *   "DocumentCompleted": true,
+     *   "SignerDeclined": true,
+     *   "DocumentCancelled": true,
+     *   "DocumentAboutToExpire": true,
+     *   "DocumentExpired": true,
+     *   "DocumentExpirationReset": true,
+     *   "DocumentProcessingFailed": true,
+     *   "TemplateProcessingFailed": true,
+     *   "SignerWhatsappFailed": true
+     * }
+     * ```
+     *
      * @param preferences - One or more of the nine documented keys, each with
      * a boolean value. Request example:
      * ```json

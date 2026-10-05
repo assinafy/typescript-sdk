@@ -296,6 +296,15 @@ export class SignerDocumentsResource extends BaseResource {
      * The `document_ids` array goes in the request body; the access code
      * authenticates via the `signer-access-code` query param.
      *
+     * Request body (`application/json`):
+     * ```jsonc
+     * {
+     *   "document_ids": [
+     *     "document_example"
+     *   ]
+     * }
+     * ```
+     *
      * @param documentIds - Non-empty array of document IDs to sign.
      * @param signerAccessCode - The signer's access code, from their signing link.
      * @returns Resolves when the API acknowledges the operation. The documented
@@ -334,6 +343,16 @@ export class SignerDocumentsResource extends BaseResource {
      * same `decline_reason` is recorded against every document in `documentIds`.
      * Both `document_ids` and `decline_reason` go in the request body; the access
      * code authenticates via the `signer-access-code` query param.
+     *
+     * Request body (`application/json`):
+     * ```jsonc
+     * {
+     *   "document_ids": [
+     *     "document_example"
+     *   ],
+     *   "decline_reason": "The document needs a correction."
+     * }
+     * ```
      *
      * @param documentIds - Non-empty array of document IDs to decline.
      * @param declineReason - Free-text reason shown to the sender (required).
@@ -457,6 +476,13 @@ export class SignerDocumentsResource extends BaseResource {
      * **body carries only `verification-code`** (putting the access code in the
      * body leaves the request unauthenticated → `401`).
      *
+     * Request body (`application/json`):
+     * ```jsonc
+     * {
+     *   "verification-code": "123456"
+     * }
+     * ```
+     *
      * @param payload - `signerAccessCode` (the signing-link code) and
      *   `verificationCode` (the OTP the signer received).
      * @returns Resolves when the API acknowledges the operation. The response
@@ -506,6 +532,16 @@ export class SignerDocumentsResource extends BaseResource {
      * `has_accepted_terms: true` here or call
      * {@link SignerDocumentsResource.acceptTerms} before fetching the assignment.
      *
+     * Request body (`application/json`):
+     * ```jsonc
+     * {
+     *   "full_name": "Example Signer",
+     *   "email": "signer@example.com",
+     *   "government_id": "39053344705",
+     *   "has_accepted_terms": true
+     * }
+     * ```
+     *
      * @param documentId - The document the signer is confirming data for.
      * @param signerAccessCode - The signer's access code, from their signing link.
      * @param payload - Any of the official `full_name`, `email`, or
@@ -543,8 +579,23 @@ export class SignerDocumentsResource extends BaseResource {
         payload: IConfirmSignerDataPayload,
     ): Promise<ISigner>;
     /**
+     * Confirm signer data with the compatibility phone field
+     * (`PUT /documents/{documentId}/signers/confirm-data`).
      * @deprecated Compatibility overload preserving the previous wire shape.
      * `whatsapp_phone_number` is a compatibility pass-through field.
+     * @param documentId - Document identifier.
+     * @param signerAccessCode - Access code sent in the query string.
+     * @param payload - Identity fields, including `whatsapp_phone_number`.
+     * @returns The signer; see the primary overload for its response payload.
+     * @throws {ValidationError} If identity fields or identifiers are invalid.
+     * @throws {ApiError} If the API rejects the confirmation.
+     * @example
+     * ```ts
+     * // JSON body: { "whatsapp_phone_number": "+5511999998888" }
+     * await client.signerDocuments.confirmData(documentId, accessCode, {
+     *   whatsapp_phone_number: '+5511999998888',
+     * });
+     * ```
      */
     async confirmData(
         documentId: string,
@@ -611,8 +662,22 @@ export class SignerDocumentsResource extends BaseResource {
         options?: IUploadSignatureOptions,
     ): Promise<void>;
     /**
+     * Upload a signature image using a compatibility content type
+     * (`POST /signature?signer-access-code=…&type=…`).
      * @deprecated Compatibility overload for non-PNG media types. The current
      * OpenAPI contract specifies only `image/png`; other values are not certified.
+     * @param signerAccessCode - Access code sent in the query string.
+     * @param image - Non-empty raw image bytes, without a JSON envelope.
+     * @param options - Image type, reuse preference and compatibility content type.
+     * @returns Nothing; the acknowledgement body is discarded.
+     * @throws {ValidationError} If the code, image or options are invalid.
+     * @throws {ApiError} If the API rejects the upload.
+     * @example
+     * ```ts
+     * await client.signerDocuments.uploadSignature(accessCode, image, {
+     *   imageType: 'signature', reuse: false, contentType: 'image/jpeg',
+     * });
+     * ```
      */
     async uploadSignature(
         signerAccessCode: string,
@@ -802,6 +867,18 @@ export class SignerDocumentsResource extends BaseResource {
      * first. Digital Certificate signers cannot use this endpoint; use the
      * certificate start/complete API flow instead.
      *
+     * Request body (`application/json`):
+     * ```jsonc
+     * [
+     *   {
+     *     "itemId": "item_example",
+     *     "fieldId": "field_example",
+     *     "pageId": "page_example",
+     *     "value": "Example Signer"
+     *   }
+     * ]
+     * ```
+     *
      * @param documentId - The document being signed.
      * @param assignmentId - The assignment within that document.
      * @param signerAccessCode - The signer's access code, from their signing link.
@@ -877,6 +954,13 @@ export class SignerDocumentsResource extends BaseResource {
      * `signer-access-code` query param. (The workspace-side equivalent is to
      * delete the document via `documents.delete`; there is no workspace "cancel"
      * endpoint.)
+     *
+     * Request body (`application/json`):
+     * ```jsonc
+     * {
+     *   "decline_reason": "The document needs a correction."
+     * }
+     * ```
      *
      * @param documentId - The document being declined.
      * @param assignmentId - The assignment within that document.

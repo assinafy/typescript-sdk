@@ -205,12 +205,14 @@ export class OAuthError extends ApiError {
         const code = (body as Record<string, unknown>)['error'];
         if (typeof code !== 'string' || code.length === 0) return error;
         const description = (body as Record<string, unknown>)['error_description'];
-        return new OAuthError(
+        const upgraded = new OAuthError(
             code,
             typeof description === 'string' && description.length > 0 ? description : null,
             error.statusCode,
             body,
         );
+        if (error.challenge !== undefined) upgraded.challenge = error.challenge;
+        return upgraded;
     }
 }
 

@@ -89,6 +89,14 @@ export class AuthenticationResource extends BaseResource {
      * `X-Api-Key` (see {@link AuthenticationResource.createApiKey}) instead of
      * storing a password.
      *
+     * Request body (`application/json`):
+     * ```jsonc
+     * {
+     *   "email": "user@example.com",
+     *   "password": "example-password"
+     * }
+     * ```
+     *
      * @param email - The user's email address, e.g. `'user@example.com'`.
      * @param password - The user's password.
      * @returns An {@link ILoginResponse} with the access token, user, and
@@ -143,6 +151,15 @@ export class AuthenticationResource extends BaseResource {
      * Exchanges a provider-issued OAuth token (currently Google) for an
      * Assinafy JWT. Returns the same {@link ILoginResponse} shape as
      * {@link AuthenticationResource.login}.
+     *
+     * Request body (`application/json`):
+     * ```jsonc
+     * {
+     *   "provider": "google",
+     *   "token": "provider_token_example",
+     *   "has_accepted_terms": true
+     * }
+     * ```
      *
      * @param payload - The social-login body.
      * @param payload.provider - OAuth provider; currently exactly `'google'`.
@@ -223,6 +240,14 @@ export class AuthenticationResource extends BaseResource {
      * The response is the standard status/message acknowledgement with no data,
      * so this method resolves to `void`.
      *
+     * Request body (`application/json`):
+     * ```jsonc
+     * {
+     *   "provider": "google",
+     *   "token": "provider_token_example"
+     * }
+     * ```
+     *
      * @param payload - Social provider and provider-issued access/ID token.
      * @returns Resolves when the API acknowledges that the identity was linked.
      * @throws {ValidationError} If `provider` is not `google` or `token` is empty.
@@ -261,6 +286,13 @@ export class AuthenticationResource extends BaseResource {
      * subsequent reads via {@link AuthenticationResource.getApiKey} only return
      * a masked value. Calling this again rotates the key, invalidating the
      * previous one.
+     *
+     * Request body (`application/json`):
+     * ```jsonc
+     * {
+     *   "password": "example-password"
+     * }
+     * ```
      *
      * @param password - The current user's password, required to authorize
      * key generation.
@@ -350,6 +382,15 @@ export class AuthenticationResource extends BaseResource {
      * Requires the current password as a confirmation. On success the API
      * echoes back the affected `email`.
      *
+     * Request body (`application/json`):
+     * ```jsonc
+     * {
+     *   "email": "user@example.com",
+     *   "password": "example-password",
+     *   "new_password": "new-example-password"
+     * }
+     * ```
+     *
      * @param payload - The change-password body.
      * @param payload.email - The user's email address.
      * @param payload.password - The current password.
@@ -400,6 +441,13 @@ export class AuthenticationResource extends BaseResource {
      * Triggers Assinafy to email a reset link/token to the given address.
      * Complete the flow with {@link AuthenticationResource.resetPassword}.
      *
+     * Request body (`application/json`):
+     * ```jsonc
+     * {
+     *   "email": "user@example.com"
+     * }
+     * ```
+     *
      * @param email - The email address to send the reset link to.
      * @returns `{ email }` — the address the reset link was sent to. Response
      * shape:
@@ -430,6 +478,15 @@ export class AuthenticationResource extends BaseResource {
      * Consumes the token delivered by
      * {@link AuthenticationResource.requestPasswordReset} and sets the new
      * password. On success the API echoes back the affected `email`.
+     *
+     * Request body (`application/json`):
+     * ```jsonc
+     * {
+     *   "email": "user@example.com",
+     *   "token": "reset_token_example",
+     *   "new_password": "new-example-password"
+     * }
+     * ```
      *
      * @param payload - The reset-password body.
      * @param payload.email - The user's email address.

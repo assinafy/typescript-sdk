@@ -34,6 +34,19 @@ export class WebhookResource extends BaseResource {
      * `signer_rejected_document`, `document_processing_failed`).
      * OAuth tokens need the `webhooks:write` scope.
      *
+     * Request body (`application/json`):
+     * ```jsonc
+     * {
+     *   "events": [
+     *     "document_ready",
+     *     "document_prepared"
+     *   ],
+     *   "is_active": true,
+     *   "url": "https://myapp.example.com/webhooks/assinafy",
+     *   "email": "operations@example.com"
+     * }
+     * ```
+     *
      * @param payload - Subscription details. `url` and `email` are required;
      * `events` defaults to {@link DEFAULT_WEBHOOK_EVENTS} and `is_active`
      * defaults to `true`.

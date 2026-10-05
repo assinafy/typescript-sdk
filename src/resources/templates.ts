@@ -227,6 +227,14 @@ export class TemplateResource extends BaseResource {
      * `undefined` keys before sending. Unlike uploads, `name` here is a plain
      * display name and is **not** forced to end in `.pdf`.
      *
+     * Request body (`application/json`):
+     * ```jsonc
+     * {
+     *   "name": "Service agreement.pdf",
+     *   "message": "Please sign this document."
+     * }
+     * ```
+     *
      * @param templateId - The template to update.
      * @param payload - `name` and/or `message`; both optional.
      * @param accountId - Override the client's default account ID.

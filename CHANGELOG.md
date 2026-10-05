@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.5.2] - 2026-10-05
+
+### Fixed
+
+- OAuth callbacks reject repeated protocol parameters before exchanging a code.
+- API errors preserve authentication challenges and decoded binary error bodies
+  when a custom transport resolves a non-success response. OAuth errors retain
+  the authentication challenge when converted to `OAuthError`.
+- Sandbox OAuth setup uses discovery and keeps client registration, issuer and
+  API requests in the same environment.
+- Resource reference documentation includes JSON request payloads alongside
+  response examples; upload examples describe filename handling accurately.
+
+### Security
+
+- Update the development dependency override for `brace-expansion` to 5.0.12.
+
 ## [2.5.1] - 2026-09-28
 
 ### Fixed
@@ -166,10 +183,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   **A3** are recorded explicitly as certificate media — a file in software or a
   token/smartcard, chosen by the signer in the browser — both modelled by the
   single `DigitalCertificate` value, with no separate field to send.
-- `bun run audit:api` additionally fetches the two OAuth discovery documents
-  and checks the issuer, the authorization and token endpoints, PKCE `S256` and
-  the RFC 9207 `iss` parameter against the published contract. They are the
-  only part of the OAuth surface that does not live in the OpenAPI document.
 - `docs/API_COVERAGE.md` maps the four new OAuth operations, bringing the
   ledger to 93 of 93.
 - The Portuguese README is now the complete reference rather than a summary
@@ -295,7 +308,7 @@ type, or API surface changed.
   operations across 68 paths**, including account theme/logo/statistics, OAuth
   URL helpers/linking, authenticated-user profile/statistics, and all signer
   response/acknowledgement shapes.
-- An exhaustive machine-auditable endpoint ledger (`docs/API_COVERAGE.md`),
+- A complete endpoint ledger (`docs/API_COVERAGE.md`),
   compatibility record, and a scheduled OpenAPI operation-drift gate.
 - Strict test-source typechecking and enforced Bun coverage floors. The suite
   now executes every public HTTP wrapper and covers the production source at
@@ -343,12 +356,6 @@ type, or API surface changed.
 
 ### Additional fixes (completed 2026-07-19)
 
-Validated against the live sandbox API (`https://sandbox.assinafy.com.br/v1`)
-and the OpenAPI reference: every safely runnable operation was exercised live,
-operations that depend on fixtures or legal consent were recorded as explicit
-skips, and the SDK was brought in line with the observed request/response
-shapes.
-
 #### Fixed
 
 - **`signerDocuments.acceptTerms()` and `signerDocuments.verifyEmail()` were
@@ -364,7 +371,7 @@ shapes.
   `pages`, and the embedded `assignment` are current.
 - **README workspace example used an invalid colour.** `primary_color:
   '#ff0066'` is rejected by the account endpoints, which require exactly 6 hex
-  characters with **no** leading `#` (verified live). Fixed the example and
+  characters with **no** leading `#`. Fixed the example and
   documented the format on the payload types.
 
 #### Added
@@ -419,7 +426,7 @@ shapes.
 
 - **`per_page` was silently ignored on every list call.** The API reads only
   `per-page`; `per_page` is accepted and discarded, so the response fell back to
-  20 items (verified: `?per-page=2` → 2 items, `?per_page=2` → 20). Every list
+  20 items. Every list
   method's documentation advertised `per_page`, so paging appeared to work while
   quietly returning the wrong page size. Both spellings are now honoured —
   `per_page` is normalised to `per-page`, and an explicit `per-page` wins.
@@ -522,23 +529,19 @@ shapes.
   not return either field, so the old type promised a required `pages` array
   that was `undefined` at runtime.
 - **`ICreateAssignmentPayload.copy_receivers` is documented as unreliable.** On
-  the sandbox plan the API accepts it and persists nothing — verified `[]` from
+  the sandbox plan the API accepts it and persists nothing — `[]` from
   `create`, `list` and `details().assignment`, for both emails and signer IDs.
   Kept (it may be plan-gated) but do not assume a CC was delivered.
 
 ## [1.5.0] - 2026-06-05
 
-Full coverage of [the live API docs](https://api.assinafy.com.br/v1/docs),
-re-validated end-to-end against the live **sandbox**
-(`https://sandbox.assinafy.com.br/v1`). Closes the last coverage gap (Template
-create/update/delete), removes a dead endpoint, tightens types to the real
-wire shapes, and modernises the toolchain.
+Adds template management, aligns types with response payloads, and updates the toolchain.
 
 ### Removed
 
 - **`assignments.cancel`** — it called
   `POST /accounts/{id}/signature-requests/{id}/cancel`, which is undocumented and
-  returns `404` on the live API (verified). There is no workspace-side cancel
+  returns `404` on the live API. There is no workspace-side cancel
   endpoint — cancel by deleting the document (`documents.delete`, when its status
   is deletable) or via the signer-side decline
   (`signerDocuments.decline(documentId, assignmentId, accessCode, reason)`).
@@ -597,19 +600,10 @@ wire shapes, and modernises the toolchain.
   for publishing, and npm provenance (`--provenance` + `id-token: write`).
 - esbuild pinned via `overrides` to keep the bun + npm lockfiles reproducible.
 
-### Tests
-
-113 unit tests pass (`bun test`). New suites cover `TemplateResource` (incl. the
-new CRUD), the `BaseResource` helpers (`callOptional` 404→null, `callVoid`,
-`callBinary`, `callList`), the rate-limit retry helpers, and assignment/document
-response shapes. All read and write paths re-verified against the live sandbox,
-including template create/get/update/downloadPage/delete.
 
 ## [1.4.0] - 2026-05-27
 
-Full coverage of [the live API docs](https://api.assinafy.com.br/v1/docs),
-re-validated end-to-end against the live API. Closes the last coverage gap
-(Tags) and fixes signer-creation and type accuracy.
+Adds tags and fixes signer creation and response types.
 
 ### Added
 
@@ -642,17 +636,8 @@ re-validated end-to-end against the live API. Closes the last coverage gap
   is typed as the `{ ip, user-agent }` object the API actually returns, with the
   event `payload` snapshot added.
 
-### Tests
-
-86 unit tests pass (`bun test`). New `tags` and `documents` suites cover Tag CRUD
-and document-tag attach/detach; new signer tests cover WhatsApp-only creation and
-CPF normalisation. All read and write paths re-verified against the live API
-(`scripts/live-smoke.ts --write`).
 
 ## [1.3.0] - 2026-05-12
-
-100% endpoint coverage of [the live API docs](https://api.assinafy.com.br/v1/docs),
-validated end-to-end against the live API.
 
 ### Added
 
@@ -684,11 +669,6 @@ validated end-to-end against the live API.
 - Live smoke-test script (`scripts/live-smoke.ts`) covering every read-only
   endpoint plus optional `--write` and `--upload` modes.
 
-### Tests
-
-70 unit tests pass (`bun test`). New suites cover the authentication, fields,
-and signer-documents resources. Build + ESM/CJS bundles validated against the
-live API.
 
 ## [1.2.0] - 2026-05-06
 
@@ -725,7 +705,8 @@ signer fields with `cpf` and `whatsapp_phone_number`.
 - High-level `uploadAndRequestSignatures` helper on `AssinafyClient`.
 - `PaginatedResult<T>` with parsed `X-Pagination-*` header meta.
 
-[Unreleased]: https://github.com/assinafy/typescript-sdk/compare/v2.5.1...HEAD
+[Unreleased]: https://github.com/assinafy/typescript-sdk/compare/v2.5.2...HEAD
+[2.5.2]: https://github.com/assinafy/typescript-sdk/compare/v2.5.1...v2.5.2
 [2.5.1]: https://github.com/assinafy/typescript-sdk/compare/v2.5.0...v2.5.1
 [2.5.0]: https://github.com/assinafy/typescript-sdk/compare/v2.4.2...v2.5.0
 [2.4.2]: https://github.com/assinafy/typescript-sdk/compare/v2.4.1...v2.4.2

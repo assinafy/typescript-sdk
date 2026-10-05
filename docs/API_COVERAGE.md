@@ -2,7 +2,7 @@
 
 This ledger maps the official
 [`GET /v1/docs/openapi.json`](https://api.assinafy.com.br/v1/docs/openapi.json)
-contract to the public SDK API: 71 paths, 93 HTTP operations, and 39 component
+contract to the public SDK API: 71 paths, 93 HTTP operations, and 41 component
 schemas.
 
 All paths below include the `/v1` prefix shown by the OpenAPI document, except

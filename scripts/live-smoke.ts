@@ -32,7 +32,7 @@ import { isEmail } from '../src/utils';
 const TEMPLATE_WAIT_MS = 90_000;
 const DISPATCH_WAIT_MS = 20_000;
 // Space requests to leave headroom for polling calls.
-const INTEGRATION_STEP_INTERVAL_MS = 650;
+const INTEGRATION_STEP_INTERVAL_MS = 1_500;
 
 type AuditStatus = 'PASS' | 'FAIL' | 'SKIP';
 
@@ -1174,7 +1174,7 @@ async function runAssignmentSuite(
     });
     await reporter.stepWithKnownApiStatusSkip(
         'assignments.estimate-cost-digital-certificate',
-        400,
+        403,
         'Digital Certificate feature is unavailable on this plan',
         async () => {
             const estimate = await client.assignments.estimateCost(documentId, {
@@ -1340,7 +1340,8 @@ async function runTemplateSuite(
         reporter.skip('templates.extension-page-download', 'template fixture was not created');
     }
 
-    const freshRoleId = prepared?.roles?.[0]?.id;
+    const signingRole = prepared?.roles?.find((role) => role.assignment_type === 'Signer');
+    const freshRoleId = signingRole?.id ?? prepared?.roles?.[0]?.id;
     const fixtureTemplateId = created.ok ? created.value.id : undefined;
     const fixtureRoleId = freshRoleId;
     if (!fixtureTemplateId || !fixtureRoleId || !signerId) {
@@ -1381,19 +1382,24 @@ async function runTemplateSuite(
                 assertCondition(typeof estimate.total_credits === 'number');
             },
         );
-        const document = await reporter.step('templates.documents.create', async () => {
-            const result = await client.documents.createFromTemplate(
-                fixtureTemplateId,
-                signers,
-                {
-                    name: randomLabel('sdk-integration-from-template'),
-                    message: 'SDK integration test template document',
-                },
-            );
-            assertId(result.id);
-            state.documents.add(result.id);
-            return result;
-        });
+        if (!signingRole) {
+            reporter.skip('templates.documents.create', 'template has no signing role; configure it in the app');
+        }
+        const document: StepResult<IDocumentDetailsResponse> = signingRole
+            ? await reporter.step('templates.documents.create', async () => {
+                const result = await client.documents.createFromTemplate(
+                    fixtureTemplateId,
+                    signers,
+                    {
+                        name: randomLabel('sdk-integration-from-template'),
+                        message: 'SDK integration test template document',
+                    },
+                );
+                assertId(result.id);
+                state.documents.add(result.id);
+                return result;
+            })
+            : { ok: false };
         if (document.ok) {
             await reporter.step('templates.documents.get', async () => {
                 const result = await client.documents.details(document.value.id);

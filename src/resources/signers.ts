@@ -30,6 +30,19 @@ export class SignerResource extends BaseResource {
      * A reused signer is returned unchanged; this method does not overwrite its
      * existing name, phone, CPF, or metadata with the create payload.
      *
+     * Request body (`application/json`):
+     * ```jsonc
+     * {
+     *   "full_name": "Example Signer",
+     *   "email": "signer@example.com",
+     *   "whatsapp_phone_number": "+5548999990000",
+     *   "cpf": "39053344705",
+     *   "metadata": {
+     *     "reference": "customer_example"
+     *   }
+     * }
+     * ```
+     *
      * @param payload - The signer to create. The official fields are required
      * `full_name` plus optional `email` and E.164 `whatsapp_phone_number`.
      * `phone`, `cpf`, and `metadata` are compatibility extensions; the SDK
@@ -191,6 +204,16 @@ export class SignerResource extends BaseResource {
      * can always be updated. A verified email or WhatsApp channel cannot change
      * while it belongs to an in-flight document; changing an unverified channel
      * rotates its access/verification codes, so resend the notification.
+     *
+     * Request body (`application/json`):
+     * ```jsonc
+     * {
+     *   "full_name": "Example Signer",
+     *   "email": "signer@example.com",
+     *   "whatsapp_phone_number": "+5548999990000",
+     *   "government_id": "39053344705"
+     * }
+     * ```
      *
      * @param signerId - The signer to update.
      * @param payload - Fields to change. The official `government_id` field and

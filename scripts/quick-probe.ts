@@ -4,7 +4,7 @@
  * Run with:
  *   ASSINAFY_API_KEY=... ASSINAFY_ACCOUNT_ID=... bun scripts/quick-probe.ts
  */
-import { AssinafyClient } from '../src';
+import { ApiError, AssinafyClient } from '../src';
 
 const apiKey = process.env['ASSINAFY_API_KEY'];
 const accountId = process.env['ASSINAFY_ACCOUNT_ID'];
@@ -48,6 +48,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((err) => {
-    console.error('error:', err);
+    console.error('Connectivity check failed', err instanceof ApiError ? `HTTP ${err.statusCode}` : 'SDK error');
     process.exit(1);
 });

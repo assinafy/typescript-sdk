@@ -82,6 +82,30 @@ describe('BaseResource helpers', () => {
         expect([...buf]).toEqual([1, 2, 3]);
     });
 
+    test('resolved error responses retain decoded bodies and authentication challenges', async () => {
+        const body = { message: 'Missing permission' };
+        const response = {
+            status: 403,
+            data: Buffer.from(JSON.stringify(body)),
+            headers: { 'WWW-Authenticate': 'Bearer error="insufficient_scope", scope="documents:read"' },
+        };
+        const helpers = [
+            () => res().call$(async () => response),
+            () => res().optional$(async () => response),
+            () => res().void$(async () => response),
+            () => res().binary$(async () => response as never),
+            () => res().list$(async () => response),
+        ];
+        for (const request of helpers) {
+            await expect(request()).rejects.toMatchObject({
+                statusCode: 403,
+                message: body.message,
+                responseData: body,
+                challenge: { scheme: 'Bearer', error: 'insufficient_scope', scope: 'documents:read' },
+            });
+        }
+    });
+
     test('callList unwraps a bare array, a {data:[]} envelope, and parses meta', async () => {
         const bare = await res().list$(async () => ({ status: 200, data: { status: 200, data: ['a', 'b'] }, headers: {} }));
         expect(bare.data).toEqual(['a', 'b'] as never);

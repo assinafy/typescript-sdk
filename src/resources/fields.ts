@@ -28,6 +28,17 @@ export class FieldsResource extends BaseResource {
     /**
      * Create a field definition (`POST /accounts/{accountId}/fields`).
      *
+     * Request body (`application/json`):
+     * ```jsonc
+     * {
+     *   "type": "text",
+     *   "name": "Reference",
+     *   "regex": null,
+     *   "is_required": true,
+     *   "is_active": true
+     * }
+     * ```
+     *
      * @param payload - The field to create. `type` and `name` are required;
      *   `type` must be one of the platform field types (see
      *   {@link FieldsResource.listTypes}); `regex` may be a string or `null`,
@@ -175,6 +186,15 @@ export class FieldsResource extends BaseResource {
      * Update a field definition
      * (`PUT /accounts/{accountId}/fields/{fieldId}`).
      *
+     * Request body (`application/json`):
+     * ```jsonc
+     * {
+     *   "name": "Customer reference",
+     *   "regex": null,
+     *   "is_active": true
+     * }
+     * ```
+     *
      * @param fieldId - The field definition to update.
      * @param payload - Fields are `name`, nullable `regex`, and `is_active`;
      * `type` and `is_required` are compatibility extensions.
@@ -267,6 +287,13 @@ export class FieldsResource extends BaseResource {
      * `signerAccessCode` is a compatibility query and is sent as
      * `signer-access-code` when supplied.
      *
+     * Request body (`application/json`):
+     * ```jsonc
+     * {
+     *   "value": "Example value"
+     * }
+     * ```
+     *
      * @param fieldId - The field definition to validate against.
      * @param value - The value to check (validated against the field's
      *   type/regex). Sent as `{ value }` in the request body.
@@ -324,6 +351,16 @@ export class FieldsResource extends BaseResource {
      * (not wrapped in an object). The optional `signerAccessCode` query is the
      * same compatibility extension described on
      * {@link FieldsResource.validate}.
+     *
+     * Request body (`application/json`):
+     * ```jsonc
+     * [
+     *   {
+     *     "field_id": "field_example",
+     *     "value": "Example value"
+     *   }
+     * ]
+     * ```
      *
      * @param entries - Non-empty array of `{ field_id, value }` pairs.
      * @param options - Account override and optional legacy `signerAccessCode`.

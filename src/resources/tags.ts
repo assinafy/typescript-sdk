@@ -74,6 +74,14 @@ export class TagResource extends BaseResource {
      * and `'ff8800'` both persist as `'ff8800'`. Omit `color`
      * (or pass `null`) for no color.
      *
+     * Request body (`application/json`):
+     * ```jsonc
+     * {
+     *   "name": "Contracts",
+     *   "color": "ff8800"
+     * }
+     * ```
+     *
      * @param payload - `name` (required, max 64 characters; trimmed with
      * internal whitespace collapsed) and optional `color`.
      * @param accountId - Override the client's default account ID.
@@ -122,6 +130,14 @@ export class TagResource extends BaseResource {
      * signal (an omitted `color` is not sent at all). As with {@link create}, a
      * leading `#` on `color` is accepted and stripped by the API
      * (`'#112233'` → `'112233'`).
+     *
+     * Request body (`application/json`):
+     * ```jsonc
+     * {
+     *   "name": "Signed contracts",
+     *   "color": null
+     * }
+     * ```
      *
      * @param tagId - The tag to update.
      * @param payload - `name` and/or `color`. `color: null` clears the color;

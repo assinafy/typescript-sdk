@@ -85,20 +85,20 @@ type TokenEndpointAuthOptions = {
  * // Step 1 — before redirecting the user
  * const request = await client.oauth.createAuthorizationUrl({
  *   clientId: process.env.ASSINAFY_CLIENT_ID!,
- *   redirectUri: 'https://myapp.com/oauth/callback',
- *   scopes: ['documents:read', 'documents:write', 'offline_access'],
+ *   redirectUri: 'https://myapp.example.com/oauth/callback',
+ *   scopes: ['documents:read', 'documents:write', 'account:read', 'offline_access'],
  * });
  * session.oauth = request;                           // state + codeVerifier + issuer
  * response.redirect(request.url);
  *
- * // Step 3/4 — on https://myapp.com/oauth/callback
+ * // Step 3/4 — on https://myapp.example.com/oauth/callback
  * const { code } = client.oauth.readAuthorizationCallback(query, session.oauth);
  * const tokens = await client.oauth.exchangeCode({
  *   code,
  *   codeVerifier: session.oauth.codeVerifier,
- *   redirectUri: 'https://myapp.com/oauth/callback',
+ *   redirectUri: 'https://myapp.example.com/oauth/callback',
  *   clientId: process.env.ASSINAFY_CLIENT_ID!,
- *   clientSecret: process.env.ASSINAFY_CLIENT_SECRET,
+ *   clientSecret: process.env.ASSINAFY_CLIENT_SECRET!,
  * });
  * ```
  */
@@ -280,8 +280,8 @@ export class OAuthResource extends BaseResource {
      * ```ts
      * const request = await client.oauth.createAuthorizationUrl({
      *   clientId: process.env.ASSINAFY_CLIENT_ID!,
-     *   redirectUri: 'https://myapp.com/oauth/callback',
-     *   scopes: ['documents:read', 'documents:write', 'offline_access'],
+     *   redirectUri: 'https://myapp.example.com/oauth/callback',
+     *   scopes: ['documents:read', 'documents:write', 'account:read', 'offline_access'],
      * });
      * session.oauth = request;
      * response.redirect(request.url);
@@ -391,8 +391,8 @@ export class OAuthResource extends BaseResource {
      * ```
      * @throws {ValidationError} If `state` is missing or does not match, `iss`
      * is absent or disagrees with the expected issuer, or a successful response
-     * carries no `code`. In every case the response is not yours — stop, do not
-     * exchange.
+     * carries no `code`, or a protocol parameter appears more than once.
+     * Reject such responses without exchanging the code.
      * @throws {OAuthError} If the server returned `error` (e.g.
      * `access_denied`, `invalid_scope`, `invalid_request`,
      * `unsupported_response_type`, `invalid_target`).
@@ -405,9 +405,9 @@ export class OAuthResource extends BaseResource {
      *   const tokens = await client.oauth.exchangeCode({
      *     code,
      *     codeVerifier: stored.codeVerifier,
-     *     redirectUri: 'https://myapp.com/oauth/callback',
+     *     redirectUri: 'https://myapp.example.com/oauth/callback',
      *     clientId: process.env.ASSINAFY_CLIENT_ID!,
-     *     clientSecret: process.env.ASSINAFY_CLIENT_SECRET,
+     *     clientSecret: process.env.ASSINAFY_CLIENT_SECRET!,
      *   });
      * });
      * ```
@@ -419,6 +419,11 @@ export class OAuthResource extends BaseResource {
         assertRecord(expected, 'expected authorization request');
         assertNonEmptyString(expected.state, 'expected.state');
         const query = toSearchParams(params);
+        for (const key of ['state', 'iss', 'code', 'error', 'error_description']) {
+            if (query.getAll(key).length > 1) {
+                throw new ValidationError(`OAuth callback must not repeat ${key}`);
+            }
+        }
 
         const state = query.get('state');
         if (state === null || !constantTimeEquals(state, expected.state)) {
@@ -465,6 +470,12 @@ export class OAuthResource extends BaseResource {
      * a browser. Every value must match the authorization request exactly, or
      * the API answers `invalid_grant`.
      *
+     * Request body (`application/x-www-form-urlencoded`; omit `client_secret`
+     * for public applications):
+     * ```text
+     * grant_type=authorization_code&code=code_example&redirect_uri=https%3A%2F%2Fmyapp.example.com%2Foauth%2Fcallback&client_id=client_example&client_secret=secret_example&code_verifier=dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk&resource=https%3A%2F%2Fapi.assinafy.com.br
+     * ```
+     *
      * @param options - Exchange options.
      * @param options.code - The code from
      * {@link OAuthResource.readAuthorizationCallback}.
@@ -500,9 +511,9 @@ export class OAuthResource extends BaseResource {
      * const tokens = await client.oauth.exchangeCode({
      *   code,
      *   codeVerifier: session.oauth.codeVerifier,
-     *   redirectUri: 'https://myapp.com/oauth/callback',
+     *   redirectUri: 'https://myapp.example.com/oauth/callback',
      *   clientId: process.env.ASSINAFY_CLIENT_ID!,
-     *   clientSecret: process.env.ASSINAFY_CLIENT_SECRET,
+     *   clientSecret: process.env.ASSINAFY_CLIENT_SECRET!,
      * });
      * ```
      */
@@ -545,6 +556,12 @@ export class OAuthResource extends BaseResource {
      * only expires if it goes 30 days without a refresh; after that the user
      * has to reconnect.
      *
+     * Request body (`application/x-www-form-urlencoded`; omit `client_secret`
+     * for public applications):
+     * ```text
+     * grant_type=refresh_token&refresh_token=refresh_token_example&client_id=client_example&client_secret=secret_example&resource=https%3A%2F%2Fapi.assinafy.com.br
+     * ```
+     *
      * @param options - Refresh options.
      * @param options.refreshToken - The current refresh token.
      * @param options.clientId - The application's `client_id`.
@@ -575,7 +592,7 @@ export class OAuthResource extends BaseResource {
      * const tokens = await client.oauth.refreshToken({
      *   refreshToken: connection.refreshToken,
      *   clientId: process.env.ASSINAFY_CLIENT_ID!,
-     *   clientSecret: process.env.ASSINAFY_CLIENT_SECRET,
+     *   clientSecret: process.env.ASSINAFY_CLIENT_SECRET!,
      * });
      * await connection.save({ refreshToken: tokens.refresh_token });
      * ```
@@ -636,7 +653,7 @@ export class OAuthResource extends BaseResource {
      *   token: connection.refreshToken,
      *   tokenTypeHint: 'refresh_token',
      *   clientId: process.env.ASSINAFY_CLIENT_ID!,
-     *   clientSecret: process.env.ASSINAFY_CLIENT_SECRET,
+     *   clientSecret: process.env.ASSINAFY_CLIENT_SECRET!,
      * });
      * ```
      */
@@ -687,8 +704,8 @@ export class OAuthResource extends BaseResource {
      *   "email_verified": true
      * }
      * ```
-     * `sub` is the stable user identifier; the rest are `null` when their scope
-     * was not granted.
+     * `sub` is the stable user identifier; other claims may be omitted or
+     * `null` when their scope was not granted.
      * @throws {ValidationError} If `accessToken` is supplied but empty.
      * @throws {ApiError} `401` when the token is missing, expired or revoked;
      * `403` when the `openid` scope was not granted — its `WWW-Authenticate`
@@ -897,10 +914,11 @@ function toSearchParams(
     assertRecord(params, 'callback parameters');
     const search = new URLSearchParams();
     for (const [key, value] of Object.entries(params)) {
-        // Express repeats a duplicated query key as an array; the first value
-        // is the one the browser sent first, and OAuth defines no repeats.
-        const first = Array.isArray(value) ? value[0] : value;
-        if (typeof first === 'string') search.set(key, first);
+        // Preserve Express-style repeats so callback validation can reject an
+        // ambiguous response instead of choosing a value another parser won't.
+        for (const item of Array.isArray(value) ? value : [value]) {
+            if (typeof item === 'string') search.append(key, item);
+        }
     }
     return search;
 }

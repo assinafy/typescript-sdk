@@ -504,6 +504,28 @@ export class AssignmentResource extends BaseResource {
      * `DigitalCertificate` costs two credits, requires the feature plus a
      * signer `government_id`, and that signer must be alone in its step.
      *
+     * Request body (`application/json`):
+     * ```jsonc
+     * {
+     *   "method": "virtual",
+     *   "signers": [
+     *     {
+     *       "id": "signer_example",
+     *       "verification_method": "Email",
+     *       "notification_methods": [
+     *         "Email"
+     *       ],
+     *       "step": 1
+     *     }
+     *   ],
+     *   "message": "Please sign this document.",
+     *   "expires_at": "2027-12-31T23:59:59Z",
+     *   "copy_receivers": [
+     *     "copy_signer_example"
+     *   ]
+     * }
+     * ```
+     *
      * @param documentId - The document to request signatures on.
      * @param payload - Signers plus optional `method` (defaults to `virtual`),
      * `message`, `expires_at`, `copy_receivers` (existing signer IDs, not
@@ -625,6 +647,21 @@ export class AssignmentResource extends BaseResource {
      * email notification, and 0.45 for WhatsApp notification; a digital
      * certificate charge is added on top of its notification cost.
      *
+     * Request body (`application/json`):
+     * ```jsonc
+     * {
+     *   "method": "virtual",
+     *   "signers": [
+     *     {
+     *       "verification_method": "Email",
+     *       "notification_methods": [
+     *         "Email"
+     *       ]
+     *     }
+     *   ]
+     * }
+     * ```
+     *
      * @param documentId - The document the assignment would be created on.
      * @param payload - `method` plus channel-only signer descriptors and/or
      * `collect`-mode `entries`. Create-only fields and signer IDs are not part
@@ -682,6 +719,13 @@ export class AssignmentResource extends BaseResource {
      * Sends `{ expires_at }` verbatim. Use an ISO-8601 date/time string; `null`
      * is retained as a compatibility value and, unlike ordinary nullable
      * inputs, is intentionally not stripped from the body.
+     *
+     * Request body (`application/json`):
+     * ```jsonc
+     * {
+     *   "expires_at": "2027-12-31T23:59:59Z"
+     * }
+     * ```
      *
      * @param documentId - The document the assignment belongs to.
      * @param assignmentId - The assignment to update.

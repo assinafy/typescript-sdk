@@ -296,6 +296,13 @@ export class DocumentResource extends BaseResource {
      * {@link DocumentResource.upload} — that avoids the extra round-trip and
      * the processing race entirely.
      *
+     * Request body (`application/json`):
+     * ```jsonc
+     * {
+     *   "name": "Service agreement.pdf"
+     * }
+     * ```
+     *
      * @param documentId - The document to rename.
      * @param name - The new display name (max 255 chars), e.g.
      * `'Service agreement.pdf'`. The API removes diacritics and replaces
@@ -725,6 +732,15 @@ export class DocumentResource extends BaseResource {
      * overwrites the existing set — use
      * {@link DocumentResource.addTags} to append.
      *
+     * Request body (`application/json`):
+     * ```jsonc
+     * {
+     *   "tags": [
+     *     "tag_example"
+     *   ]
+     * }
+     * ```
+     *
      * @param documentId - The document to retag.
      * @param tags - The complete desired set of tag IDs (`[]` clears all).
      * @param accountId - Override the client's default account ID.
@@ -769,6 +785,15 @@ export class DocumentResource extends BaseResource {
      * `tags` is a non-empty array of tag **IDs**. Attaching an ID already
      * present is a no-op. To replace the whole set instead, use
      * {@link DocumentResource.replaceTags}.
+     *
+     * Request body (`application/json`):
+     * ```jsonc
+     * {
+     *   "tags": [
+     *     "tag_example"
+     *   ]
+     * }
+     * ```
      *
      * @param documentId - The document to tag.
      * @param tags - Tag IDs to attach (must be non-empty).
@@ -852,6 +877,35 @@ export class DocumentResource extends BaseResource {
      * maps every template `role_id` to an existing account signer `id`, and
      * `options` may add `name`, `message`, `expires_at`, `editor_fields`, and
      * tag names in `tags` (unknown names are created automatically).
+     *
+     * Request body (`application/json`):
+     * ```jsonc
+     * {
+     *   "signers": [
+     *     {
+     *       "role_id": "signing_role_example",
+     *       "id": "signer_example",
+     *       "verification_method": "Email",
+     *       "notification_methods": [
+     *         "Email"
+     *       ],
+     *       "step": 1
+     *     }
+     *   ],
+     *   "name": "Service agreement.pdf",
+     *   "message": "Please sign this document.",
+     *   "expires_at": "2027-12-31T23:59:59Z",
+     *   "editor_fields": [
+     *     {
+     *       "field_id": "editor_field_example",
+     *       "value": "Example Company"
+     *     }
+     *   ],
+     *   "tags": [
+     *     "Contracts"
+     *   ]
+     * }
+     * ```
      *
      * @param templateId - The template to instantiate.
      * @param signers - Role-to-signer bindings (each with `role_id` and `id`,
@@ -946,6 +1000,21 @@ export class DocumentResource extends BaseResource {
      * balances before calling {@link DocumentResource.createFromTemplate}.
      * `DigitalCertificate` adds two credits per signer and has the same feature,
      * `government_id`, and signing-step prerequisites as document creation.
+     *
+     * Request body (`application/json`):
+     * ```jsonc
+     * {
+     *   "signers": [
+     *     {
+     *       "role_id": "signing_role_example",
+     *       "verification_method": "Email",
+     *       "notification_methods": [
+     *         "Email"
+     *       ]
+     *     }
+     *   ]
+     * }
+     * ```
      *
      * @param templateId - The template that would be instantiated.
      * @param signers - One channel descriptor per template role. Cost requests
@@ -1135,6 +1204,15 @@ export class DocumentResource extends BaseResource {
      * that legacy shape only when the server explicitly reports that
      * `channel`/`recipient` is required.
      *
+     * Request body (`application/json`):
+     * ```jsonc
+     * { "email": "signer@example.com" }
+     * ```
+     * Compatibility fallback or explicit-channel body:
+     * ```jsonc
+     * { "recipient": "signer@example.com", "channel": "email" }
+     * ```
+     *
      * @param documentId - The document to send the token for.
      * @param recipient - The signer's email address (or WhatsApp number when an
      * explicit channel is supplied).
@@ -1152,6 +1230,21 @@ export class DocumentResource extends BaseResource {
      * ```
      */
     async sendToken(documentId: string, email: string): Promise<void>;
+    /**
+     * Send a signing token through an explicit channel
+     * (`PUT /public/documents/{documentId}/send-token`).
+     * Sends JSON `{ "recipient": "+5511999998888", "channel": "whatsapp" }`.
+     * @param documentId - Document identifier.
+     * @param recipient - Controlled email address or WhatsApp number.
+     * @param channel - Delivery channel, `email` or `whatsapp`.
+     * @returns Nothing; the acknowledgement body is discarded.
+     * @throws {ValidationError} If an argument is empty.
+     * @throws {ApiError} If delivery is rejected.
+     * @example
+     * ```ts
+     * await client.documents.sendToken('doc-1', 'signer@example.com', 'email');
+     * ```
+     */
     async sendToken(
         documentId: string,
         recipient: string,

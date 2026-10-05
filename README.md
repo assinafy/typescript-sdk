@@ -178,7 +178,7 @@ const tokens = await client.oauth.exchangeCode({
   codeVerifier: sessao.oauth.codeVerifier,
   redirectUri: 'https://meuapp.exemplo.com.br/oauth/callback',
   clientId: process.env.ASSINAFY_CLIENT_ID!,
-  clientSecret: process.env.ASSINAFY_CLIENT_SECRET,   // só aplicações confidenciais
+  clientSecret: process.env.ASSINAFY_CLIENT_SECRET!,   // só aplicações confidenciais
 });
 // → { access_token, token_type: 'Bearer', expires_in: 3600,
 //     scope: 'documents:read documents:write',
@@ -193,7 +193,7 @@ const accountId = data[0]?.id;                        // guarde junto com os tok
 const renovado = await client.oauth.refreshToken({
   refreshToken: conexao.refreshToken,
   clientId: process.env.ASSINAFY_CLIENT_ID!,
-  clientSecret: process.env.ASSINAFY_CLIENT_SECRET,
+  clientSecret: process.env.ASSINAFY_CLIENT_SECRET!,
 });
 await conexao.save({ refreshToken: renovado.refresh_token });  // ANTES de usar
 
@@ -203,7 +203,7 @@ await client.oauth.revokeToken({
   token: atual.refreshToken,
   tokenTypeHint: 'refresh_token',
   clientId: process.env.ASSINAFY_CLIENT_ID!,
-  clientSecret: process.env.ASSINAFY_CLIENT_SECRET,
+  clientSecret: process.env.ASSINAFY_CLIENT_SECRET!,
 });
 ```
 
@@ -359,7 +359,7 @@ nome de arquivo dessa parte) e uma parte JSON `metadata` opcional, para deploys 
 resposta de sucesso é `IDocumentUploadResponse`:
 
 ```ts
-{
+type DocumentUploadShape = {
   resource?: string;
   id: string;
   account_id: string;
@@ -383,7 +383,7 @@ resposta de sucesso é `IDocumentUploadResponse`:
   is_closed: boolean;
   decline_reason: string | null;
   declined_by: ISigner | null;
-}
+};
 ```
 
 `DocumentStatus` cobre `uploading`, `uploaded`, `metadata_processing`, `metadata_ready`,
@@ -418,7 +418,7 @@ const signatarioB = await client.signers.create({
 O corpo de rede é `{ full_name, email }`. Cada resposta é um `ISigner`:
 
 ```ts
-{
+type SignerShape = {
   resource?: string;
   id: string;
   full_name: string;
@@ -430,7 +430,7 @@ O corpo de rede é `{ full_name, email }`. Cada resposta é um `ISigner`:
   has_initial?: boolean;              // só na resposta de signers/self
   is_signature_reusable?: boolean;    // só na resposta de signers/self
   metadata?: Record<string, unknown>;
-}
+};
 ```
 
 Quando há e-mail, `signers.create()` primeiro procura esse endereço no workspace e reaproveita o
@@ -486,7 +486,7 @@ const assignment = await client.assignments.create(enviado.id, {
 A requisição devolve um `IAssignment`:
 
 ```ts
-{
+type AssignmentShape = {
   resource?: string;
   id: string;
   sender_email?: string;
@@ -503,7 +503,7 @@ A requisição devolve um `IAssignment`:
     signers: Array<ISigner & { completed?: boolean }>;
   };
   signing_urls?: Array<{ signer_id: string; url: string }>;
-}
+};
 ```
 
 As URLs e as mensagens entregues contêm credenciais do signatário; trate-as como segredo.
@@ -531,7 +531,7 @@ await clienteSignatario.signerDocuments.verifyEmail({
 const confirmado = await clienteSignatario.signerDocuments.confirmData(
   enviado.id,
   accessCode,
-  { full_name: self.full_name, email: self.email ?? undefined },
+  { full_name: self.full_name, ...(self.email === null ? {} : { email: self.email }) },
 ); // ISigner
 
 const assinavel = await clienteSignatario.signerDocuments.getAssignment(accessCode, true);
@@ -588,9 +588,9 @@ const doc = await client.documents.upload(
   { filePath: './contrato.pdf' },
   { name: 'Contrato de prestação', metadata: { tipo: 'servico' } },
 );
-// `name` e `metadata` são partes multipart de compatibilidade, fora do schema
-// oficial (que só define o arquivo). `name` é opcional e assume o nome do
-// arquivo. A API deriva o nome de exibição do arquivo enviado e acrescenta
+// `metadata` é uma parte multipart de compatibilidade fora do schema oficial.
+// `name` define o nome do arquivo na parte multipart; não é enviado como campo
+// separado. Se omitido, usa o nome do arquivo original. A API acrescenta
 // `.pdf` quando falta, então o documento acima é salvo como
 // 'Contrato de prestação.pdf'. A API translitera acentos
 // ('Contrato de Serviço' → 'Contrato de Servico.pdf').
@@ -1138,7 +1138,7 @@ primeiros 2.000 caracteres do corpo de resposta do receptor.
 Cada item do histórico (ou resultado de reenvio) é um `IWebhookDispatch`:
 
 ```ts
-{
+type WebhookDispatchShape = {
   resource?: string;
   id: string;
   event: string;
@@ -1151,13 +1151,13 @@ Cada item do histórico (ou resultado de reenvio) é um `IWebhookDispatch`:
   error: string | null;
   created_at: string;
   updated_at?: string;
-}
+};
 ```
 
 Todo corpo de entrega usa este envelope:
 
 ```ts
-{
+type WebhookPayloadShape = {
   id: number;                         // use para processamento idempotente
   event: string;
   message: string | null;
@@ -1167,7 +1167,7 @@ Todo corpo de entrega usa este envelope:
   subject: { type: 'User' | 'Signer' | 'Account' | 'Document' | 'Template'; [key: string]: unknown };
   object: { type: 'User' | 'Signer' | 'Account' | 'Document' | 'Template'; [key: string]: unknown };
   account_id: string;
-}
+};
 ```
 
 Os valores por evento são:
@@ -1371,23 +1371,23 @@ try {
 | Sandbox | `https://sandbox.assinafy.com.br/v1` |
 
 O sandbox tem servidor de autorização próprio em `https://auth-sandbox.assinafy.com.br`, com a tela
-de consentimento em `/oauth/authorize`. Os documentos de descoberta dele não são alcançáveis:
-o nginx recusa caminhos iniciados por ponto, então informe os endpoints explicitamente:
+de consentimento em `/oauth/authorize`. A descoberta está disponível e seleciona esse servidor
+automaticamente a partir do `baseUrl`:
 
 ```ts
 const client = new AssinafyClient({ baseUrl: 'https://sandbox.assinafy.com.br/v1' });
-
+const metadados = await client.oauth.getAuthorizationServerMetadata();
 const requisicao = await client.oauth.createAuthorizationUrl({
   clientId: process.env.ASSINAFY_CLIENT_ID!,
   redirectUri: 'https://meuapp.exemplo.com.br/oauth/callback',
-  scopes: ['documents:read'],
-  issuer: 'https://auth-sandbox.assinafy.com.br',
-  authorizationEndpoint: 'https://auth-sandbox.assinafy.com.br/oauth/authorize',
+  scopes: ['documents:read', 'account:read', 'offline_access'],
 });
 ```
 
-Os endpoints de token, revogação e userinfo seguem o `baseUrl` configurado. Confirme que o sandbox
-os expõe antes de rodar a etapa de troca por lá — veja
+Cadastre o aplicativo no ambiente correspondente. Produção e sandbox têm emissores, client IDs,
+credenciais e workspaces próprios: mantenha cada conexão inteira no mesmo ambiente. Token,
+revogação e userinfo usam o `baseUrl` configurado. Para testar localmente, exponha somente o
+callback por um túnel HTTPS, registre a URL exata e revogue os tokens ao terminar. Veja
 [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md).
 
 ## Desenvolvimento

@@ -14,7 +14,7 @@ import { SDK_USER_AGENT } from '../src/support/transport';
 const DEFAULT_SPEC_URL = 'https://api.assinafy.com.br/v1/docs/openapi.json';
 const COVERAGE_FILE = new URL('../docs/API_COVERAGE.md', import.meta.url);
 const HTTP_METHODS = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']);
-const EXPECTED_CONTRACT_FINGERPRINT = '7bbdd9880c14bedc7af54a819436150eafcff90383c1a6bd521da53b48b95bb4';
+const EXPECTED_CONTRACT_FINGERPRINT = 'ad19b5f87da959e237882232e7c7477a10e970faa964cac79a252b93fc1ec546';
 const NON_CONTRACT_KEYS = new Set([
     'description',
     'summary',
@@ -263,19 +263,28 @@ function validateProductionStructure(spec: OpenApiDocument): number {
             ].every((scope) => scope in oauthScopes),
         'OAuth scope catalog changed',
     );
-    const grantTypes = at(
-        spec,
-        'paths',
-        '/v1/oauth/token',
-        'post',
-        'requestBody',
-        'content',
-        'application/json',
-        'schema',
-        'properties',
-        'grant_type',
-        'enum',
-    );
+    for (const [path, schema] of [
+        ['/v1/oauth/token', 'OAuthTokenRequest'],
+        ['/v1/oauth/revoke', 'OAuthRevokeRequest'],
+    ] as const) {
+        // The SDK sends these bodies form-encoded (RFC 6749, RFC 7009).
+        requireValue(
+            at(
+                spec,
+                'paths',
+                path,
+                'post',
+                'requestBody',
+                'content',
+                'application/x-www-form-urlencoded',
+                'schema',
+                '$ref',
+            ) === `#/components/schemas/${schema}`,
+            `${path} must accept a form-encoded ${schema}`,
+        );
+    }
+    const tokenProperties = at(spec, 'components', 'schemas', 'OAuthTokenRequest', 'properties');
+    const grantTypes = at(tokenProperties, 'grant_type', 'enum');
     requireValue(
         Array.isArray(grantTypes)
             && grantTypes.length === 3
@@ -286,18 +295,7 @@ function validateProductionStructure(spec: OpenApiDocument): number {
         'OAuth token endpoint grant types changed',
     );
     requireValue(
-        isRecord(at(
-            spec,
-            'paths',
-            '/v1/oauth/token',
-            'post',
-            'requestBody',
-            'content',
-            'application/json',
-            'schema',
-            'properties',
-            'code_verifier',
-        )),
+        isRecord(at(tokenProperties, 'code_verifier')),
         'OAuth token endpoint must keep PKCE code_verifier',
     );
     const statsProperties = at(spec, 'components', 'schemas', 'DocumentStatsRow', 'properties');

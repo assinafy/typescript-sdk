@@ -350,6 +350,25 @@ describe('OAuthResource.readAuthorizationCallback', () => {
         }
     });
 
+    test('rejects repeated protocol parameters in every callback representation', () => {
+        for (const key of ['state', 'iss', 'code', 'error', 'error_description']) {
+            const query = new URLSearchParams({ code: 'the-code', state: expected.state, iss: ISSUER });
+            query.set(key, 'first');
+            query.append(key, 'second');
+            const shapes = [
+                query,
+                query.toString(),
+                new URL(`https://myapp.example.com/oauth/callback?${query}`),
+                { code: 'the-code', state: expected.state, iss: ISSUER, [key]: ['first', 'second'] },
+            ];
+            for (const shape of shapes) {
+                expect(() => oauth.readAuthorizationCallback(shape, expected)).toThrow(
+                    `OAuth callback must not repeat ${key}`,
+                );
+            }
+        }
+    });
+
     test('refuses a response whose state is missing or does not match', () => {
         for (const params of [
             { code: 'c' },
@@ -422,6 +441,13 @@ describe('OAuthResource.readAuthorizationCallback', () => {
 });
 
 describe('OAuthResource token endpoints', () => {
+    test('OAuth error promotion retains an authentication challenge', () => {
+        const error = ApiError.fromResponse(401, { error: 'invalid_client' });
+        error.challenge = { scheme: 'Bearer', error: 'invalid_token' };
+        const upgraded = OAuthError.upgrade(error);
+        expect(upgraded).toBeInstanceOf(OAuthError);
+        expect((upgraded as OAuthError).challenge).toEqual(error.challenge);
+    });
     const exchange = {
         code: 'the-code',
         codeVerifier: 'a'.repeat(43),
