@@ -1,13 +1,18 @@
 import type {
     IAuthenticatedUser,
+    IConfirmTotpPayload,
     IDocumentStatsParams,
     IDocumentStatsRow,
+    IMfaReauth,
+    IMfaRecoveryCodes,
+    IMfaStatus,
     INotificationPreferences,
+    ITotpEnrollment,
     IUpdateNotificationPreferences,
 } from '../types';
 import { ValidationError } from '../errors';
 import { documentStatsParams } from '../support/stats';
-import { assertRecord } from '../utils';
+import { assertNonEmptyString, assertRecord } from '../utils';
 import { BaseResource } from './base';
 
 /** Operations for the authenticated Assinafy user. */
@@ -197,6 +202,189 @@ export class UserResource extends BaseResource {
         return this.call('Failed to update notification preferences', () =>
             this.http.put('/users/self/notification-preferences', preferences),
         );
+    }
+
+    /**
+     * List the user's enrolled two-factor methods (`GET /users/self/mfa`).
+     *
+     * @returns Methods and unused recovery-code count:
+     * ```jsonc
+     * {
+     *   "methods": [
+     *     {
+     *       "id": "a1b2c3d4e5f60718293a4b5c6d7e8f90",
+     *       "type": "Totp",
+     *       "label": "My phone",
+     *       "confirmed_at": "2026-09-09T14:21:03Z",
+     *       "last_used_at": "2026-09-09T18:02:44Z"
+     *     }
+     *   ],
+     *   "recovery_codes_remaining": 8
+     * }
+     * ```
+     * @throws {ApiError} `401` when credentials are missing or invalid.
+     *
+     * @example
+     * ```ts
+     * const { methods } = await client.users.getMfa();
+     * const enabled = methods.some((method) => method.confirmed_at !== null);
+     * ```
+     */
+    async getMfa(): Promise<IMfaStatus> {
+        return this.call('Failed to fetch two-factor methods', () =>
+            this.http.get('/users/self/mfa'),
+        );
+    }
+
+    /**
+     * Start authenticator-app enrollment (`POST /users/self/mfa/totp`).
+     * Two-factor authentication is not active until
+     * {@link UserResource.confirmTotpEnrollment} succeeds.
+     *
+     * Request body (`application/json`): `{ "label": "My phone" }` (optional).
+     *
+     * @param label - Optional name for the device.
+     * @returns The pending enrollment. `secret` is returned only here:
+     * ```jsonc
+     * {
+     *   "id": "a1b2c3d4e5f60718293a4b5c6d7e8f90",
+     *   "secret": "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ",
+     *   "provisioning_uri": "otpauth://totp/user%40example.com?issuer=Assinafy&secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ"
+     * }
+     * ```
+     * @throws {ValidationError} If `label` is not a string.
+     * @throws {ApiError} `401` when credentials are missing or invalid.
+     *
+     * @example
+     * ```ts
+     * const enrollment = await client.users.startTotpEnrollment('My phone');
+     * showQrCode(enrollment.provisioning_uri);
+     * ```
+     */
+    async startTotpEnrollment(label?: string): Promise<ITotpEnrollment> {
+        if (label !== undefined && typeof label !== 'string') {
+            throw new ValidationError('label must be a string');
+        }
+        return this.call('Failed to start authenticator enrollment', () =>
+            this.http.post('/users/self/mfa/totp', label === undefined ? {} : { label }),
+        );
+    }
+
+    /**
+     * Activate an authenticator with a live code from the new device
+     * (`PUT /users/self/mfa/totp/confirm`). From then on every login needs a
+     * second factor.
+     *
+     * Replacing an already confirmed authenticator soft-deletes the old one,
+     * reissues recovery codes, and additionally requires `password` or
+     * `reauth_code`. First-time enrollment needs neither.
+     *
+     * Request body (`application/json`):
+     * ```jsonc
+     * {
+     *   "id": "a1b2c3d4e5f60718293a4b5c6d7e8f90",
+     *   "code": "123456",           // from the NEW device
+     *   "password": "example-pass", // only when replacing; or:
+     *   "reauth_code": "654321"     // code from the CURRENT device, or a recovery code
+     * }
+     * ```
+     *
+     * @param payload - Enrollment `id`, new-device `code`, and re-authentication
+     * when replacing a method.
+     * @returns The recovery codes, shown only once:
+     * ```jsonc
+     * {
+     *   "recovery_codes": ["ABCD-EFGH-JKMN", "PQRS-TUVW-XYZ2"] // ten in total
+     * }
+     * ```
+     * @throws {ValidationError} If `id` or `code` is empty.
+     * @throws {ApiError} `400` for a wrong code or missing re-authentication;
+     * `404` for an unknown enrollment.
+     *
+     * @example
+     * ```ts
+     * const { recovery_codes } = await client.users.confirmTotpEnrollment({
+     *   id: enrollment.id,
+     *   code: '123456',
+     * });
+     * ```
+     */
+    async confirmTotpEnrollment(payload: IConfirmTotpPayload): Promise<IMfaRecoveryCodes> {
+        assertRecord(payload, 'payload');
+        assertNonEmptyString(payload.id, 'id');
+        assertNonEmptyString(payload.code, 'code');
+        return this.call('Failed to confirm authenticator enrollment', () =>
+            this.http.put('/users/self/mfa/totp/confirm', payload),
+        );
+    }
+
+    /**
+     * Issue ten fresh recovery codes and invalidate the previous set
+     * (`POST /users/self/mfa/recovery-codes`).
+     *
+     * Request body (`application/json`): `{ "password": "…" }` or
+     * `{ "code": "123456" }`.
+     *
+     * @param proof - Current password, or a live authenticator / recovery code.
+     * @returns The new codes, shown only once:
+     * ```jsonc
+     * {
+     *   "recovery_codes": ["ABCD-EFGH-JKMN", "PQRS-TUVW-XYZ2"] // ten in total
+     * }
+     * ```
+     * @throws {ValidationError} If neither `password` nor `code` is given.
+     * @throws {ApiError} `400` when the proof is rejected.
+     *
+     * @example
+     * ```ts
+     * const { recovery_codes } = await client.users.regenerateRecoveryCodes({ code: '123456' });
+     * ```
+     */
+    async regenerateRecoveryCodes(proof: IMfaReauth): Promise<IMfaRecoveryCodes> {
+        validateReauth(proof);
+        return this.call('Failed to regenerate recovery codes', () =>
+            this.http.post('/users/self/mfa/recovery-codes', proof),
+        );
+    }
+
+    /**
+     * Remove an enrolled two-factor method (`DELETE /users/self/mfa/{id}`).
+     * Removing the last method also discards the recovery codes.
+     *
+     * Request body (`application/json`): `{ "password": "…" }` or
+     * `{ "code": "123456" }`.
+     *
+     * @param methodId - The method ID from {@link UserResource.getMfa}.
+     * @param proof - Current password, or a live authenticator / recovery code.
+     * @returns Whether two-factor authentication is still on:
+     * ```jsonc
+     * { "is_mfa_enabled": false }
+     * ```
+     * @throws {ValidationError} If `methodId` is empty or no proof is given.
+     * @throws {ApiError} `400` when the proof is rejected; `404` for an unknown
+     * method.
+     *
+     * @example
+     * ```ts
+     * await client.users.deleteMfaMethod(method.id, { password });
+     * ```
+     */
+    async deleteMfaMethod(
+        methodId: string,
+        proof: IMfaReauth,
+    ): Promise<{ is_mfa_enabled: boolean }> {
+        const id = this.pathSegment(methodId, 'Method ID');
+        validateReauth(proof);
+        return this.call('Failed to remove two-factor method', () =>
+            this.http.delete(`/users/self/mfa/${id}`, { data: proof }),
+        );
+    }
+}
+
+function validateReauth(proof: IMfaReauth): void {
+    assertRecord(proof, 'proof');
+    if (![proof.password, proof.code].some((value) => typeof value === 'string' && value.trim())) {
+        throw new ValidationError('password or code is required');
     }
 }
 

@@ -127,6 +127,9 @@ export class AuthenticationResource extends BaseResource {
      * }
      * ```
      * @throws {ValidationError} If `email` or `password` is missing.
+     * When the user has two-factor authentication enabled the response carries
+     * an `mfa_token` instead of a usable session; finish with
+     * {@link AuthenticationResource.verifyMfa}.
      * @throws {ApiError} `400` if the credentials are rejected.
      *
      * @example
@@ -142,6 +145,52 @@ export class AuthenticationResource extends BaseResource {
         assertNonEmptyString(password, 'password');
         return this.call('Login failed', () =>
             this.publicHttp.post('/login', { email, password }),
+        );
+    }
+
+    /**
+     * Complete a two-factor login (`POST /authentication/mfa/verify`). Sent
+     * without credentials.
+     *
+     * When the user has two-factor authentication enabled, `login()` returns
+     * an `mfa_token`; exchange it here, within 5 minutes, for the session. The
+     * challenge is single-use.
+     *
+     * Request body (`application/json`):
+     * ```jsonc
+     * {
+     *   "mfa_token": "<token from login>",
+     *   "code": "123456" // authenticator code, or a recovery code such as "ABCD-EFGH-JKMN"
+     * }
+     * ```
+     *
+     * @param mfaToken - The `mfa_token` returned by {@link AuthenticationResource.login}.
+     * @param code - A 6-digit authenticator code or an unused recovery code.
+     * @returns The same session as a password-only login:
+     * ```jsonc
+     * {
+     *   "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9…",
+     *   "user": { "id": "md3j6p9w8b7y6qvqaoy5er42", "email": "user@example.com" },
+     *   "accounts": [{ "id": "acc_example", "name": "Empresa Exemplo", "roles": ["Owner"] }]
+     * }
+     * ```
+     * @throws {ValidationError} If either argument is empty.
+     * @throws {ApiError} `400` for an invalid or used code; `401` when the
+     * challenge expired, was used, or too many codes were tried.
+     *
+     * @example
+     * ```ts
+     * let session = await client.auth.login('user@example.com', password);
+     * if (session.mfa_token) {
+     *   session = await client.auth.verifyMfa(session.mfa_token, await promptForCode());
+     * }
+     * ```
+     */
+    async verifyMfa(mfaToken: string, code: string): Promise<ILoginResponse> {
+        assertNonEmptyString(mfaToken, 'mfa_token');
+        assertNonEmptyString(code, 'code');
+        return this.call('Two-factor verification failed', () =>
+            this.publicHttp.post('/authentication/mfa/verify', { mfa_token: mfaToken, code }),
         );
     }
 

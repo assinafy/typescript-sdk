@@ -49,7 +49,7 @@ function mockHttp(
         },
         post: async (url: string, body?: unknown, config?: unknown) => {
             calls.push({ method: 'POST', url, body, config });
-            if (url === '/login' || url === '/authentication/social-login') {
+            if (url === '/login' || url === '/authentication/social-login' || url === '/authentication/mfa/verify') {
                 return response(LOGIN_RESPONSE);
             }
             if (url === '/users/api-keys') return response({ api_key: 'fresh-key' });
@@ -102,6 +102,25 @@ describe('AuthenticationResource', () => {
             },
         ]);
         expect(result).toEqual(LOGIN_RESPONSE);
+    });
+
+    test('verifyMfa exchanges the login challenge for a session', async () => {
+        const { http, calls } = mockHttp();
+        const auth = new AuthenticationResource(http);
+
+        await expect(auth.verifyMfa('', '123456')).rejects.toThrow(ValidationError);
+        await expect(auth.verifyMfa('challenge', ' ')).rejects.toThrow(ValidationError);
+        expect(calls).toHaveLength(0);
+
+        expect(await auth.verifyMfa('challenge', 'ABCD-EFGH-JKMN')).toEqual(LOGIN_RESPONSE);
+        expect(calls).toEqual([
+            {
+                method: 'POST',
+                url: '/authentication/mfa/verify',
+                body: { mfa_token: 'challenge', code: 'ABCD-EFGH-JKMN' },
+                config: undefined,
+            },
+        ]);
     });
 
     test('socialLogin validates and forwards the complete provider payload', async () => {

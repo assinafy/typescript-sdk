@@ -36,7 +36,7 @@ export class SignerResource extends BaseResource {
      *   "full_name": "Example Signer",
      *   "email": "signer@example.com",
      *   "whatsapp_phone_number": "+5548999990000",
-     *   "cpf": "39053344705",
+     *   "government_id": "390.533.447-05",
      *   "metadata": {
      *     "reference": "customer_example"
      *   }
@@ -44,12 +44,13 @@ export class SignerResource extends BaseResource {
      * ```
      *
      * @param payload - The signer to create. The official fields are required
-     * `full_name` plus optional `email` and E.164 `whatsapp_phone_number`.
-     * `phone`, `cpf`, and `metadata` are compatibility extensions; the SDK
-     * normalizes the phone alias and strips non-digits from CPF before sending.
+     * `full_name` plus optional `email`, E.164 `whatsapp_phone_number` and
+     * `government_id` (CPF, or a CNPJ that may contain letters; the API strips
+     * formatting). `phone`, `cpf`, and `metadata` are compatibility extensions;
+     * the SDK normalizes the phone alias and strips non-digits from CPF.
      * @param accountId - Override the client's default account ID.
-     * @returns The created (or reused) signer. Note the response **never echoes
-     * `cpf` back**, even when one was sent:
+     * @returns The created (or reused) signer. `government_id` comes back
+     * normalized; `cpf` is **never echoed back**:
      * ```jsonc
      * {
      *   "resource": "signer",
@@ -57,6 +58,7 @@ export class SignerResource extends BaseResource {
      *   "full_name": "Ana Souza",
      *   "email": "ana@example.com",
      *   "whatsapp_phone_number": null,
+     *   "government_id": "39053344705",
      *   "has_accepted_terms": false
      * }
      * ```
@@ -70,7 +72,7 @@ export class SignerResource extends BaseResource {
      * const signer = await client.signers.create({
      *   full_name: 'Ana Souza',
      *   email: 'ana@example.com',
-     *   cpf: '390.533.447-05', // sent as '39053344705', never echoed back
+     *   government_id: '390.533.447-05', // returned as '39053344705'
      * });
      *
      * // A whatsapp-only signer (no email):
@@ -140,6 +142,7 @@ export class SignerResource extends BaseResource {
      *   "full_name": "Example Signer",
      *   "email": "signer@example.com",
      *   "whatsapp_phone_number": null,
+     *   "government_id": "12ABC34501DE35",
      *   "has_accepted_terms": false
      * }
      * ```
@@ -211,13 +214,14 @@ export class SignerResource extends BaseResource {
      *   "full_name": "Example Signer",
      *   "email": "signer@example.com",
      *   "whatsapp_phone_number": "+5548999990000",
-     *   "government_id": "39053344705"
+     *   "government_id": "12.ABC.345/01DE-35"
      * }
      * ```
      *
      * @param signerId - The signer to update.
-     * @param payload - Fields to change. The official `government_id` field and
-     * legacy `cpf` extension are stripped to digits before sending.
+     * @param payload - Fields to change. `government_id` is sent as given (the
+     * API normalizes it and keeps CNPJ letters); the legacy `cpf` extension is
+     * stripped to digits.
      * @param accountId - Override the client's default account ID.
      * @returns The updated signer (as with create, `cpf` is never echoed back):
      * ```jsonc
@@ -227,6 +231,7 @@ export class SignerResource extends BaseResource {
      *   "full_name": "Ana Souza Lima",
      *   "email": "ana@example.com",
      *   "whatsapp_phone_number": null,
+     *   "government_id": "12ABC34501DE35",
      *   "has_accepted_terms": false
      * }
      * ```
@@ -360,6 +365,7 @@ export function validateCreateSignerPayload(payload: ICreateSignerPayload): void
     validateOptionalPhone(phone);
     if (payload.metadata !== undefined) serializeJsonRecord(payload.metadata, 'metadata');
     validateOptionalDigits(payload.cpf, 'cpf');
+    validateOptionalDigits(payload.government_id, 'government_id');
 }
 
 /** Validate the fields supplied to a partial signer update. */
@@ -422,8 +428,9 @@ function normaliseSignerPayload(
         normalised['cpf'] = payload.cpf.replace(/\D/g, '');
     }
 
-    if ('government_id' in payload && payload.government_id) {
-        normalised['government_id'] = payload.government_id.replace(/\D/g, '');
+    // Sent as given: the API normalizes formatting itself, and a CNPJ may contain letters.
+    if (payload.government_id) {
+        normalised['government_id'] = payload.government_id.trim();
     }
 
     if ('metadata' in payload && payload.metadata !== undefined) {

@@ -366,4 +366,113 @@ describe('WebhookResource', () => {
         ]);
         expect(result).toEqual(DISPATCH);
     });
+
+    test('endpoint methods call the documented routes with the exact bodies', async () => {
+        const ENDPOINT = {
+            id: 'endpoint-1',
+            name: 'ERP',
+            url: 'https://example.com/webhook',
+            email: 'ops@example.com',
+            events: ['document_ready'],
+            is_active: true,
+            signing_enabled: true,
+            created_at: '2026-10-01T12:00:00Z',
+            updated_at: '2026-10-01T12:00:00Z',
+        };
+        const SECRET = { secret: 'whsec_c2VjcmV0' };
+        const calls: Array<{ method: string; url: string; body?: unknown }> = [];
+        const http = {
+            get: async (url: string) => {
+                calls.push({ method: 'GET', url });
+                if (url.endsWith('/secret')) return response(SECRET);
+                return response(url.endsWith('/endpoints') ? [ENDPOINT] : ENDPOINT);
+            },
+            post: async (url: string, body?: unknown) => {
+                calls.push({ method: 'POST', url, body });
+                return response(url.endsWith('/rotate') ? SECRET : ENDPOINT);
+            },
+            put: async (url: string, body?: unknown) => {
+                calls.push({ method: 'PUT', url, body });
+                return response(ENDPOINT);
+            },
+            delete: async (url: string) => {
+                calls.push({ method: 'DELETE', url });
+                return response([]);
+            },
+        } as unknown as AxiosInstance;
+        const resource = new WebhookResource(http, 'account-1');
+        const base = '/accounts/account-1/webhooks/endpoints';
+
+        expect(await resource.listEndpoints()).toEqual([ENDPOINT]);
+        expect(
+            await resource.createEndpoint({
+                url: ENDPOINT.url,
+                email: ENDPOINT.email,
+                name: 'ERP',
+                signing_enabled: true,
+            }),
+        ).toEqual(ENDPOINT);
+        expect(await resource.getEndpoint('endpoint-1')).toEqual(ENDPOINT);
+        expect(await resource.updateEndpoint('endpoint-1', { is_active: false })).toEqual(ENDPOINT);
+        await expect(resource.deleteEndpoint('endpoint-1')).resolves.toBeUndefined();
+        expect(await resource.getEndpointSecret('endpoint-1')).toEqual(SECRET);
+        expect(await resource.rotateEndpointSecret('endpoint-1', 'account-2')).toEqual(SECRET);
+
+        expect(calls).toEqual([
+            { method: 'GET', url: base },
+            {
+                method: 'POST',
+                url: base,
+                body: {
+                    url: ENDPOINT.url,
+                    email: ENDPOINT.email,
+                    name: 'ERP',
+                    signing_enabled: true,
+                    events: DEFAULT_EVENTS,
+                },
+            },
+            { method: 'GET', url: `${base}/endpoint-1` },
+            { method: 'PUT', url: `${base}/endpoint-1`, body: { is_active: false } },
+            { method: 'DELETE', url: `${base}/endpoint-1` },
+            { method: 'GET', url: `${base}/endpoint-1/secret` },
+            {
+                method: 'POST',
+                url: '/accounts/account-2/webhooks/endpoints/endpoint-1/secret/rotate',
+                body: undefined,
+            },
+        ]);
+    });
+
+    test('endpoint methods reject malformed input before any request', async () => {
+        const { http, calls } = mockHttp();
+        const resource = new WebhookResource(http, 'account-1');
+        const valid = { url: 'https://example.com/webhook', email: 'ops@example.com' };
+        const requests = [
+            () => resource.createEndpoint({ ...valid, url: 'ftp://example.com' }),
+            () => resource.createEndpoint({ ...valid, email: 'nope' }),
+            () => resource.createEndpoint({ ...valid, signing_enabled: 'yes' as never }),
+            () => resource.createEndpoint({ ...valid, name: 3 as never }),
+            () => resource.createEndpoint(undefined as never),
+            () => resource.updateEndpoint('endpoint-1', {}),
+            () => resource.updateEndpoint('endpoint-1', { url: undefined } as never),
+            () => resource.updateEndpoint('endpoint-1', { url: 'not a url' }),
+            () => resource.updateEndpoint('endpoint-1', { events: [''] }),
+            () => resource.updateEndpoint('', { is_active: true }),
+            () => resource.getEndpoint(''),
+            () => resource.deleteEndpoint('\uD800'),
+            () => resource.getEndpointSecret('   '),
+            () => resource.rotateEndpointSecret(undefined as never),
+            () => new WebhookResource(http).listEndpoints(),
+        ];
+        for (const request of requests) {
+            await expect(request()).rejects.toBeInstanceOf(ValidationError);
+        }
+        expect(calls).toHaveLength(0);
+    });
+
+    test('listDispatches forwards the endpoint_id filter', async () => {
+        const { http, calls } = mockHttp();
+        await new WebhookResource(http, 'account-1').listDispatches({ endpoint_id: 'endpoint-1' });
+        expect(calls[0]?.config).toEqual({ params: { endpoint_id: 'endpoint-1' } });
+    });
 });

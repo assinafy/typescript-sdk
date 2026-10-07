@@ -4,7 +4,7 @@
 
 TypeScript SDK for the [Assinafy API](https://api.assinafy.com.br/v1/docs) — a Brazilian digital signature platform.
 
-Covers all 93 operations in the current official OpenAPI document: accounts,
+Covers all 106 operations in the current official OpenAPI document: accounts,
 authentication, OAuth 2.1 applications, users, documents, assignments, signers,
 signer-side flows, templates, tags, fields, webhooks, branding, statistics, and
 the high-level `uploadAndRequestSignatures` workflow. Five additional
@@ -232,7 +232,7 @@ await client.oauth.getUserInfo(tokens.access_token); // OIDC claims; needs `open
 | `templates:read` | Read templates |
 | `templates:write` | Create and change templates |
 | `account:read` | Read the workspace's profile, theme and logo |
-| `webhooks:write` | Update or inactivate the workspace's webhook subscription |
+| `webhooks:write` | Create, change, deactivate and delete the workspace's webhook endpoints |
 | `openid` | Receive an `id_token` identifying the user |
 | `profile` | Read the user's name |
 | `email` | Read the user's email and whether it is verified |
@@ -300,7 +300,7 @@ anything for them.
 | `token`         | string   | —                                       | Access token (sent as `Authorization: Bearer`). |
 | `accountId`     | string   | —                                       | Default workspace/account ID.                  |
 | `baseUrl`       | string   | `https://api.assinafy.com.br/v1`        | Absolute API base without credentials, query, or fragment. Must be `https` unless the host is loopback. |
-| `webhookSecret` | string   | —                                       | Opt-in HMAC secret used by `WebhookVerifier`; see its [contract caveat](docs/COMPATIBILITY.md#webhook-signature-verification-is-not-in-the-openapi-contract). |
+| `webhookSecret` | string   | —                                       | Webhook endpoint `whsec_…` secret; enables `webhookVerifier.verifySignature()`. |
 | `timeout`       | number   | `30000`                                 | Request timeout in milliseconds.               |
 | `maxRetries`    | number   | `2`                                     | Auto-retries eligible HTTP 429 responses, honoring `Retry-After`. `0` disables. |
 | `logger`        | `Logger` | no-op                                   | Optional `{debug,info,warn,error}` logger.     |
@@ -331,7 +331,7 @@ const client = AssinafyClient.fromConfig({
 
 ## Endpoint coverage
 
-All 93 operations documented at https://api.assinafy.com.br/v1/docs are
+All 106 operations documented at https://api.assinafy.com.br/v1/docs are
 covered. The table below is the resource-level summary; the detailed operation
 ledger is in [docs/API_COVERAGE.md](docs/API_COVERAGE.md).
 
@@ -343,13 +343,13 @@ ledger is in [docs/API_COVERAGE.md](docs/API_COVERAGE.md).
 | `client.templates`    | **create**, list, get, **update**, **delete**, downloadPage                                                                                                                                                                                        |
 | `client.tags`         | list, create, update, delete                                                                                                                                                                                                                       |
 | `client.workspaces`   | create, list, get, update, delete, getTheme, downloadLogo, uploadLogo, deleteLogo, getStats                                                                                                                                                        |
-| `client.webhooks`     | register, get, inactivate, listEventTypes, listDispatches, retryDispatch                                                                                                                                                                           |
+| `client.webhooks`     | listEndpoints, createEndpoint, getEndpoint, updateEndpoint, deleteEndpoint, getEndpointSecret, rotateEndpointSecret, register, get, inactivate, listEventTypes, listDispatches, retryDispatch |
 | `client.fields`       | create, list, get, update, delete, validate, validateMultiple, listTypes                                                                                                                                                                           |
 | `client.oauth`        | **getProtectedResourceMetadata**, **getAuthorizationServerMetadata**, **createAuthorizationUrl**, **readAuthorizationCallback**, **exchangeCode**, **refreshToken**, **revokeToken**, **getUserInfo** |
-| `client.auth`         | getSocialLoginUrl, getSocialLoginCallbackUrl, login, socialLogin, linkSocialLogin, createApiKey, getApiKey, deleteApiKey, changePassword, requestPasswordReset, resetPassword                                                                      |
-| `client.users`        | getCurrent, getStats, getNotificationPreferences, updateNotificationPreferences                                                                                                                                                                  |
+| `client.auth`         | getSocialLoginUrl, getSocialLoginCallbackUrl, login, verifyMfa, socialLogin, linkSocialLogin, createApiKey, getApiKey, deleteApiKey, changePassword, requestPasswordReset, resetPassword                                                                      |
+| `client.users`        | getCurrent, getStats, getNotificationPreferences, updateNotificationPreferences, getMfa, startTotpEnrollment, confirmTotpEnrollment, regenerateRecoveryCodes, deleteMfaMethod |
 | `client.signerDocuments` | getCurrent, list, **search**, download, signMultiple, declineMultiple, self, acceptTerms, verifyEmail, confirmData, uploadSignature, downloadSignature, getAssignment, sign, decline                                                            |
-| `client.webhookVerifier` | verify, extractEvent, getEventType, getEventData                                                                                                                                                                                                |
+| `client.webhookVerifier` | verifySignature, extractEvent, getEventType, getEventData |
 
 Every HTTP wrapper has TypeScript-checked request/response shapes and
 method-level JSDoc covering the wire payload, return shape, validation,
@@ -1082,7 +1082,13 @@ Most server-side integrations should just use `X-Api-Key` directly. Use these en
 const oauthStart = client.auth.getSocialLoginUrl('google');
 const oauthCallback = client.auth.getSocialLoginCallbackUrl();
 
-const { access_token, user, accounts } = await client.auth.login('me@example.com', 'pw');
+let session = await client.auth.login('me@example.com', 'pw');
+// With two-factor authentication on, login returns `mfa_token`; exchange it
+// within 5 minutes for an authenticator code or a recovery code.
+if (session.mfa_token) {
+  session = await client.auth.verifyMfa(session.mfa_token, '123456');
+}
+const { access_token, user, accounts } = session;
 await client.auth.socialLogin({ provider: 'google', token: 'google-id-token', has_accepted_terms: true });
 await client.auth.linkSocialLogin({ provider: 'google', token: 'google-id-token' });
 
@@ -1123,29 +1129,54 @@ await client.users.updateNotificationPreferences({
 // the complete nine-key notification preference map.
 ```
 
-### Webhooks
+#### Two-factor authentication
 
-OAuth tokens need `webhooks:write` for `register()` and `inactivate()`.
+Available in production. The TOTP secret and the recovery codes are shown once.
 
 ```ts
-await client.webhooks.register({
-  url: 'https://example.com/webhooks/assinafy',
-  email: 'admin@example.com',
-  is_active: true,
-  // events defaults to the current SDK default set below
-  events: [
-    'document_ready',
-    'document_prepared',
-    'signer_signed_document',
-    'signer_rejected_document',
-    'document_processing_failed',
-  ],
+const enrollment = await client.users.startTotpEnrollment('My phone');
+// → { id, secret, provisioning_uri } — render provisioning_uri as a QR code
+const { recovery_codes } = await client.users.confirmTotpEnrollment({
+  id: enrollment.id,
+  code: '123456', // current code from the new device
 });
+// From now on every login needs the second factor.
 
-await client.webhooks.get();          // IWebhookSubscription | null
-await client.webhooks.inactivate();   // stop deliveries (no delete route exists)
+const { methods, recovery_codes_remaining } = await client.users.getMfa();
+await client.users.regenerateRecoveryCodes({ password: 'current-password' }); // or { code }
+await client.users.deleteMfaMethod(methods[0]!.id, { code: '123456' });       // → { is_mfa_enabled }
+```
+
+Replacing an already confirmed authenticator also needs `password` or
+`reauth_code` in `confirmTotpEnrollment()`; first-time enrollment does not.
+
+### Webhooks
+
+An account has 1 webhook endpoint, or up to 3 on paid plans. Every active
+endpoint subscribed to an event receives it independently. OAuth tokens need
+`account:read` to read endpoints and `webhooks:write` to change them; the
+signing secret is available only with an API key.
+
+```ts
+const endpoint = await client.webhooks.createEndpoint({
+  name: 'ERP',
+  url: 'https://example.com/webhooks/assinafy',
+  email: 'ops@example.com',
+  events: ['document_ready', 'signer_signed_document', 'signer_rejected_document'],
+  signing_enabled: true, // sign deliveries with Standard Webhooks
+});
+// → { id, name, url, email, events, is_active, signing_enabled, created_at, updated_at }
+
+const { secret } = await client.webhooks.getEndpointSecret(endpoint.id); // 'whsec_…'
+await client.webhooks.listEndpoints();                                  // IWebhookEndpoint[]
+await client.webhooks.getEndpoint(endpoint.id);
+await client.webhooks.updateEndpoint(endpoint.id, { is_active: false }); // only the fields sent
+await client.webhooks.rotateEndpointSecret(endpoint.id); // the old secret stops at once
+await client.webhooks.deleteEndpoint(endpoint.id);       // frees the plan slot
+
 await client.webhooks.listEventTypes();
 const history = await client.webhooks.listDispatches({
+  endpoint_id: endpoint.id,
   delivered: false,
   page: 1,
   'per-page': 20,
@@ -1153,14 +1184,24 @@ const history = await client.webhooks.listDispatches({
 const retried = await client.webhooks.retryDispatch(dispatchId); // IWebhookDispatch
 ```
 
-`register` sends `{ events, is_active, url, email }` and returns
-`{ events, is_active, url, email, updated_at? }`. Assinafy delivers each event
-as an HTTP `POST` with `Content-Type: application/json` and `Connection: close`.
-Any `2xx` is success. There are at most two automatic attempts, separated by
-three seconds. After ten consecutive failed events, ordinary delivery pauses
-and about 5% of later events are attempted until one succeeds; use
-`retryDispatch()` for an immediate manual redelivery. The dispatch history
-retains only the first 2,000 characters of the receiver's response body.
+`createEndpoint()` returns `403` once the plan's limit is reached and `400`
+when another endpoint of the workspace already uses the same `url`. In
+`updateEndpoint()`, `signing_enabled: true` generates a secret if there is none
+and `false` discards it.
+
+The earlier routes remain and act on the account's oldest endpoint:
+`register()` (create or update), `get()` (`IWebhookSubscription | null`) and
+`inactivate()`.
+
+Assinafy delivers each event as an HTTP `POST` with
+`Content-Type: application/json`, `Connection: close` and the headers
+`webhook-id` (identical on every attempt of the same event to the same
+endpoint — deduplicate on it), `webhook-timestamp` and, with signing on,
+`webhook-signature`. Any `2xx` is success. There are at most two attempts,
+three seconds apart. After ten consecutive failed events, ordinary delivery
+pauses and about 5% of later events are attempted until one succeeds; use
+`retryDispatch()` for an immediate redelivery. The dispatch history retains only
+the first 2,000 characters of the receiver's response body.
 
 Each history or retry result is an `IWebhookDispatch`:
 
@@ -1170,6 +1211,7 @@ type WebhookDispatchShape = {
   id: string;
   event: string;
   activity_id: number;
+  endpoint_id?: string | null; // null once the endpoint is deleted
   endpoint: string | null;
   payload: IWebhookPayload | Record<string, unknown> | null;
   delivered: boolean;
@@ -1229,45 +1271,44 @@ property before delivery.
 
 ### Webhook verification
 
-`WebhookVerifier` is an opt-in HMAC-SHA256 utility for integrations whose
-Assinafy environment provides a shared secret and signature header. The
-current official OpenAPI document does **not** define a webhook signature
-scheme or header name. Confirm the delivery contract for your environment
-before enabling this check; do not reject production callbacks based on an
-assumed header. The example below uses an application-configured header name.
+With `signing_enabled: true`, every delivery is signed following
+[Standard Webhooks](https://www.standardwebhooks.com): HMAC-SHA256 over
+`{webhook-id}.{webhook-timestamp}.{raw body}`, keyed with the base64 value after
+the `whsec_` prefix. `verifySignature()` compares in constant time and rejects a
+`webhook-timestamp` more than 5 minutes from the local clock. Pass the **raw**
+body, never re-serialized JSON.
 
 ```ts
 import express from 'express';
 
-const webhookSecret = process.env.ASSINAFY_WEBHOOK_SECRET;
-const signatureHeader = process.env.ASSINAFY_SIGNATURE_HEADER;
-if (!webhookSecret || !signatureHeader) {
-  throw new Error('This deployment has no confirmed webhook-signature contract');
-}
-
-const webhookClient = new AssinafyClient({ webhookSecret });
+const webhookClient = new AssinafyClient({
+  webhookSecret: process.env.ASSINAFY_WEBHOOK_SECRET, // 'whsec_…' from getEndpointSecret()
+});
 
 app.post('/webhooks/assinafy', express.raw({ type: 'application/json' }), (req, res) => {
-  const signature = req.header(signatureHeader) ?? '';
   const rawBody = req.body as Buffer;
-
-  if (!webhookClient.webhookVerifier.verify(rawBody, signature)) {
+  if (!webhookClient.webhookVerifier.verifySignature(rawBody, req.headers)) {
     return res.status(401).send('Invalid signature');
   }
 
   const event = webhookClient.webhookVerifier.extractEvent(rawBody);
   const type = webhookClient.webhookVerifier.getEventType(event);
   const data = webhookClient.webhookVerifier.getEventData(event);
+  // Deduplicate on req.headers['webhook-id'] before processing.
 
   switch (type) {
-    case 'document_ready':            break;
-    case 'signer_signed_document':    break;
-    case 'signer_rejected_document':  break;
-    case 'document_processing_failed':break;
+    case 'document_ready':             break;
+    case 'signer_signed_document':     break;
+    case 'signer_rejected_document':   break;
+    case 'document_processing_failed': break;
   }
   res.sendStatus(200);
 });
 ```
+
+On Fetch runtimes (`Request`), pass `await request.text()` and
+`request.headers`. The clock tolerance is the optional third argument, in
+seconds. After `rotateEndpointSecret()`, update the receiver's secret at once.
 
 ### Signer-side endpoints
 

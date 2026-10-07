@@ -19,10 +19,13 @@ GET                /v1/accounts/{accountId}/stats
 GET                /v1/users/self
 GET, PUT           /v1/users/self/notification-preferences
 GET                /v1/users/self/stats
+GET                /v1/users/self/mfa (and the two-factor management routes)
+POST               /v1/authentication/mfa/verify
+GET, POST          /v1/accounts/{accountId}/webhooks/endpoints (and per-endpoint routes)
 ```
 
 Sandbox deployments can return `404` for user statistics, account statistics,
-or notification preferences while still accepting the production methods on
+notification preferences, two-factor routes, or webhook endpoint routes while still accepting the production methods on
 the production host. The SDK keeps the official paths and response types. A
 sandbox `404` does not cause the client to route a request elsewhere.
 
@@ -35,7 +38,7 @@ GET /v1/login-callback
 
 They map to `auth.getSocialLoginUrl()` and
 `auth.getSocialLoginCallbackUrl()` and are not part of the official
-93-operation total.
+106-operation total.
 
 The SDK also includes the production contract additions for:
 
@@ -263,16 +266,17 @@ typed `signerAccessCode` option for those environments.
 
 ## Signer request extensions
 
-The official signer-create schema uses `full_name`, `email`, and
-`whatsapp_phone_number`. Signer update adds `government_id`, which the SDK
-normalizes to digits. Three older integration inputs remain accepted:
+The official signer schemas use `full_name`, `email`, `whatsapp_phone_number`,
+and `government_id` on both create and update. `government_id` is sent as given:
+the API strips formatting itself and keeps the letters of an alphanumeric CNPJ
+(`12.ABC.345/01DE-35` is stored as `12ABC34501DE35`). Three older integration
+inputs remain accepted:
 
 - `phone` is normalized to `whatsapp_phone_number` before transmission;
 - `cpf` is normalized to digits and forwarded; and
 - create-time `metadata` is forwarded unchanged.
 
-New integrations should use the official create fields and `government_id` on
-update. `cpf` is not an alias for the official update field, and signer
+New integrations should use the official fields, including `government_id`. `cpf` is not an alias for the official update field, and signer
 responses do not return it.
 
 ## Digital certificate and collect placement
@@ -400,7 +404,9 @@ signer access or verification value; treat it as a credential and never log it.
 ## Webhook delivery
 
 Assinafy sends webhook events as HTTP `POST` JSON requests with
-`Connection: close`. Any `2xx` is successful. There are at most two automatic
+`Connection: close`, `webhook-id` and `webhook-timestamp` headers, and a
+`webhook-signature` header on signing-enabled endpoints. Every active endpoint
+subscribed to an event receives it independently. Any `2xx` is successful. There are at most two automatic
 attempts per event with a three-second wait. After ten consecutive failed
 events, ordinary delivery pauses and about 5% of later events are attempted
 until one succeeds. `webhooks.retryDispatch()` requests immediate redelivery.
@@ -409,18 +415,24 @@ dispatch history.
 
 The common body contains `id`, `event`, nullable `message`, nullable `payload`,
 nullable `origin`, Unix-second `created_at`, polymorphic `subject` and `object`,
-and `account_id`. Use `id` for idempotent handling and accept unknown fields.
+and `account_id`. Deduplicate on the `webhook-id` header, which also tells
+deliveries of the same event to different endpoints apart, and accept unknown
+fields.
 
-## Webhook signature verification is not in the OpenAPI contract
+## Webhook endpoints and signatures
 
-The official webhook operations define subscription management, event types,
-delivery history, and retry. They do not define a shared-secret field,
-signature algorithm, digest encoding, or signature header for incoming events.
+An account has 1 webhook endpoint, or up to 3 on paid plans. The subscription
+routes (`webhooks.register()`, `get()`, `inactivate()`) act on the account's
+oldest endpoint; the endpoint routes address each one by ID.
 
-`client.webhookVerifier` is an opt-in HMAC-SHA256 utility for environments whose
-separate Assinafy agreement provides a shared secret and hex digest. Confirm the
-header name and signing procedure for the target environment before enforcing
-it. Do not assume an `X-Assinafy-Signature` header solely from this SDK.
+Signing-enabled endpoints follow Standard Webhooks:
+`webhook-signature` holds space-separated `v1,<base64>` entries, each an
+HMAC-SHA256 of `{webhook-id}.{webhook-timestamp}.{raw body}` keyed with the
+base64-decoded part of the `whsec_` secret.
+`webhookVerifier.verifySignature()` implements this, with a 300-second
+timestamp tolerance by default. The signing-secret routes are not available to
+OAuth applications. The earlier `webhookVerifier.verify()` (hex HMAC over the
+body alone) is deprecated; it never matched an Assinafy signature.
 
 ## Authentication isolation
 

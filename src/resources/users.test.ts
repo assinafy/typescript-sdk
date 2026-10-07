@@ -165,4 +165,79 @@ describe('UserResource', () => {
             users.updateNotificationPreferences({ SignerDeclined: 'no' } as never),
         ).rejects.toBeInstanceOf(ValidationError);
     });
+
+    test('two-factor methods use the documented routes and bodies', async () => {
+        const calls: Array<{ method: string; url: string; body?: unknown }> = [];
+        const reply = (data: unknown) => ({ status: 200, data: { status: 200, data } });
+        const http = {
+            get: async (url: string) => {
+                calls.push({ method: 'GET', url });
+                return reply({ methods: [], recovery_codes_remaining: 0 });
+            },
+            post: async (url: string, body: unknown) => {
+                calls.push({ method: 'POST', url, body });
+                return reply(url.endsWith('/totp')
+                    ? { id: 'm1', secret: 'S', provisioning_uri: 'otpauth://totp/x' }
+                    : { recovery_codes: ['ABCD-EFGH-JKMN'] });
+            },
+            put: async (url: string, body: unknown) => {
+                calls.push({ method: 'PUT', url, body });
+                return reply({ recovery_codes: ['ABCD-EFGH-JKMN'] });
+            },
+            delete: async (url: string, config: { data: unknown }) => {
+                calls.push({ method: 'DELETE', url, body: config.data });
+                return reply({ is_mfa_enabled: false });
+            },
+        } as unknown as AxiosInstance;
+        const users = new UserResource(http);
+
+        expect(await users.getMfa()).toEqual({ methods: [], recovery_codes_remaining: 0 });
+        expect((await users.startTotpEnrollment()).id).toBe('m1');
+        await users.startTotpEnrollment('My phone');
+        expect(
+            await users.confirmTotpEnrollment({ id: 'm1', code: '123456', reauth_code: '654321' }),
+        ).toEqual({ recovery_codes: ['ABCD-EFGH-JKMN'] });
+        await users.regenerateRecoveryCodes({ code: '123456' });
+        expect(await users.deleteMfaMethod('m1', { password: 'pw' })).toEqual({
+            is_mfa_enabled: false,
+        });
+
+        expect(calls).toEqual([
+            { method: 'GET', url: '/users/self/mfa' },
+            { method: 'POST', url: '/users/self/mfa/totp', body: {} },
+            { method: 'POST', url: '/users/self/mfa/totp', body: { label: 'My phone' } },
+            {
+                method: 'PUT',
+                url: '/users/self/mfa/totp/confirm',
+                body: { id: 'm1', code: '123456', reauth_code: '654321' },
+            },
+            { method: 'POST', url: '/users/self/mfa/recovery-codes', body: { code: '123456' } },
+            { method: 'DELETE', url: '/users/self/mfa/m1', body: { password: 'pw' } },
+        ]);
+    });
+
+    test('two-factor methods reject malformed input before requesting', async () => {
+        let requested = false;
+        const http = new Proxy({}, {
+            get: () => async () => {
+                requested = true;
+            },
+        }) as unknown as AxiosInstance;
+        const users = new UserResource(http);
+        const requests = [
+            () => users.startTotpEnrollment(5 as never),
+            () => users.confirmTotpEnrollment(null as never),
+            () => users.confirmTotpEnrollment({ id: '', code: '123456' }),
+            () => users.confirmTotpEnrollment({ id: 'm1', code: '' }),
+            () => users.regenerateRecoveryCodes({}),
+            () => users.regenerateRecoveryCodes({ password: ' ' }),
+            () => users.regenerateRecoveryCodes(undefined as never),
+            () => users.deleteMfaMethod('', { password: 'pw' }),
+            () => users.deleteMfaMethod('m1', {}),
+        ];
+        for (const request of requests) {
+            await expect(request()).rejects.toBeInstanceOf(ValidationError);
+        }
+        expect(requested).toBe(false);
+    });
 });

@@ -1,27 +1,34 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import type { IWebhookPayload } from '../types';
 
+/** Headers read by {@link WebhookVerifier.verifySignature}. */
+export type WebhookHeaders =
+    | { get(name: string): string | null }
+    | Record<string, string | string[] | undefined>;
+
+/** Default replay window for `webhook-timestamp`, in seconds. */
+const DEFAULT_TOLERANCE_SECONDS = 300;
+
 /**
- * Opt-in verifier for deployments that wrap Assinafy webhook bodies in an
- * HMAC-SHA256 convention of their own.
+ * Verifies and parses Assinafy webhook deliveries.
  *
- * The current public Assinafy API contract does not specify a webhook-signature
- * header or shared-secret exchange. This helper therefore makes no claim about
- * a platform-provided header: callers must explicitly supply the raw lowercase
- * or uppercase hexadecimal HMAC digest produced by their own trusted gateway.
+ * Endpoints created with `signing_enabled: true` sign every delivery following
+ * the Standard Webhooks specification: `webhook-signature` carries
+ * space-separated `v1,<base64 HMAC-SHA256>` entries over
+ * `{webhook-id}.{webhook-timestamp}.{raw body}`, keyed with the base64-decoded
+ * part of the endpoint's `whsec_` secret.
  */
 export class WebhookVerifier {
     private readonly webhookSecret: string | undefined;
 
     /**
-     * Create an opt-in verifier for a gateway-defined HMAC convention.
-     *
-     * @param webhookSecret - Shared secret configured in both the trusted
-     * gateway and this process. Omit it to keep verification disabled.
+     * @param webhookSecret - The endpoint's `whsec_…` secret from
+     * `webhooks.getEndpointSecret()`. Omit it to keep verification disabled
+     * (every check returns `false`).
      *
      * @example
      * ```ts
-     * const verifier = new WebhookVerifier(process.env.WEBHOOK_SHARED_SECRET);
+     * const verifier = new WebhookVerifier(process.env.ASSINAFY_WEBHOOK_SECRET);
      * ```
      */
     constructor(webhookSecret?: string) {
@@ -29,7 +36,65 @@ export class WebhookVerifier {
     }
 
     /**
-     * Compare a hexadecimal HMAC-SHA256 digest with the raw request body.
+     * Verify a signed delivery: the Standard Webhooks signature over the raw
+     * body, and a `webhook-timestamp` within `toleranceSeconds` of this
+     * machine's clock (replay protection).
+     *
+     * @param payload - Exact, unparsed request bytes (or their UTF-8 string).
+     * Re-serialized JSON will not match.
+     * @param headers - Request headers: a Node/Express header object
+     * (lowercase keys) or a Fetch `Headers`. Reads `webhook-id`,
+     * `webhook-timestamp` and `webhook-signature`.
+     * @param toleranceSeconds - Accepted clock distance. Defaults to `300`.
+     * @returns `true` only when a signature entry matches (constant-time) and
+     * the timestamp is fresh; `false` when verification is disabled, a header
+     * is missing, or anything does not match.
+     *
+     * @example
+     * ```ts
+     * app.post('/webhooks/assinafy', express.raw({ type: 'application/json' }), (req, res) => {
+     *   if (!client.webhookVerifier.verifySignature(req.body, req.headers)) {
+     *     return res.status(401).end();
+     *   }
+     *   const event = client.webhookVerifier.extractEvent(req.body);
+     *   // deduplicate on req.headers['webhook-id'], then process
+     *   res.status(204).end();
+     * });
+     * ```
+     */
+    verifySignature(
+        payload: string | Buffer,
+        headers: WebhookHeaders,
+        toleranceSeconds = DEFAULT_TOLERANCE_SECONDS,
+    ): boolean {
+        const key = decodeSecret(this.webhookSecret);
+        if (!key || (typeof payload !== 'string' && !Buffer.isBuffer(payload)) || !headers) {
+            return false;
+        }
+        const id = header(headers, 'webhook-id');
+        const timestamp = header(headers, 'webhook-timestamp');
+        const signatures = header(headers, 'webhook-signature');
+        if (!id || !timestamp || !signatures || !/^\d+$/.test(timestamp)) return false;
+        if (Math.abs(Date.now() / 1000 - Number(timestamp)) > toleranceSeconds) return false;
+
+        const expected = createHmac('sha256', key)
+            .update(`${id}.${timestamp}.`)
+            .update(payload)
+            .digest();
+        return signatures.split(' ').some((entry) => {
+            const [version, signature] = entry.split(',', 2);
+            if (version !== 'v1' || !signature) return false;
+            const actual = Buffer.from(signature, 'base64');
+            return actual.length === expected.length && timingSafeEqual(actual, expected);
+        });
+    }
+
+    /**
+     * Compare a hexadecimal HMAC-SHA256 digest of the raw body, keyed with the
+     * secret string as-is.
+     *
+     * @deprecated For gateways that apply their own HMAC convention. Assinafy's
+     * own signatures are verified with {@link WebhookVerifier.verifySignature}.
      *
      * @param payload - Exact, unparsed request bytes (or their UTF-8 string).
      * @param signature - 64-character hexadecimal SHA-256 digest supplied by
@@ -128,6 +193,21 @@ export class WebhookVerifier {
         if (isRecord(event.data)) return event.data;
         return {};
     }
+}
+
+/** Strip the optional `whsec_` prefix and base64-decode the key. */
+function decodeSecret(secret: string | undefined): Buffer | null {
+    if (typeof secret !== 'string' || !secret) return null;
+    const key = Buffer.from(secret.replace(/^whsec_/, ''), 'base64');
+    return key.length > 0 ? key : null;
+}
+
+function header(headers: WebhookHeaders, name: string): string | undefined {
+    const value = typeof headers.get === 'function'
+        ? (headers as { get(name: string): string | null }).get(name)
+        : (headers as Record<string, string | string[] | undefined>)[name];
+    const first = Array.isArray(value) ? value[0] : value;
+    return typeof first === 'string' ? first.trim() : undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

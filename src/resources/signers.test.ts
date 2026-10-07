@@ -154,6 +154,23 @@ describe('SignerResource', () => {
         expect((body as Record<string, unknown>)['cpf']).toBe('39053344705');
     });
 
+    test('sends government_id as given so CNPJ letters survive', async () => {
+        let body: unknown;
+        const trackingAxios = {
+            ...mockAxios,
+            post: async (_url: string, b: unknown) => {
+                body = b;
+                return { status: 200, data: { status: 200, data: { id: '123' } } };
+            },
+        } as unknown as AxiosInstance;
+        const resource = new SignerResource(trackingAxios, 'acc');
+        await resource.create({ full_name: 'Acme', government_id: '12.ABC.345/01DE-35' });
+        expect(body).toEqual({ full_name: 'Acme', government_id: '12.ABC.345/01DE-35' });
+        await expect(
+            resource.create({ full_name: 'Acme', government_id: '--' }),
+        ).rejects.toThrow(ValidationError);
+    });
+
     test('uses custom accountId when provided', async () => {
         let capturedUrl = '';
         const trackingAxios = {
@@ -456,7 +473,7 @@ describe('SignerResource public request contracts', () => {
             full_name: 'Updated Name',
             phone: '+5548999990000',
             cpf: '390.533.447-05',
-            government_id: '12.345.678/0001-95',
+            government_id: ' 12.ABC.345/01DE-35 ',
         });
 
         expect(request).toEqual({
@@ -465,7 +482,7 @@ describe('SignerResource public request contracts', () => {
                 full_name: 'Updated Name',
                 whatsapp_phone_number: '+5548999990000',
                 cpf: '39053344705',
-                government_id: '12345678000195',
+                government_id: '12.ABC.345/01DE-35',
             },
         });
         expect(result).toEqual(updated as never);

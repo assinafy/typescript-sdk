@@ -104,9 +104,9 @@ export interface AssinafyClientOptions {
      */
     baseUrl?: string;
     /**
-     * Secret for an opt-in HMAC-SHA256 convention implemented by your own
-     * gateway. The public Assinafy contract does not currently define a
-     * platform webhook-signature header or shared-secret exchange.
+     * Webhook endpoint signing secret (`whsec_…`, from
+     * `webhooks.getEndpointSecret()`). Enables
+     * `webhookVerifier.verifySignature()`.
      */
     webhookSecret?: string;
     /** Request timeout in milliseconds. Defaults to 30_000. */
@@ -138,6 +138,11 @@ export interface ICreateSignerPayload {
     phone?: string;
     /** Compatibility extension. Brazilian CPF; non-digits are stripped. */
     cpf?: string;
+    /**
+     * CPF (11 digits) or CNPJ (14 characters, letters allowed). Sent as given;
+     * the API strips formatting and returns the normalized value.
+     */
+    government_id?: string;
     /** Compatibility extension retained for existing integrations. */
     metadata?: Record<string, unknown>;
 }
@@ -151,7 +156,10 @@ export interface IUpdateSignerPayload {
     phone?: string;
     /** Compatibility extension. Brazilian CPF; non-digits are stripped. */
     cpf?: string;
-    /** Official CPF/CNPJ field; non-digits are stripped before sending. */
+    /**
+     * CPF (11 digits) or CNPJ (14 characters, letters allowed). Sent as given;
+     * the API strips formatting and returns the normalized value.
+     */
     government_id?: string;
 }
 
@@ -167,6 +175,8 @@ export interface ISigner {
      * response — present here only so response objects stay assignable from inputs.
      */
     cpf?: string | null;
+    /** Normalized CPF or CNPJ, e.g. `'39053344705'` or `'12ABC34501DE35'`. */
+    government_id?: string | null;
     has_accepted_terms?: boolean;
     /** Only returned by `GET /signers/self`. */
     has_signature?: boolean;
@@ -835,9 +845,10 @@ export interface IWebhookRegisterPayload {
 }
 
 /**
- * Webhook subscription as returned by the API. There is exactly one
- * subscription per workspace, keyed by URL — the API returns
- * `{ events, is_active, url, email, updated_at }` (no `id` / `created_at`).
+ * The account's oldest webhook endpoint, as returned by the legacy
+ * subscription routes: `{ events, is_active, url, email, updated_at }`
+ * (no `id` / `created_at`). Use {@link IWebhookEndpoint} for multi-endpoint
+ * accounts.
  */
 export interface IWebhookSubscription {
     url: string | null;
@@ -845,6 +856,42 @@ export interface IWebhookSubscription {
     events: string[];
     is_active: boolean;
     updated_at?: string | null;
+}
+
+/** Body for `webhooks.createEndpoint()`. */
+export interface IWebhookEndpointCreatePayload extends IWebhookRegisterPayload {
+    /** Label to tell endpoints apart. */
+    name?: string;
+    /** Sign deliveries with a Standard Webhooks signature. Defaults to `false`. */
+    signing_enabled?: boolean;
+}
+
+/** Body for `webhooks.updateEndpoint()`; only the fields sent are changed. */
+export type IWebhookEndpointUpdatePayload = Partial<IWebhookEndpointCreatePayload>;
+
+/**
+ * One of the account's webhook endpoints. Accounts have 1 endpoint, or up to
+ * 3 on paid plans; every active endpoint subscribed to an event receives it.
+ */
+export interface IWebhookEndpoint {
+    id: string;
+    name: string | null;
+    url: string;
+    email: string;
+    events: (WebhookEventType | AnyString)[];
+    is_active: boolean;
+    /** Whether deliveries carry a `webhook-signature` header. */
+    signing_enabled: boolean;
+    /** ISO-8601 UTC timestamp. */
+    created_at: string;
+    /** ISO-8601 UTC timestamp. */
+    updated_at: string;
+}
+
+/** An endpoint's Standard Webhooks signing secret. */
+export interface IWebhookEndpointSecret {
+    /** `whsec_` followed by the base64-encoded key. */
+    secret: string;
 }
 
 /** Event code and human-readable description from the webhook event catalog. */
@@ -859,6 +906,9 @@ export interface IWebhookDispatch {
     id: string;
     event: WebhookEventType | AnyString;
     activity_id: number;
+    /** Endpoint the delivery went to; `null` once that endpoint is deleted. */
+    endpoint_id?: string | null;
+    /** URL that received the request. */
     endpoint: string | null;
     payload: IWebhookPayload | Record<string, unknown> | null;
     delivered: boolean;
@@ -874,6 +924,8 @@ export interface IWebhookDispatch {
 
 /** Filters accepted by `webhooks.listDispatches()`. */
 export interface IWebhookDispatchListParams extends IListParams {
+    /** Only deliveries to this webhook endpoint. */
+    endpoint_id?: string;
     event?: WebhookEventType | AnyString;
     delivered?: boolean | 'true' | 'false';
     from?: number;
@@ -1132,6 +1184,11 @@ export type IUpdateNotificationPreferences = Partial<INotificationPreferences>;
 /** Login/social-login response containing the bearer token, user, and accounts. */
 export interface ILoginResponse {
     access_token: string;
+    /**
+     * Returned by `auth.login()` when the user has two-factor authentication
+     * enabled: exchange it with `auth.verifyMfa()` within 5 minutes.
+     */
+    mfa_token?: string;
     user: IAuthenticatedUser;
     accounts: Array<{
         id: string;
@@ -1140,6 +1197,60 @@ export interface ILoginResponse {
         is_delete_allowed: boolean;
         created_at: string;
     }>;
+}
+
+/** An enrolled two-factor method. */
+export interface IMfaMethod {
+    id: string;
+    /** `'Totp'` for authenticator apps. */
+    type: 'Totp' | AnyString;
+    label: string | null;
+    /** ISO-8601 UTC timestamp. */
+    confirmed_at: string | null;
+    /** ISO-8601 UTC timestamp. */
+    last_used_at: string | null;
+}
+
+/** Result of `users.getMfa()`. */
+export interface IMfaStatus {
+    methods: IMfaMethod[];
+    recovery_codes_remaining: number;
+}
+
+/** Unconfirmed authenticator enrollment from `users.startTotpEnrollment()`. */
+export interface ITotpEnrollment {
+    id: string;
+    /** Base32 shared secret; returned only by this call. */
+    secret: string;
+    /** `otpauth://` URI to render as a QR code. */
+    provisioning_uri: string;
+}
+
+/** Recovery codes; shown only once. */
+export interface IMfaRecoveryCodes {
+    recovery_codes: string[];
+}
+
+/**
+ * Re-authentication proof for sensitive two-factor changes: the current
+ * `password`, or `code` — a live authenticator code or an unused recovery
+ * code (which is then consumed).
+ */
+export interface IMfaReauth {
+    password?: string;
+    code?: string;
+}
+
+/** Body for `users.confirmTotpEnrollment()`. */
+export interface IConfirmTotpPayload {
+    /** Enrollment ID from `startTotpEnrollment()`. */
+    id: string;
+    /** Live code from the new device. */
+    code: string;
+    /** Current password; needed (or `reauth_code`) only when replacing a confirmed method. */
+    password?: string;
+    /** Alternative to `password`: a code from the current device, or a recovery code. */
+    reauth_code?: string;
 }
 
 /** Authentication: API key payload returned by `POST /users/api-keys`. */

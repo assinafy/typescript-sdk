@@ -14,7 +14,7 @@ import { SDK_USER_AGENT } from '../src/support/transport';
 const DEFAULT_SPEC_URL = 'https://api.assinafy.com.br/v1/docs/openapi.json';
 const COVERAGE_FILE = new URL('../docs/API_COVERAGE.md', import.meta.url);
 const HTTP_METHODS = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']);
-const EXPECTED_CONTRACT_FINGERPRINT = 'ad19b5f87da959e237882232e7c7477a10e970faa964cac79a252b93fc1ec546';
+const EXPECTED_CONTRACT_FINGERPRINT = 'a4a8f812cc72f910db0c64ad7a3bf64cdb2eed571365024749c8217800a045ae';
 const NON_CONTRACT_KEYS = new Set([
     'description',
     'summary',
@@ -46,6 +46,12 @@ function at(value: unknown, ...segments: Array<string | number>): unknown {
         }
     }
     return current;
+}
+
+function sameMembers(value: unknown, expected: readonly string[]): boolean {
+    return Array.isArray(value)
+        && value.length === expected.length
+        && expected.every((item) => value.includes(item));
 }
 
 function assertContract(condition: unknown, message: string): asserts condition {
@@ -223,8 +229,30 @@ function validateProductionStructure(spec: OpenApiDocument): number {
         'agreement_code',
     );
     requireValue(
-        at(agreementCode, 'type') === 'string' && at(agreementCode, 'nullable') === true,
+        sameMembers(at(agreementCode, 'type'), ['string', 'null']),
         'DocumentVerification must expose a nullable agreement_code',
+    );
+    requireValue(
+        at(spec, 'components', 'schemas', 'WebhookEndpoint', 'properties', 'signing_enabled', 'type') === 'boolean'
+            && at(spec, 'components', 'schemas', 'WebhookEndpointSecret', 'properties', 'secret', 'type') === 'string',
+        'WebhookEndpoint must expose signing_enabled and WebhookEndpointSecret a string secret',
+    );
+    const createEndpointBody = at(
+        spec, 'paths', '/v1/accounts/{accountId}/webhooks/endpoints', 'post', 'requestBody',
+        'content', 'application/json', 'schema',
+    );
+    requireValue(
+        sameMembers(at(createEndpointBody, 'required'), ['url', 'email', 'events'])
+            && at(createEndpointBody, 'properties', 'signing_enabled', 'type') === 'boolean',
+        'Webhook endpoint create body must require url/email/events and accept signing_enabled',
+    );
+    requireValue(
+        sameMembers(
+            at(spec, 'paths', '/v1/authentication/mfa/verify', 'post', 'requestBody',
+                'content', 'application/json', 'schema', 'required'),
+            ['mfa_token', 'code'],
+        ),
+        'Two-factor verify body must require mfa_token and code',
     );
     const displayRequired = at(spec, 'components', 'schemas', 'DisplaySettings', 'required');
     requireValue(

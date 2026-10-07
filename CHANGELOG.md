@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.6.0] - 2026-10-07
+
+### Added
+
+- Multiple webhook endpoints: `webhooks.listEndpoints()`, `createEndpoint()`,
+  `getEndpoint()`, `updateEndpoint()` and `deleteEndpoint()`. Accounts have one
+  endpoint, or up to three on paid plans.
+- Webhook signatures: `webhooks.getEndpointSecret()` and
+  `rotateEndpointSecret()`, and `webhookVerifier.verifySignature()`, which
+  verifies the Standard Webhooks `webhook-signature` header with a
+  `webhook-timestamp` replay window. Accepts Node/Express header objects and
+  Fetch `Headers`.
+- `webhooks.listDispatches()` accepts an `endpoint_id` filter; dispatch records
+  carry `endpoint_id`.
+- Two-factor authentication: `auth.verifyMfa()` completes a login that returned
+  an `mfa_token`, and `users.getMfa()`, `startTotpEnrollment()`,
+  `confirmTotpEnrollment()`, `regenerateRecoveryCodes()` and
+  `deleteMfaMethod()` manage authenticator apps and recovery codes.
+- `signers.create()` accepts `government_id`, and signer responses type the
+  returned `government_id`.
+
+### Changed
+
+- The subscription methods (`webhooks.register()`, `get()`, `inactivate()`)
+  are documented as acting on the account's oldest endpoint.
+
+### Deprecated
+
+- `webhookVerifier.verify()`; use `verifySignature()`.
+
+### Fixed
+
+- Signer `government_id` is sent as given instead of being reduced to digits,
+  so alphanumeric CNPJs keep their letters. The API normalizes the formatting.
+
 ## [2.5.2] - 2026-10-05
 
 ### Fixed
@@ -705,7 +740,8 @@ signer fields with `cpf` and `whatsapp_phone_number`.
 - High-level `uploadAndRequestSignatures` helper on `AssinafyClient`.
 - `PaginatedResult<T>` with parsed `X-Pagination-*` header meta.
 
-[Unreleased]: https://github.com/assinafy/typescript-sdk/compare/v2.5.2...HEAD
+[Unreleased]: https://github.com/assinafy/typescript-sdk/compare/v2.6.0...HEAD
+[2.6.0]: https://github.com/assinafy/typescript-sdk/compare/v2.5.2...v2.6.0
 [2.5.2]: https://github.com/assinafy/typescript-sdk/compare/v2.5.1...v2.5.2
 [2.5.1]: https://github.com/assinafy/typescript-sdk/compare/v2.5.0...v2.5.1
 [2.5.0]: https://github.com/assinafy/typescript-sdk/compare/v2.4.2...v2.5.0

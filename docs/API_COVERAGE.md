@@ -2,7 +2,7 @@
 
 This ledger maps the official
 [`GET /v1/docs/openapi.json`](https://api.assinafy.com.br/v1/docs/openapi.json)
-contract to the public SDK API: 71 paths, 93 HTTP operations, and 41 component
+contract to the public SDK API: 81 paths, 106 HTTP operations, and 44 component
 schemas.
 
 All paths below include the `/v1` prefix shown by the OpenAPI document, except
@@ -14,7 +14,7 @@ Status meanings:
 
 - **Covered** — a public, typed SDK method sends the operation.
 - **Compatibility extension** — route retained for existing integrations but
-  absent from the current OpenAPI path set and excluded from the 93-operation
+  absent from the current OpenAPI path set and excluded from the 106-operation
   total.
 
 ## Accounts — 10/10
@@ -44,11 +44,12 @@ Status meanings:
 | `PUT` | `/v1/documents/{documentId}/assignments/{assignmentId}/reset-expiration` | `client.assignments.resetExpiration(documentId, assignmentId, expiresAt)` | Covered |
 | `GET` | `/v1/documents/{documentId}/assignments/{assignmentId}/whatsapp-notifications` | `client.assignments.listWhatsAppNotifications(documentId, assignmentId)` | Covered |
 
-## Authentication — 9/9
+## Authentication — 10/10
 
 | Method | Path | SDK method | Status |
 | --- | --- | --- | --- |
 | `POST` | `/v1/login` | `client.auth.login(email, password)` | Covered |
+| `POST` | `/v1/authentication/mfa/verify` | `client.auth.verifyMfa(mfaToken, code)` | Covered |
 | `PUT` | `/v1/authentication/request-password-reset` | `client.auth.requestPasswordReset(email)` | Covered |
 | `PUT` | `/v1/authentication/reset-password` | `client.auth.resetPassword(payload)` | Covered |
 | `PUT` | `/v1/authentication/change-password` | `client.auth.changePassword(payload)` | Covered |
@@ -166,7 +167,7 @@ an optional fourth access-code argument only for legacy compatibility.
 Five additional routes are documented separately under
 [Template compatibility routes](#template-compatibility-routes).
 
-## Users — 4/4
+## Users — 9/9
 
 | Method | Path | SDK method | Status |
 | --- | --- | --- | --- |
@@ -174,8 +175,13 @@ Five additional routes are documented separately under
 | `GET` | `/v1/users/self/stats` | `client.users.getStats(params?)` | Covered |
 | `GET` | `/v1/users/self/notification-preferences` | `client.users.getNotificationPreferences()` | Covered |
 | `PUT` | `/v1/users/self/notification-preferences` | `client.users.updateNotificationPreferences(preferences)` | Covered |
+| `GET` | `/v1/users/self/mfa` | `client.users.getMfa()` | Covered |
+| `POST` | `/v1/users/self/mfa/totp` | `client.users.startTotpEnrollment(label?)` | Covered |
+| `PUT` | `/v1/users/self/mfa/totp/confirm` | `client.users.confirmTotpEnrollment(payload)` | Covered |
+| `POST` | `/v1/users/self/mfa/recovery-codes` | `client.users.regenerateRecoveryCodes(proof)` | Covered |
+| `DELETE` | `/v1/users/self/mfa/{customId}` | `client.users.deleteMfaMethod(customId, proof)` | Covered |
 
-## Webhooks — 6/6
+## Webhooks — 13/13
 
 | Method | Path | SDK method | Status |
 | --- | --- | --- | --- |
@@ -185,11 +191,18 @@ Five additional routes are documented separately under
 | `GET` | `/v1/webhooks/event-types` | `client.webhooks.listEventTypes()` | Covered |
 | `GET` | `/v1/accounts/{accountId}/webhooks` | `client.webhooks.listDispatches(params?, accountId?)` | Covered |
 | `POST` | `/v1/accounts/{accountId}/webhooks/{historyId}/retry` | `client.webhooks.retryDispatch(historyId, accountId?)` | Covered |
+| `GET` | `/v1/accounts/{accountId}/webhooks/endpoints` | `client.webhooks.listEndpoints(accountId?)` | Covered |
+| `POST` | `/v1/accounts/{accountId}/webhooks/endpoints` | `client.webhooks.createEndpoint(payload, accountId?)` | Covered |
+| `GET` | `/v1/accounts/{accountId}/webhooks/endpoints/{endpointId}` | `client.webhooks.getEndpoint(endpointId, accountId?)` | Covered |
+| `PUT` | `/v1/accounts/{accountId}/webhooks/endpoints/{endpointId}` | `client.webhooks.updateEndpoint(endpointId, payload, accountId?)` | Covered |
+| `DELETE` | `/v1/accounts/{accountId}/webhooks/endpoints/{endpointId}` | `client.webhooks.deleteEndpoint(endpointId, accountId?)` | Covered |
+| `GET` | `/v1/accounts/{accountId}/webhooks/endpoints/{endpointId}/secret` | `client.webhooks.getEndpointSecret(endpointId, accountId?)` | Covered |
+| `POST` | `/v1/accounts/{accountId}/webhooks/endpoints/{endpointId}/secret/rotate` | `client.webhooks.rotateEndpointSecret(endpointId, accountId?)` | Covered |
 
 ## Template compatibility routes
 
 These routes are available to existing integrations but do not appear in the
-current OpenAPI path set. They are excluded from the official 93-operation
+current OpenAPI path set. They are excluded from the official 106-operation
 coverage count.
 
 | Method | Path | SDK method | Status |
@@ -204,7 +217,7 @@ coverage count.
 
 Two browser URL helpers used by older deployments are live but absent from the
 current OpenAPI path set, so they are likewise excluded from the official
-93-operation coverage count.
+106-operation coverage count.
 
 | Method | Path | SDK method | Status |
 | --- | --- | --- | --- |
@@ -225,9 +238,9 @@ the endpoint count:
 - `client.documents.isFullySigned(documentId)` and
   `getSigningProgress(documentId)` derive state from document details.
 - `client.signers.findByEmail(email, accountId?)` uses the official signer list.
-- `client.webhookVerifier` parses webhook envelopes and optionally verifies a
-  caller-configured HMAC contract; signature verification itself is not in the
-  current OpenAPI document.
+- `client.webhookVerifier.verifySignature(rawBody, headers)` verifies the
+  Standard Webhooks signature that signing-enabled endpoints send, including
+  the `webhook-timestamp` replay window; `extractEvent()` parses the body.
 - `client.oauth.getAuthorizationServerMetadata(issuer?)` reads the RFC 8414
   document published by the authorization server, and
   `client.oauth.createAuthorizationUrl(options)` /
