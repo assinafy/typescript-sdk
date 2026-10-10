@@ -179,7 +179,7 @@ Five additional routes are documented separately under
 | `POST` | `/v1/users/self/mfa/totp` | `client.users.startTotpEnrollment(label?)` | Covered |
 | `PUT` | `/v1/users/self/mfa/totp/confirm` | `client.users.confirmTotpEnrollment(payload)` | Covered |
 | `POST` | `/v1/users/self/mfa/recovery-codes` | `client.users.regenerateRecoveryCodes(proof)` | Covered |
-| `DELETE` | `/v1/users/self/mfa/{customId}` | `client.users.deleteMfaMethod(customId, proof)` | Covered |
+| `DELETE` | `/v1/users/self/mfa/{customId}` | `client.users.deleteMfaMethod(methodId, proof)` | Covered |
 
 ## Webhooks — 13/13
 

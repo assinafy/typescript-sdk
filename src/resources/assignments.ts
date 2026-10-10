@@ -140,10 +140,10 @@ export function validateSigningOrder(
  * ```ts
  * const body = buildAssignmentPayload({
  *   method: 'virtual',
- *   signers: ['signer-1', { signer_id: 'signer-2', step: 2 }],
+ *   signers: [{ signer_id: 'signer-1', step: 1 }, { signer_id: 'signer-2', step: 2 }],
  *   message: 'Please sign',
  * });
- * // body.signers → [{ id: 'signer-1' }, { id: 'signer-2', step: 2 }]
+ * // body.signers → [{ id: 'signer-1', step: 1 }, { id: 'signer-2', step: 2 }]
  * ```
  */
 export function buildAssignmentPayload(
@@ -716,9 +716,10 @@ export class AssignmentResource extends BaseResource {
      * Update the expiration date of an existing assignment
      * (`PUT /documents/{documentId}/assignments/{assignmentId}/reset-expiration`).
      *
-     * Sends `{ expires_at }` verbatim. Use an ISO-8601 date/time string; `null`
-     * is retained as a compatibility value and, unlike ordinary nullable
-     * inputs, is intentionally not stripped from the body.
+     * Sends `{ expires_at }` verbatim; the key itself is required by the
+     * contract. Use an ISO-8601 date/time string, or `null` to remove the
+     * expiration — `null` is the documented clear mechanism and, unlike
+     * ordinary nullable inputs, is intentionally not stripped from the body.
      *
      * Request body (`application/json`):
      * ```jsonc
@@ -729,8 +730,8 @@ export class AssignmentResource extends BaseResource {
      *
      * @param documentId - The document the assignment belongs to.
      * @param assignmentId - The assignment to update.
-     * @param expiresAt - New expiry as an ISO-8601 date/time string. `null` is
-     * a compatibility value intended to clear it.
+     * @param expiresAt - New expiry as an ISO-8601 date/time string, or `null`
+     * to remove the expiration.
      * @returns The updated {@link IAssignment} — the same full shape
      * {@link AssignmentResource.create} returns (`signers`, `items`, `summary`,
      * `signing_urls`), with `expires_at` reflecting the new value:

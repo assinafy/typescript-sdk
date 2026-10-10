@@ -62,10 +62,15 @@ opportunity to upgrade.
   compared in constant time and `iss` must match the expected issuer. Do not
   bypass `readAuthorizationCallback()` and exchange a code straight from the
   query string.
-- The webhook HMAC helper is an opt-in utility, not proof of an official
-  Assinafy signing contract. Confirm the header, algorithm, encoding, and secret
-  delivery mechanism with Assinafy before enforcing it. See
-  `docs/COMPATIBILITY.md`.
+- Signed webhook endpoints are verified before any event is processed. The API
+  generates the `whsec_…` secret (`webhooks.getEndpointSecret()`), and
+  `webhookVerifier.verifySignature()` checks the Standard Webhooks
+  `webhook-signature` header against the raw, unparsed request body — parse the
+  JSON only after verification. The default five-minute timestamp tolerance
+  blocks replayed deliveries; keep the receiver clock synchronized. Rotate the
+  secret with `webhooks.rotateEndpointSecret()` when it may have leaked —
+  rotation is immediate and the secret/rotate routes accept an API key only,
+  not OAuth tokens. See `docs/COMPATIBILITY.md`.
 - Dependency changes must keep `bun.lock` synchronized and pass `bun run audit`.
   GitHub Actions are pinned to immutable commit SHAs and updated through
   Dependabot review.

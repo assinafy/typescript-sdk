@@ -283,7 +283,7 @@ export class AssinafyClient {
         if (baseUrl !== undefined) opts.baseUrl = baseUrl;
         if (webhookSecret !== undefined) opts.webhookSecret = webhookSecret;
         if (config.timeout !== undefined) opts.timeout = config.timeout;
-        const maxRetries = config.maxRetries ?? config.max_retries;
+        const maxRetries = config.max_retries ?? config.maxRetries;
         if (maxRetries !== undefined) opts.maxRetries = maxRetries;
         if (config.logger !== undefined) opts.logger = config.logger;
         return new AssinafyClient(opts);

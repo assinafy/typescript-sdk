@@ -342,7 +342,7 @@ export class TemplateResource extends BaseResource {
      * ```ts
      * const tmpl = await client.templates.get('103ad2171db7979468c3e97eb067');
      * const jpeg = await client.templates.downloadPage(tmpl.id, tmpl.pages[0].id);
-     * await fs.writeFile('page-1.jpg', jpeg);
+     * await fs.promises.writeFile('page-1.jpg', jpeg);
      * ```
      */
     async downloadPage(templateId: string, pageId: string, accountId?: string): Promise<Buffer> {

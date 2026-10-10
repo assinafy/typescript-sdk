@@ -126,10 +126,10 @@ export class AuthenticationResource extends BaseResource {
      *   ]
      * }
      * ```
-     * @throws {ValidationError} If `email` or `password` is missing.
      * When the user has two-factor authentication enabled the response carries
      * an `mfa_token` instead of a usable session; finish with
      * {@link AuthenticationResource.verifyMfa}.
+     * @throws {ValidationError} If `email` or `password` is missing.
      * @throws {ApiError} `400` if the credentials are rejected.
      *
      * @example
@@ -282,13 +282,6 @@ export class AuthenticationResource extends BaseResource {
      * Link a Google identity to the authenticated user
      * (`POST /auth/link-social-login`).
      *
-     * Request body:
-     * ```jsonc
-     * { "provider": "google", "token": "provider-issued-token" }
-     * ```
-     * The response is the standard status/message acknowledgement with no data,
-     * so this method resolves to `void`.
-     *
      * Request body (`application/json`):
      * ```jsonc
      * {
@@ -296,6 +289,8 @@ export class AuthenticationResource extends BaseResource {
      *   "token": "provider_token_example"
      * }
      * ```
+     * The response is the standard status/message acknowledgement with no data,
+     * so this method resolves to `void`.
      *
      * @param payload - Social provider and provider-issued access/ID token.
      * @returns Resolves when the API acknowledges that the identity was linked.

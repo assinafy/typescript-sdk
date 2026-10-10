@@ -289,15 +289,16 @@ export function assertDocumentArtifactName(
 /** Validate and serialize a caller-supplied JSON object. */
 export function serializeJsonRecord(value: unknown, label: string): string {
     assertRecord(value, label);
+    let serialized: string | undefined;
     try {
-        const serialized = JSON.stringify(value);
-        if (typeof serialized !== 'string' || !serialized.startsWith('{')) {
-            throw new ValidationError(`${label} must serialize to a JSON object`);
-        }
-        return serialized;
+        serialized = JSON.stringify(value);
     } catch {
         throw new ValidationError(`${label} must be JSON-serializable`);
     }
+    if (typeof serialized !== 'string' || !serialized.startsWith('{')) {
+        throw new ValidationError(`${label} must serialize to a JSON object`);
+    }
+    return serialized;
 }
 
 /** Require an RFC 3339 date-time such as `2027-12-31T23:59:00Z`. */

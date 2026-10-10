@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.7.0] - 2026-10-10
+
+### Changed
+
+- The `documents.sendToken()` reference documents the published
+  `{ recipient, channel }` body and its `email` channel. The two-argument form
+  keeps sending `{ email }` and retries the documented shape when a deployment
+  requires `recipient`/`channel`.
+- `assignments.resetExpiration()` documents that the `expires_at` key is always
+  sent and that `null` removes the expiration.
+- `AssinafyClient.fromConfig()` resolves `max_retries` before `maxRetries`,
+  like every other snake_case/camelCase option pair.
+- The document lifecycle walkthrough in both READMEs starts at workspace
+  selection and verifies the webhook signature before processing completion
+  events and downloading artifacts.
+- The READMEs document `MAX_UPLOAD_BYTES`, `buildAssignmentPayload()`,
+  `DEFAULT_WEBHOOK_EVENTS`, `parseWwwAuthenticate()` and `ClientConfigInput`.
+
+### Fixed
+
+- `ApiError.fromResponse()` falls back to a non-empty message when the error
+  body carries empty `message` and `error` strings.
+- `serializeJsonRecord()` keeps its specific "must serialize to a JSON object"
+  message instead of the generic serialization failure.
+- JSDoc corrections: a `buildAssignmentPayload()` example that mixed stepped
+  and unstepped signers, a duplicated request-body block in
+  `auth.linkSocialLogin()`, the `mfa_token` note placement in `auth.login()`,
+  the request-body placement in `oauth.revokeToken()`, `fs.promises.writeFile`
+  in the binary-download examples, and the parameter list of the two-argument
+  `documents.sendToken()` overload.
+
 ## [2.6.0] - 2026-10-07
 
 ### Added

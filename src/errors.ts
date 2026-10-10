@@ -118,7 +118,7 @@ export class ApiError extends AssinafyError {
         const message =
             typeof rawMessage === 'string' && rawMessage.length > 0
                 ? rawMessage
-                : typeof rawError === 'string'
+                : typeof rawError === 'string' && rawError.length > 0
                     ? rawError
                     : FALLBACK_MESSAGE;
         return new ApiError(message, statusCode, responseData);

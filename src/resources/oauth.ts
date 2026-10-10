@@ -631,6 +631,11 @@ export class OAuthResource extends BaseResource {
      * already-revoked included — so the endpoint cannot be used to probe
      * whether a token exists. Only failed client authentication returns `401`.
      *
+     * Request body (`application/x-www-form-urlencoded`):
+     * ```text
+     * token=def50200f1e2…&token_type_hint=refresh_token&client_id=cli_1a2b3c&client_secret=…
+     * ```
+     *
      * @param options - Revocation options.
      * @param options.token - The access or refresh token to revoke.
      * @param options.clientId - The application's `client_id`.
@@ -639,10 +644,6 @@ export class OAuthResource extends BaseResource {
      * @param options.tokenTypeHint - Optional `access_token` or
      * `refresh_token` hint that lets the server skip a lookup.
      * @returns Nothing; resolves once the API acknowledges the request.
-     * Request body (`application/x-www-form-urlencoded`):
-     * ```text
-     * token=def50200f1e2…&token_type_hint=refresh_token&client_id=cli_1a2b3c&client_secret=…
-     * ```
      * @throws {ValidationError} If `token` or `clientId` is missing, or
      * `tokenTypeHint` is not one of the two documented values.
      * @throws {OAuthError} `invalid_client` when client authentication fails.

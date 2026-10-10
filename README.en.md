@@ -29,10 +29,11 @@ afterwards.
 [Endpoint coverage](#endpoint-coverage)
 
 **The end-to-end flow** — [Document lifecycle](#document-lifecycle):
-[upload](#1-upload-the-pdf) → [signers](#2-create-or-reuse-the-email-signers) →
-[price and request signatures](#3-price-then-request-signatures) →
-[the signer's side](#4-complete-the-email-signer-flow) →
-[completion and artifacts](#5-observe-completion-and-download-artifacts)
+[workspace selection](#1-select-the-workspace) → [upload](#2-upload-the-pdf) →
+[signers](#3-create-or-reuse-the-email-signers) →
+[price and request signatures](#4-price-then-request-signatures) →
+[the signer's side](#5-complete-the-email-signer-flow) →
+[completion and artifacts](#6-observe-completion-and-download-artifacts)
 
 **Per-resource detail** — [Resource reference](#resource-reference):
 [documents](#documents) · [signers](#signers) · [assignments](#assignments) ·
@@ -164,7 +165,7 @@ revocation and userinfo endpoints live on this API. Read both from discovery
 rather than hardcoding them.
 
 ```ts
-import { AssinafyClient, OAuthError } from '@assinafy/sdk';
+import { AssinafyClient, ApiError, OAuthError } from '@assinafy/sdk';
 
 const client = new AssinafyClient();                 // no credentials needed
 
@@ -329,6 +330,9 @@ const client = AssinafyClient.fromConfig({
 });
 ```
 
+The configuration object accepted by `fromConfig` has the exported type
+`ClientConfigInput`.
+
 ## Endpoint coverage
 
 All 106 operations documented at https://api.assinafy.com.br/v1/docs are
@@ -339,8 +343,8 @@ ledger is in [docs/API_COVERAGE.md](docs/API_COVERAGE.md).
 | --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `client.documents`    | list, **search**, upload, details, get, **rename**, activities, waitUntilReady, download, thumbnail, downloadPage, statuses, delete, verify, createFromTemplate, estimateCostFromTemplate, getPublic, sendToken, listTags, replaceTags, addTags, detachTag, isFullySigned, getSigningProgress |
 | `client.signers`      | create, get, list, update, delete, findByEmail                                                                                                                                                                                                     |
-| `client.assignments`  | **list**, create, estimateCost, resetExpiration, resendNotification, estimateResendCost, listWhatsAppNotifications                                                                                                                                  |
-| `client.templates`    | **create**, list, get, **update**, **delete**, downloadPage                                                                                                                                                                                        |
+| `client.assignments`  | list, create, estimateCost, resetExpiration, resendNotification, estimateResendCost, listWhatsAppNotifications                                                                                                                                  |
+| `client.templates`    | create, list, get, update, delete, downloadPage                                                                                                                                                                                        |
 | `client.tags`         | list, create, update, delete                                                                                                                                                                                                                       |
 | `client.workspaces`   | create, list, get, update, delete, getTheme, downloadLogo, uploadLogo, deleteLogo, getStats                                                                                                                                                        |
 | `client.webhooks`     | listEndpoints, createEndpoint, getEndpoint, updateEndpoint, deleteEndpoint, getEndpointSecret, rotateEndpointSecret, register, get, inactivate, listEventTypes, listDispatches, retryDispatch |
@@ -348,7 +352,7 @@ ledger is in [docs/API_COVERAGE.md](docs/API_COVERAGE.md).
 | `client.oauth`        | **getProtectedResourceMetadata**, **getAuthorizationServerMetadata**, **createAuthorizationUrl**, **readAuthorizationCallback**, **exchangeCode**, **refreshToken**, **revokeToken**, **getUserInfo** |
 | `client.auth`         | getSocialLoginUrl, getSocialLoginCallbackUrl, login, verifyMfa, socialLogin, linkSocialLogin, createApiKey, getApiKey, deleteApiKey, changePassword, requestPasswordReset, resetPassword                                                                      |
 | `client.users`        | getCurrent, getStats, getNotificationPreferences, updateNotificationPreferences, getMfa, startTotpEnrollment, confirmTotpEnrollment, regenerateRecoveryCodes, deleteMfaMethod |
-| `client.signerDocuments` | getCurrent, list, **search**, download, signMultiple, declineMultiple, self, acceptTerms, verifyEmail, confirmData, uploadSignature, downloadSignature, getAssignment, sign, decline                                                            |
+| `client.signerDocuments` | getCurrent, list, search, download, signMultiple, declineMultiple, self, acceptTerms, verifyEmail, confirmData, uploadSignature, downloadSignature, getAssignment, sign, decline                                                            |
 | `client.webhookVerifier` | verifySignature, extractEvent, getEventType, getEventData |
 
 Every HTTP wrapper has TypeScript-checked request/response shapes and
@@ -366,7 +370,22 @@ artifact phase. The example below keeps every signer on email and uses a
 `virtual` assignment, so no page coordinates or paid notification channel are
 required.
 
-### 1. Upload the PDF
+### 1. Select the workspace
+
+Every account-scoped operation happens inside a workspace. With an API key,
+pass the `accountId` when building the client (or as the last argument of any
+account-scoped method). With OAuth, list the user's workspaces and keep the
+chosen `id` with the tokens — a token is bound to exactly one workspace (see
+[OAuth applications](#oauth-applications)):
+
+```ts
+const { data: workspaces } = await client.workspaces.list();
+const accountId = workspaces[0]?.id;      // e.g. new AssinafyClient({ apiKey, accountId })
+```
+
+The examples below assume a `client` already pointing at the chosen workspace.
+
+### 2. Upload the PDF
 
 ```ts
 const uploaded = await client.documents.upload({ filePath: './contract.pdf' });
@@ -409,7 +428,8 @@ type DocumentUploadShape = {
 `metadata_ready`, `pending_signature`, `expired`, `certificating`,
 `certificated`, `rejected_by_signer`, `rejected_by_user`, and `failed`.
 
-Uploads must be PDFs, at most 25 MB and at most 2,000 pages. The SDK checks the
+Uploads must be PDFs, at most 25 MB and at most 2,000 pages (the byte limit is
+exported as `MAX_UPLOAD_BYTES`). The SDK checks the
 extension, size, and `%PDF-` header before sending. A new upload can have an
 empty `pages` array until metadata processing finishes. Wait before creating a
 `collect` assignment because its fields refer to rendered page IDs; a
@@ -422,7 +442,7 @@ const prepared = await client.documents.waitUntilReady(uploaded.id, {
 });
 ```
 
-### 2. Create or reuse the email signers
+### 3. Create or reuse the email signers
 
 ```ts
 const signerA = await client.signers.create({
@@ -457,7 +477,7 @@ When an email is present, `signers.create()` first looks up that email in the
 workspace and reuses the matching signer; a name-only or phone-only request
 always creates a new signer.
 
-### 3. Price, then request signatures
+### 4. Price, then request signatures
 
 Cost estimation takes channel descriptors, not signer IDs:
 
@@ -530,7 +550,7 @@ type AssignmentShape = {
 The URLs and delivered messages contain signer credentials; treat them as
 secrets.
 
-### 4. Complete the email signer flow
+### 5. Complete the email signer flow
 
 Assinafy sends each signer a link containing their access code and sends the
 one-time verification code through the selected channel. Neither value is
@@ -579,11 +599,13 @@ before signing. A `DigitalCertificate` signer cannot call `sign`; that branch
 uses Assinafy's certificate flow, described in
 [ICP-Brasil digital certificate](#icp-brasil-digital-certificate).
 
-### 5. Observe completion and download artifacts
+### 6. Observe completion and download artifacts
 
-Subscribe to `document_ready` for event-driven completion, or fetch
-`documents.details(documentId)` until `status === 'certificated'`. Webhook
-deliveries can repeat, so use their numeric `id` as an
+Subscribe to `document_ready` for event-driven completion — on an endpoint with
+`signing_enabled`, [verify the signature](#webhook-verification) of every
+delivery before processing it — or fetch `documents.details(documentId)` until
+`status === 'certificated'`. Webhook
+deliveries can repeat, so use the `webhook-id` header as an
 idempotency key. Once complete:
 
 ```ts
@@ -786,7 +808,13 @@ await client.assignments.create(documentId, {
     }],
   }],
 });
+```
 
+To assemble an assignment body outside the client — for example, to inspect it
+before sending — use the exported `buildAssignmentPayload()` helper, which
+applies the same validation and normalization as `create()`.
+
+```ts
 // Estimate cost (the endpoint prices channel descriptors, not signer IDs) → ICostEstimate
 await client.assignments.estimateCost(documentId, { signers: [{}] }); // default Email
 // → {
@@ -796,8 +824,7 @@ await client.assignments.estimateCost(documentId, { signers: [{}] }); // default
 // }
 
 await client.assignments.resetExpiration(documentId, assignmentId, '2027-06-30T00:00:00Z');
-// Compatibility only: the published request requires a date-time string.
-// Confirm target support before using `null` to clear an expiration.
+// The `expires_at` key is required by the contract; send `null` to remove the expiration.
 await client.assignments.resetExpiration(documentId, assignmentId, null);
 
 await client.assignments.resendNotification(documentId, assignmentId, signerId);
@@ -1185,7 +1212,11 @@ const retried = await client.webhooks.retryDispatch(dispatchId); // IWebhookDisp
 ```
 
 `createEndpoint()` returns `403` once the plan's limit is reached and `400`
-when another endpoint of the workspace already uses the same `url`. In
+when another endpoint of the workspace already uses the same `url`. When
+`events` is omitted or empty, the SDK sends the exported
+`DEFAULT_WEBHOOK_EVENTS`: `document_ready`, `document_prepared`,
+`signer_signed_document`, `signer_rejected_document`, and
+`document_processing_failed`. In
 `updateEndpoint()`, `signing_enabled: true` generates a secret if there is none
 and `false` discards it.
 
@@ -1429,6 +1460,10 @@ try {
 }
 ```
 
+`err.challenge` is an already-parsed `IAuthenticateChallenge`. The parser used
+internally is exported as `parseWwwAuthenticate()`, for reading the
+`WWW-Authenticate` header of responses received outside the SDK.
+
 ## Environments
 
 | | |
@@ -1470,6 +1505,14 @@ bun run build        # tsup → dist/ (CJS + ESM + .d.ts)
 bun run lint:pkg     # publint + arethetypeswrong
 bun run verify       # complete local release gate
 ```
+
+## Documentation
+
+- **[README.md](README.md)** — a mesma referência completa, em português
+- [docs/API_COVERAGE.md](docs/API_COVERAGE.md) — operation map
+- [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md) — per-deployment request and response variants
+- [docs/RELEASING.md](docs/RELEASING.md) — publishing process
+- [API documentation](https://api.assinafy.com.br/v1/docs)
 
 ## License
 

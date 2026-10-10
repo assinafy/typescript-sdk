@@ -26,10 +26,11 @@ recurso. Leia na ordem na primeira vez; use como referência depois.
 [Cobertura de endpoints](#cobertura-de-endpoints)
 
 **O fluxo ponta a ponta** — [Ciclo de vida do documento](#ciclo-de-vida-do-documento):
-[envio do PDF](#1-envie-o-pdf) → [signatários](#2-crie-ou-reaproveite-os-signatários-por-e-mail) →
-[orçamento e pedido de assinatura](#3-orce-depois-peça-as-assinaturas) →
-[o lado do signatário](#4-conclua-o-fluxo-do-signatário-por-e-mail) →
-[conclusão e artefatos](#5-acompanhe-a-conclusão-e-baixe-os-artefatos)
+[seleção do workspace](#1-selecione-o-workspace) → [envio do PDF](#2-envie-o-pdf) →
+[signatários](#3-crie-ou-reaproveite-os-signatários-por-e-mail) →
+[orçamento e pedido de assinatura](#4-orce-depois-peça-as-assinaturas) →
+[o lado do signatário](#5-conclua-o-fluxo-do-signatário-por-e-mail) →
+[conclusão e artefatos](#6-acompanhe-a-conclusão-e-baixe-os-artefatos)
 
 **Detalhe por recurso** — [Referência de recursos](#referência-de-recursos):
 [documentos](#documentos) · [signatários](#signatários) · [assignments](#assignments) ·
@@ -156,7 +157,7 @@ O fluxo passa por dois hosts de propósito: a tela de consentimento fica no serv
 API. Leia os dois da descoberta em vez de fixá-los no código.
 
 ```ts
-import { AssinafyClient, OAuthError } from '@assinafy/sdk';
+import { AssinafyClient, ApiError, OAuthError } from '@assinafy/sdk';
 
 const client = new AssinafyClient();                  // nenhuma credencial necessária
 
@@ -316,6 +317,8 @@ const client = AssinafyClient.fromConfig({
 });
 ```
 
+O objeto aceito por `fromConfig` tem o tipo exportado `ClientConfigInput`.
+
 ## Cobertura de endpoints
 
 As 106 operações documentadas em https://api.assinafy.com.br/v1/docs estão cobertas. A tabela abaixo
@@ -348,7 +351,21 @@ A integração normal tem uma fase do dono da conta, uma fase do signatário e u
 artefatos. O exemplo abaixo mantém todos os signatários no e-mail e usa um assignment `virtual`,
 então não exige coordenadas de página nem canal pago de notificação.
 
-### 1. Envie o PDF
+### 1. Selecione o workspace
+
+Toda operação com escopo de conta acontece dentro de um workspace. Com chave de API, informe o
+`accountId` ao construir o cliente (ou como último argumento de cada método com escopo de conta).
+Com OAuth, liste os workspaces do usuário e guarde o `id` do escolhido junto com os tokens — um
+token vale para exatamente um workspace (veja [Aplicações OAuth](#aplicações-oauth)):
+
+```ts
+const { data: workspaces } = await client.workspaces.list();
+const accountId = workspaces[0]?.id;      // ex.: new AssinafyClient({ apiKey, accountId })
+```
+
+Os exemplos abaixo assumem um `client` já apontando para o workspace escolhido.
+
+### 2. Envie o PDF
 
 ```ts
 const enviado = await client.documents.upload({ filePath: './contrato.pdf' });
@@ -390,7 +407,8 @@ type DocumentUploadShape = {
 `pending_signature`, `expired`, `certificating`, `certificated`, `rejected_by_signer`,
 `rejected_by_user` e `failed`.
 
-O envio precisa ser um PDF de no máximo 25 MB e 2.000 páginas. O SDK confere extensão, tamanho e o
+O envio precisa ser um PDF de no máximo 25 MB e 2.000 páginas (o limite em bytes está exportado
+como `MAX_UPLOAD_BYTES`). O SDK confere extensão, tamanho e o
 cabeçalho `%PDF-` antes de enviar. Um upload novo pode ter `pages` vazio até o processamento de
 metadados terminar. Espere antes de criar um assignment `collect`, porque seus campos referenciam
 IDs de páginas renderizadas; um assignment `virtual` pode ser criado imediatamente.
@@ -402,7 +420,7 @@ const preparado = await client.documents.waitUntilReady(enviado.id, {
 });
 ```
 
-### 2. Crie ou reaproveite os signatários por e-mail
+### 3. Crie ou reaproveite os signatários por e-mail
 
 ```ts
 const signatarioA = await client.signers.create({
@@ -436,7 +454,7 @@ type SignerShape = {
 Quando há e-mail, `signers.create()` primeiro procura esse endereço no workspace e reaproveita o
 signatário correspondente; uma requisição só com nome ou só com telefone sempre cria um novo.
 
-### 3. Orce, depois peça as assinaturas
+### 4. Orce, depois peça as assinaturas
 
 A estimativa de custo recebe descritores de canal, não IDs de signatário:
 
@@ -508,7 +526,7 @@ type AssignmentShape = {
 
 As URLs e as mensagens entregues contêm credenciais do signatário; trate-as como segredo.
 
-### 4. Conclua o fluxo do signatário por e-mail
+### 5. Conclua o fluxo do signatário por e-mail
 
 A Assinafy envia a cada signatário um link com o código de acesso dele e manda o código de
 verificação de uso único pelo canal escolhido. Nenhum dos dois valores é devolvido como campo
@@ -552,11 +570,13 @@ assinar. Um signatário `DigitalCertificate` não pode usar `sign`; esse ramo pa
 certificado da Assinafy, descrito em
 [Certificado digital ICP-Brasil](#certificado-digital-icp-brasil).
 
-### 5. Acompanhe a conclusão e baixe os artefatos
+### 6. Acompanhe a conclusão e baixe os artefatos
 
-Assine o evento `document_ready` para saber da conclusão por evento, ou consulte
-`documents.details(documentId)` até `status === 'certificated'`. As entregas de webhook podem se
-repetir — use o `id` numérico como chave de idempotência. Concluído:
+Assine o evento `document_ready` para saber da conclusão por evento — em um endpoint com
+`signing_enabled`, [verifique a assinatura](#verificação-de-webhooks) de cada entrega antes de
+processá-la — ou consulte `documents.details(documentId)` até `status === 'certificated'`. As
+entregas de webhook podem se repetir — use o cabeçalho `webhook-id` como chave de idempotência.
+Concluído:
 
 ```ts
 const documentoFinal = await client.documents.details(enviado.id);
@@ -747,7 +767,13 @@ await client.assignments.create(documentId, {
     }],
   }],
 });
+```
 
+Para montar o corpo de um assignment fora do cliente — por exemplo, para inspecioná-lo antes do
+envio — use o helper exportado `buildAssignmentPayload()`, que aplica as mesmas validações e
+normalizações de `create()`.
+
+```ts
 // Estimativa de custo (o endpoint orça descritores de canal, não IDs) → ICostEstimate
 await client.assignments.estimateCost(documentId, { signers: [{}] }); // Email padrão
 // → {
@@ -757,8 +783,7 @@ await client.assignments.estimateCost(documentId, { signers: [{}] }); // Email p
 // }
 
 await client.assignments.resetExpiration(documentId, assignmentId, '2027-06-30T00:00:00Z');
-// Só compatibilidade: a requisição publicada exige uma data-hora.
-// Confirme o suporte do destino antes de usar `null` para limpar a expiração.
+// A chave `expires_at` é exigida pelo contrato; envie `null` para remover a expiração.
 await client.assignments.resetExpiration(documentId, assignmentId, null);
 
 await client.assignments.resendNotification(documentId, assignmentId, signerId);
@@ -1158,7 +1183,9 @@ const reenviado = await client.webhooks.retryDispatch(dispatchId); // IWebhookDi
 ```
 
 `createEndpoint()` devolve `403` quando o limite do plano foi atingido e `400` quando outro endpoint
-do workspace já usa a mesma `url`. Em `updateEndpoint()`, `signing_enabled: true` gera um segredo se
+do workspace já usa a mesma `url`. Quando `events` é omitido ou vazio, o SDK envia
+`DEFAULT_WEBHOOK_EVENTS` (exportado): `document_ready`, `document_prepared`,
+`signer_signed_document`, `signer_rejected_document` e `document_processing_failed`. Em `updateEndpoint()`, `signing_enabled: true` gera um segredo se
 ainda não houver e `false` o descarta.
 
 As rotas anteriores continuam disponíveis e operam sobre o endpoint mais antigo da conta:
@@ -1399,6 +1426,10 @@ try {
   }
 }
 ```
+
+`err.challenge` é um `IAuthenticateChallenge` já interpretado. O parser usado internamente está
+exportado como `parseWwwAuthenticate()`, para quem precisa ler o cabeçalho `WWW-Authenticate` de
+respostas recebidas fora do SDK.
 
 ## Ambientes
 

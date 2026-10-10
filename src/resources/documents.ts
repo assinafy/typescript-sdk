@@ -1193,40 +1193,36 @@ export class DocumentResource extends BaseResource {
     }
 
     /**
-     * Send the signer's access token to their email / WhatsApp
+     * Send the signer's access token to their email
      * (`PUT /public/documents/{documentId}/send-token`).
      *
      * Part of the public signing flow: dispatches the 6-digit verification
      * token the signer enters to view the document. The documented request body
-     * is `{ email }`. For compatibility with Assinafy environments that still
-     * require the older contract, passing an explicit `channel` sends
-     * `{ recipient, channel }`; the two-argument documented call also retries
-     * that legacy shape only when the server explicitly reports that
-     * `channel`/`recipient` is required.
+     * is `{ recipient, channel }` with `channel` set to `email`. This
+     * two-argument form sends the legacy `{ email }` shape, which current
+     * deployments still accept, and retries the documented shape only when the
+     * server explicitly reports that `channel`/`recipient` is required. Use the
+     * three-argument overload to send the documented shape directly.
      *
      * Request body (`application/json`):
      * ```jsonc
      * { "email": "signer@example.com" }
      * ```
-     * Compatibility fallback or explicit-channel body:
+     * Documented body, sent on the explicit-channel overload or on retry:
      * ```jsonc
      * { "recipient": "signer@example.com", "channel": "email" }
      * ```
      *
      * @param documentId - The document to send the token for.
-     * @param recipient - The signer's email address (or WhatsApp number when an
-     * explicit channel is supplied).
-     * @param channel - Optional legacy delivery channel.
+     * @param email - The signer's email address.
      * @returns Nothing after the API's empty acknowledgement.
-     * @throws {ValidationError} If `documentId` or `recipient` is missing, the
-     * official two-argument form does not receive a valid email address, or a
-     * supplied `channel` is not a non-empty string.
+     * @throws {ValidationError} If `documentId` is missing or `email` is not a
+     * valid email address.
      * @throws {ApiError} If the API rejects the request.
      *
      * @example
      * ```ts
      * await client.documents.sendToken('doc-1', 'signer@example.com');
-     * await client.documents.sendToken('doc-1', '+5511999998888', 'whatsapp');
      * ```
      */
     async sendToken(documentId: string, email: string): Promise<void>;

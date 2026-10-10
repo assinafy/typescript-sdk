@@ -194,29 +194,30 @@ and returns the JPEG bytes as a `Buffer`.
 
 ## Public send-token request
 
-The official operation sends an email body:
+The official operation requires a recipient and a channel (`email` is the only
+documented channel):
 
 ```http
 PUT /v1/public/documents/{documentId}/send-token
 Content-Type: application/json
 
-{ "email": "signer@example.com" }
+{ "recipient": "signer@example.com", "channel": "email" }
 ```
+
+```ts
+await client.documents.sendToken(documentId, 'signer@example.com', 'email');
+```
+
+The two-argument overload sends the legacy `{ email }` shape, which current
+deployments still accept:
 
 ```ts
 await client.documents.sendToken(documentId, 'signer@example.com');
 ```
 
-Older environments can require `{ recipient, channel }`. The explicit
-three-argument overload sends that shape:
-
-```ts
-await client.documents.sendToken(documentId, '+5511999990000', 'whatsapp');
-```
-
-For a two-argument call, the SDK starts with `{ email }` and retries the older
-email shape only when the validation response names `recipient` or `channel` as
-required. Other errors are returned unchanged.
+When a deployment rejects `{ email }` with a validation response naming
+`recipient` or `channel` as required, the SDK retries the documented shape
+automatically. Other errors are returned unchanged.
 
 ## Document tags
 
@@ -344,9 +345,9 @@ Document upload accepts a PDF of at most 25 MB and 2,000 pages. The multipart
 schema documents the file; the SDK's optional `metadata` JSON part is retained
 for deployments that accept application-owned opaque metadata.
 
-The reset-expiration schema requires an ISO-8601 date-time string. The SDK also
-accepts `null` for older integrations that clear an expiration this way. Confirm
-support in the target deployment before sending `null`.
+The reset-expiration schema requires the `expires_at` key itself: send an
+ISO-8601 date-time string, or `null` to remove the expiration. The SDK's
+`resetExpiration` always sends the key and accepts `null` for clearing.
 
 ## Resend-cost response variants
 

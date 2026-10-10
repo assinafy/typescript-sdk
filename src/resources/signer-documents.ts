@@ -256,7 +256,7 @@ export class SignerDocumentsResource extends BaseResource {
      *   documentId,
      *   'original',
      * );
-     * await fs.writeFile('to-sign.pdf', pdf);
+     * await fs.promises.writeFile('to-sign.pdf', pdf);
      * ```
      */
     async download(
@@ -740,7 +740,7 @@ export class SignerDocumentsResource extends BaseResource {
      * @example
      * ```ts
      * const png = await client.signerDocuments.downloadSignature(accessCode, 'signature');
-     * await fs.writeFile('signature.png', png);
+     * await fs.promises.writeFile('signature.png', png);
      * ```
      */
     async downloadSignature(
