@@ -1,5 +1,6 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import type { IWebhookPayload } from '../types';
+import { readHeader } from './headers';
 
 /** Headers read by {@link WebhookVerifier.verifySignature}. */
 export type WebhookHeaders =
@@ -203,11 +204,12 @@ function decodeSecret(secret: string | undefined): Buffer | null {
 }
 
 function header(headers: WebhookHeaders, name: string): string | undefined {
+    // Plain objects are matched case-insensitively: frameworks differ on
+    // whether they lowercase incoming header names.
     const value = typeof headers.get === 'function'
-        ? (headers as { get(name: string): string | null }).get(name)
-        : (headers as Record<string, string | string[] | undefined>)[name];
-    const first = Array.isArray(value) ? value[0] : value;
-    return typeof first === 'string' ? first.trim() : undefined;
+        ? (headers as { get(name: string): string | null }).get(name) ?? undefined
+        : readHeader(headers as Record<string, unknown>, name);
+    return typeof value === 'string' ? value.trim() : undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

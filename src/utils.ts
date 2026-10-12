@@ -1,7 +1,7 @@
 import axios from 'axios';
 import { ApiError, AssinafyError, NetworkError, ValidationError } from './errors';
 import type { DocumentArtifactName, Logger } from './types';
-import { parseWwwAuthenticate, readHeader } from './support/headers';
+import { parseRateLimit, parseWwwAuthenticate, readHeader } from './support/headers';
 
 const SAFE_LOG_NUMBER_FIELDS = new Set([
     'attempt',
@@ -86,10 +86,11 @@ export function toSdkError(error: unknown, fallbackMessage: string): AssinafyErr
             // It is the only machine-readable signal telling a missing OAuth
             // scope apart from a permission the token can never hold, so keep it
             // rather than discarding the response headers wholesale.
-            const challenge = parseWwwAuthenticate(
-                readHeader(error.response?.headers as Record<string, unknown>, 'www-authenticate'),
-            );
+            const headers = error.response?.headers as Record<string, unknown> | undefined;
+            const challenge = parseWwwAuthenticate(readHeader(headers, 'www-authenticate'));
             if (challenge) apiError.challenge = challenge;
+            const rateLimit = parseRateLimit(headers);
+            if (rateLimit) apiError.rateLimit = rateLimit;
             return apiError;
         }
         // AxiosError retains the entire request config, including Authorization

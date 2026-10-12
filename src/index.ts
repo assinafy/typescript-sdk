@@ -24,6 +24,8 @@ export { WebhookVerifier } from './support/webhook-verifier';
 export type { WebhookHeaders } from './support/webhook-verifier';
 /** Parsed `WWW-Authenticate` challenge exposed on {@link ApiError.challenge}. */
 export type { IAuthenticateChallenge } from './support/headers';
+/** Rate-limit headers exposed on {@link ApiError.rateLimit}. */
+export type { IRateLimitInfo } from './support/headers';
 export { parseWwwAuthenticate } from './support/headers';
 /** User-Agent sent by every SDK HTTP transport. */
 export { SDK_USER_AGENT } from './support/transport';

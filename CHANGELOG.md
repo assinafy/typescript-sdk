@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.7.1] - 2026-10-12
+
+### Added
+
+- `signerDocuments.listAsWorkspace()` and `searchAsWorkspace()` list and
+  search a signer's documents with the client's API key or OAuth token. They
+  never send a signer access code.
+- `ApiError.rateLimit` exposes the `X-Rate-Limit-Limit`,
+  `X-Rate-Limit-Remaining`, `X-Rate-Limit-Reset` and `Retry-After` headers of
+  the failed response (new exported type `IRateLimitInfo`).
+- `IOAuthTokenResponse.issued_token_type` and `ITemplateListItem.resource`,
+  as published in the API contract.
+
+### Changed
+
+- **`documents.sendToken()` follows the published contract**: it always sends
+  `{ "channel": "email", "recipient": "…" }` and resolves with the response
+  `data` (`{ document, channel, recipient }`, new type `ISendTokenResult`)
+  instead of `void`. The legacy `{ email }` body and its automatic retry are
+  gone. `SendTokenChannel` is now `'email'`; passing `'whatsapp'` or a
+  non-email recipient is rejected with a `ValidationError` before any request,
+  because the endpoint accepts only the email channel.
+- `signerDocuments.decline()` and `declineMultiple()` reject a decline reason
+  longer than 2000 characters, the documented limit.
+- `WebhookVerifier.verifySignature()` reads `webhook-*` headers from a plain
+  object regardless of letter case.
+
 ## [2.7.0] - 2026-10-10
 
 ### Changed
@@ -771,7 +798,9 @@ signer fields with `cpf` and `whatsapp_phone_number`.
 - High-level `uploadAndRequestSignatures` helper on `AssinafyClient`.
 - `PaginatedResult<T>` with parsed `X-Pagination-*` header meta.
 
-[Unreleased]: https://github.com/assinafy/typescript-sdk/compare/v2.6.0...HEAD
+[Unreleased]: https://github.com/assinafy/typescript-sdk/compare/v2.7.1...HEAD
+[2.7.1]: https://github.com/assinafy/typescript-sdk/compare/v2.7.0...v2.7.1
+[2.7.0]: https://github.com/assinafy/typescript-sdk/compare/v2.6.0...v2.7.0
 [2.6.0]: https://github.com/assinafy/typescript-sdk/compare/v2.5.2...v2.6.0
 [2.5.2]: https://github.com/assinafy/typescript-sdk/compare/v2.5.1...v2.5.2
 [2.5.1]: https://github.com/assinafy/typescript-sdk/compare/v2.5.0...v2.5.1

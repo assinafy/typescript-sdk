@@ -760,37 +760,37 @@ describe('DocumentResource public request contracts', () => {
         ]);
     });
 
-    test('sendToken supports the documented email and explicit legacy channel bodies', async () => {
+    test('sendToken sends the documented { channel, recipient } body and returns data', async () => {
         const calls: Array<{ url: string; body: unknown }> = [];
+        const data = {
+            document: {
+                resource: 'document',
+                id: 'doc-1',
+                name: 'Contract.pdf',
+                page_count: 3,
+                created_by: 'Jane Doe',
+            },
+            channel: 'email',
+            recipient: 'signer@example.com',
+        };
         const http = {
             put: async (url: string, body: unknown) => {
                 calls.push({ url, body });
-                return { status: 200, data: { status: 200, message: '' } };
+                return { status: 200, data: { status: 200, message: '', data } };
             },
         } as unknown as AxiosInstance;
         const resource = new DocumentResource(http, 'acc');
 
-        const emailResult: void = await resource.sendToken('doc-1', 'signer@example.com');
-        const whatsappResult: void = await resource.sendToken(
-            'doc-1',
-            '+5511999998888',
-            'whatsapp',
-        );
-        expect(calls).toEqual([
-            {
-                url: '/public/documents/doc-1/send-token',
-                body: { email: 'signer@example.com' },
-            },
-            {
-                url: '/public/documents/doc-1/send-token',
-                body: { recipient: '+5511999998888', channel: 'whatsapp' },
-            },
-        ]);
-        expect(emailResult).toBeUndefined();
-        expect(whatsappResult).toBeUndefined();
+        expect(await resource.sendToken('doc-1', 'signer@example.com')).toEqual(data);
+        expect(await resource.sendToken('doc-1', 'signer@example.com', 'email')).toEqual(data);
+        const expected = {
+            url: '/public/documents/doc-1/send-token',
+            body: { channel: 'email', recipient: 'signer@example.com' },
+        };
+        expect(calls).toEqual([expected, expected]);
     });
 
-    test('sendToken rejects malformed recipient and channel values before requesting', async () => {
+    test('sendToken rejects malformed recipient and non-email channels before requesting', async () => {
         let calls = 0;
         const http = {
             put: async () => {
@@ -800,77 +800,18 @@ describe('DocumentResource public request contracts', () => {
         } as unknown as AxiosInstance;
         const resource = new DocumentResource(http, 'acc');
 
-        await expect(resource.sendToken('doc-1', 42 as never)).rejects.toBeInstanceOf(
-            ValidationError,
-        );
-        await expect(resource.sendToken('doc-1', 'not-an-email')).rejects.toBeInstanceOf(
-            ValidationError,
-        );
-        await expect(
-            resource.sendToken('doc-1', 'signer@example.com', ' ' as never),
-        ).rejects.toBeInstanceOf(ValidationError);
-        await expect(
-            resource.sendToken('doc-1', 'signer@example.com', 42 as never),
-        ).rejects.toBeInstanceOf(ValidationError);
-        expect(calls).toBe(0);
-    });
-
-    test('sendToken retries the legacy body only for channel/recipient validation errors', async () => {
-        for (const error of [
-            new ApiError('Bad request.', 422, { errors: { channel: ['required'] } }),
-            new ApiError('É obrigatório informar o channel.', 400),
-        ]) {
-            const bodies: unknown[] = [];
-            const http = {
-                put: async (_url: string, body: unknown) => {
-                    bodies.push(body);
-                    if (bodies.length === 1) throw error;
-                    return { status: 200, data: { status: 200, message: '' } };
-                },
-            } as unknown as AxiosInstance;
-
-            await expect(
-                new DocumentResource(http, 'acc').sendToken('doc-1', 'signer@example.com'),
-            ).resolves.toBeUndefined();
-            expect(bodies).toEqual([
-                { email: 'signer@example.com' },
-                { recipient: 'signer@example.com', channel: 'email' },
-            ]);
+        const requests = [
+            () => resource.sendToken('doc-1', 42 as never),
+            () => resource.sendToken('doc-1', 'not-an-email'),
+            () => resource.sendToken('doc-1', '+5511999998888'),
+            () => resource.sendToken('doc-1', 'signer@example.com', 'whatsapp' as never),
+            () => resource.sendToken('doc-1', 'signer@example.com', ' ' as never),
+            () => resource.sendToken(' ', 'signer@example.com'),
+        ];
+        for (const request of requests) {
+            await expect(request()).rejects.toBeInstanceOf(ValidationError);
         }
-    });
-
-    test('sendToken does not mask an unrelated API validation error', async () => {
-        const error = new ApiError('Invalid email address.', 422, { field: 'email' });
-        let calls = 0;
-        const http = {
-            put: async () => {
-                calls++;
-                throw error;
-            },
-        } as unknown as AxiosInstance;
-
-        await expect(
-            new DocumentResource(http, 'acc').sendToken('doc-1', 'valid@example.com'),
-        ).rejects.toBe(error);
-        expect(calls).toBe(1);
-    });
-
-    test('sendToken does not replay keyword-containing delivery errors', async () => {
-        const error = new ApiError('Recipient is rate limited and already notified.', 422, {
-            reason: 'recipient channel exhausted',
-        });
-        let calls = 0;
-        const http = {
-            put: async () => {
-                calls++;
-                throw error;
-            },
-        } as unknown as AxiosInstance;
-
-        await expect(
-            new DocumentResource(http, 'acc').sendToken('doc-1', 'signer@example.com'),
-        ).rejects.toBe(error);
-        expect(calls).toBe(1);
+        expect(calls).toBe(0);
     });
 
     test('waitUntilReady reports an immediate timeout when its wait budget is zero', async () => {

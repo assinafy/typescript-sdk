@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { parseWwwAuthenticate, readHeader } from './headers';
+import { parseRateLimit, parseWwwAuthenticate, readHeader } from './headers';
 
 describe('readHeader', () => {
     test('reads case-insensitively and collapses array values', () => {
@@ -60,5 +60,15 @@ describe('parseWwwAuthenticate', () => {
         expect(parseWwwAuthenticate('')).toBeUndefined();
         expect(parseWwwAuthenticate('   ')).toBeUndefined();
         expect(parseWwwAuthenticate('="broken"')).toBeUndefined();
+    });
+});
+
+describe('parseRateLimit', () => {
+    test('reads the numeric rate-limit headers and ignores the rest', () => {
+        expect(parseRateLimit(undefined)).toBeUndefined();
+        expect(parseRateLimit({ 'retry-after': 'Wed, 21 Oct 2026 07:28:00 GMT' })).toBeUndefined();
+        expect(
+            parseRateLimit({ 'X-Rate-Limit-Limit': '60', 'x-rate-limit-remaining': ' 5 ' }),
+        ).toEqual({ limit: 60, remaining: 5 });
     });
 });

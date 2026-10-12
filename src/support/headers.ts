@@ -93,3 +93,51 @@ export function parseWwwAuthenticate(
     }
     return challenge;
 }
+
+/**
+ * Rate-limit state reported by the API's response headers.
+ *
+ * Every rate-limited response carries the `X-Rate-Limit-*` trio; a `429 Too
+ * Many Requests` adds `Retry-After`. Absent or non-numeric headers are left
+ * out rather than guessed.
+ */
+export interface IRateLimitInfo {
+    /** `X-Rate-Limit-Limit` — requests allowed in the current window. */
+    limit?: number;
+    /** `X-Rate-Limit-Remaining` — requests left in the current window. */
+    remaining?: number;
+    /** `X-Rate-Limit-Reset` — seconds until the window resets. */
+    reset?: number;
+    /** `Retry-After` — seconds to wait before retrying (sent on `429`). */
+    retryAfter?: number;
+}
+
+const RATE_LIMIT_HEADERS = [
+    ['limit', 'x-rate-limit-limit'],
+    ['remaining', 'x-rate-limit-remaining'],
+    ['reset', 'x-rate-limit-reset'],
+    ['retryAfter', 'retry-after'],
+] as const;
+
+/**
+ * Read the rate-limit headers from a response.
+ *
+ * @param headers - Response headers (any case).
+ * @returns The numeric values present, or `undefined` when none is.
+ *
+ * @example
+ * ```ts
+ * parseRateLimit({ 'x-rate-limit-remaining': '0', 'retry-after': '30' });
+ * // → { remaining: 0, retryAfter: 30 }
+ * ```
+ */
+export function parseRateLimit(
+    headers: Record<string, unknown> | undefined,
+): IRateLimitInfo | undefined {
+    const info: IRateLimitInfo = {};
+    for (const [key, header] of RATE_LIMIT_HEADERS) {
+        const value = readHeader(headers, header)?.trim();
+        if (value !== undefined && /^\d+$/u.test(value)) info[key] = Number(value);
+    }
+    return Object.keys(info).length > 0 ? info : undefined;
+}

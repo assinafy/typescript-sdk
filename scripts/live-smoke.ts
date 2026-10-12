@@ -1255,7 +1255,14 @@ async function runAssignmentSuite(
     const signer = signingSigners[0];
     assertCondition(signer);
     await reporter.step('documents.send-token-email', async () => {
-        await client.documents.sendToken(documentId, signer.email);
+        const sent = await client.documents.sendToken(documentId, signer.email);
+        assertCondition(sent.channel === 'email' && sent.document.id === documentId);
+    });
+    await reporter.step('signer-documents.list-as-workspace', async () => {
+        assertArray((await client.signerDocuments.listAsWorkspace(signer.id)).data);
+    });
+    await reporter.step('signer-documents.search-as-workspace', async () => {
+        assertArray((await client.signerDocuments.searchAsWorkspace(signer.id)).data);
     });
     await reporter.step('signer-documents.download-public-original', async () => {
         assertBuffer(await client.signerDocuments.download(signer.id, documentId, 'original'));
@@ -1272,6 +1279,14 @@ async function runAssignmentSuite(
             expiresAt,
         );
         assertCondition(updated.id === assignment.value.id);
+    });
+    await reporter.step('assignments.reset-expiration-clear', async () => {
+        const updated = await client.assignments.resetExpiration(
+            documentId,
+            assignment.value.id,
+            null,
+        );
+        assertCondition(updated.expires_at === null);
     });
     await reporter.step('assignments.estimate-resend-cost', async () => {
         await client.assignments.estimateResendCost(documentId, assignment.value.id, signer.id);

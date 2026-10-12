@@ -978,6 +978,8 @@ export interface IUpdateTemplatePayload {
 
 /** Template list item (paginated). */
 export interface ITemplateListItem {
+    /** Always `template`. */
+    resource?: string;
     id: string;
     name: string;
     document_name?: string | null;
@@ -1143,8 +1145,34 @@ export interface IDocumentVerification {
     message: string;
 }
 
-/** Channel accepted by the `send-token` endpoint. */
-export type SendTokenChannel = 'email' | 'whatsapp' | AnyString;
+/** Channel accepted by the `send-token` endpoint; the contract allows only `email`. */
+export type SendTokenChannel = 'email';
+
+/**
+ * `data` returned by `PUT /public/documents/{documentId}/send-token`.
+ *
+ * ```jsonc
+ * {
+ *   "document": { "resource": "document", "id": "a1b2…", "name": "Contract.pdf", "page_count": 3, "created_by": "Jane Doe" },
+ *   "channel": "email",
+ *   "recipient": "signer@example.com"
+ * }
+ * ```
+ */
+export interface ISendTokenResult {
+    /** Summary of the document the token unlocks. */
+    document: {
+        resource: string;
+        id: string;
+        name: string;
+        page_count: number;
+        created_by: string;
+    };
+    /** Channel the token was sent through. */
+    channel: string;
+    /** Address the token was sent to. */
+    recipient: string;
+}
 
 /** Authenticated user profile returned by login and `users.getCurrent()`. */
 export interface IAuthenticatedUser {
@@ -1524,6 +1552,12 @@ export interface IOAuthTokenResponse {
     scope?: string;
     /** Signed OIDC identity token (RS256). Present only when `openid` was granted. */
     id_token?: string | null;
+    /**
+     * RFC 8693 token type. Returned only by the token-exchange grant, which is
+     * reserved for Assinafy's own services; absent from the two grants the SDK
+     * sends.
+     */
+    issued_token_type?: string;
 }
 
 /** OpenID Connect claims returned by `GET /oauth/userinfo`. */

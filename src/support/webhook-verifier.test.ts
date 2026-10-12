@@ -89,6 +89,10 @@ describe('WebhookVerifier.verifySignature (Standard Webhooks)', () => {
         expect(verifier.verifySignature(body, headersFor())).toBe(true);
         expect(verifier.verifySignature(Buffer.from(body), new Headers(headersFor()))).toBe(true);
         expect(new WebhookVerifier(key.toString('base64')).verifySignature(body, headersFor())).toBe(true);
+        const mixedCase = Object.fromEntries(
+            Object.entries(headersFor()).map(([name, value]) => [name.toUpperCase(), value]),
+        );
+        expect(verifier.verifySignature(body, mixedCase)).toBe(true);
     });
 
     test('accepts when any space-separated v1 entry matches', () => {

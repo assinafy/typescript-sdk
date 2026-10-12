@@ -1,4 +1,4 @@
-import type { IAuthenticateChallenge } from './support/headers';
+import type { IAuthenticateChallenge, IRateLimitInfo } from './support/headers';
 
 /** Used when a failure response carries nothing that explains it. */
 const FALLBACK_MESSAGE = 'API request failed';
@@ -70,6 +70,25 @@ export class ApiError extends AssinafyError {
      * ```
      */
     public challenge?: IAuthenticateChallenge;
+    /**
+     * Rate-limit headers carried by the failed response: `X-Rate-Limit-Limit`,
+     * `X-Rate-Limit-Remaining`, `X-Rate-Limit-Reset` and, on `429`,
+     * `Retry-After` (all in requests or seconds). `undefined` when the response
+     * carried none of them. The client already retries a `429` up to
+     * `maxRetries` times; this is what remains once those retries are spent.
+     *
+     * @example
+     * ```ts
+     * try {
+     *   await client.documents.list();
+     * } catch (error) {
+     *   if (error instanceof ApiError && error.statusCode === 429) {
+     *     await sleep((error.rateLimit?.retryAfter ?? 60) * 1000);
+     *   }
+     * }
+     * ```
+     */
+    public rateLimit?: IRateLimitInfo;
 
     /**
      * Create an error representing a non-success API response.
@@ -212,6 +231,7 @@ export class OAuthError extends ApiError {
             body,
         );
         if (error.challenge !== undefined) upgraded.challenge = error.challenge;
+        if (error.rateLimit !== undefined) upgraded.rateLimit = error.rateLimit;
         return upgraded;
     }
 }

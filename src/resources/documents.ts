@@ -21,13 +21,13 @@ import type {
     ITemplateCostSigner,
     ITemplateSigner,
     Logger,
+    ISendTokenResult,
     SendTokenChannel,
 } from '../types';
 import { ApiError, ValidationError } from '../errors';
 import {
     assertDateTime,
     assertDocumentArtifactName,
-    assertNonEmptyString,
     assertRecord,
     cleanListParams,
     isEmail,
@@ -1193,87 +1193,65 @@ export class DocumentResource extends BaseResource {
     }
 
     /**
-     * Send the signer's access token to their email
+     * Email the signer the verification token that unlocks a document
      * (`PUT /public/documents/{documentId}/send-token`).
      *
      * Part of the public signing flow: dispatches the 6-digit verification
-     * token the signer enters to view the document. The documented request body
-     * is `{ recipient, channel }` with `channel` set to `email`. This
-     * two-argument form sends the legacy `{ email }` shape, which current
-     * deployments still accept, and retries the documented shape only when the
-     * server explicitly reports that `channel`/`recipient` is required. Use the
-     * three-argument overload to send the documented shape directly.
+     * token the signer enters to view the document. Runs on the
+     * credential-free transport. The contract accepts only the `email`
+     * channel, and both body fields are required.
      *
      * Request body (`application/json`):
      * ```jsonc
-     * { "email": "signer@example.com" }
-     * ```
-     * Documented body, sent on the explicit-channel overload or on retry:
-     * ```jsonc
-     * { "recipient": "signer@example.com", "channel": "email" }
+     * { "channel": "email", "recipient": "signer@example.com" }
      * ```
      *
      * @param documentId - The document to send the token for.
-     * @param email - The signer's email address.
-     * @returns Nothing after the API's empty acknowledgement.
-     * @throws {ValidationError} If `documentId` is missing or `email` is not a
-     * valid email address.
-     * @throws {ApiError} If the API rejects the request.
+     * @param recipient - The signer's email address.
+     * @param channel - Delivery channel; only `email` is accepted (default).
+     * @returns The delivery confirmation (`data` of the envelope):
+     * ```jsonc
+     * {
+     *   "document": {
+     *     "resource": "document",
+     *     "id": "a1b2c3d4e5f6a7b8c9d0",
+     *     "name": "Contract.pdf",
+     *     "page_count": 3,
+     *     "created_by": "Jane Doe"
+     *   },
+     *   "channel": "email",
+     *   "recipient": "signer@example.com"
+     * }
+     * ```
+     * @throws {ValidationError} If `documentId` is missing, `recipient` is not
+     * a valid email address, or `channel` is not `email`.
+     * @throws {ApiError} `400` if validation fails; `404` if the document does
+     * not exist.
      *
      * @example
      * ```ts
-     * await client.documents.sendToken('doc-1', 'signer@example.com');
-     * ```
-     */
-    async sendToken(documentId: string, email: string): Promise<void>;
-    /**
-     * Send a signing token through an explicit channel
-     * (`PUT /public/documents/{documentId}/send-token`).
-     * Sends JSON `{ "recipient": "+5511999998888", "channel": "whatsapp" }`.
-     * @param documentId - Document identifier.
-     * @param recipient - Controlled email address or WhatsApp number.
-     * @param channel - Delivery channel, `email` or `whatsapp`.
-     * @returns Nothing; the acknowledgement body is discarded.
-     * @throws {ValidationError} If an argument is empty.
-     * @throws {ApiError} If delivery is rejected.
-     * @example
-     * ```ts
-     * await client.documents.sendToken('doc-1', 'signer@example.com', 'email');
+     * const sent = await client.documents.sendToken('doc-1', 'signer@example.com');
+     * console.log(sent.recipient);
      * ```
      */
     async sendToken(
         documentId: string,
         recipient: string,
-        channel: SendTokenChannel,
-    ): Promise<void>;
-    async sendToken(
-        documentId: string,
-        recipient: string,
-        channel?: SendTokenChannel,
-    ): Promise<void> {
+        channel: SendTokenChannel = 'email',
+    ): Promise<ISendTokenResult> {
         const id = this.requireId(documentId, 'Document ID');
-        assertNonEmptyString(recipient, 'recipient');
-        if (channel !== undefined) assertNonEmptyString(channel, 'channel');
-        if (channel === undefined && !isEmail(recipient)) {
+        if (channel !== 'email') {
+            throw new ValidationError('channel must be "email"', { channel });
+        }
+        if (!isEmail(recipient)) {
             throw new ValidationError('recipient must be a valid email address');
         }
-        const path = `/public/documents/${this.pathSegment(id, 'Document ID')}/send-token`;
-        if (channel !== undefined) {
-            return this.callVoid('Failed to send signing token', () =>
-                this.publicHttp.put(path, { recipient, channel }),
-            );
-        }
-
-        try {
-            return await this.callVoid('Failed to send signing token', () =>
-                this.publicHttp.put(path, { email: recipient }),
-            );
-        } catch (error) {
-            if (!isLegacySendTokenValidation(error)) throw error;
-            return this.callVoid('Failed to send signing token', () =>
-                this.publicHttp.put(path, { recipient, channel: 'email' }),
-            );
-        }
+        return this.call('Failed to send signing token', () =>
+            this.publicHttp.put(
+                `/public/documents/${this.pathSegment(id, 'Document ID')}/send-token`,
+                { channel, recipient },
+            ),
+        );
     }
 
     /**
@@ -1427,23 +1405,4 @@ function validateWaitOption(value: number, name: 'maxWaitMs' | 'pollIntervalMs')
 
 function sleep(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function isLegacySendTokenValidation(error: unknown): boolean {
-    if (!(error instanceof ApiError) || (error.statusCode !== 400 && error.statusCode !== 422)) {
-        return false;
-    }
-    const namesLegacyField = /\b(?:channel|recipient)\b/iu.test(error.message);
-    const saysRequired = /\b(?:required|obrigat[oó]ri[oa])\b/iu.test(error.message);
-    if (namesLegacyField && saysRequired) return true;
-
-    const response = error.responseData;
-    if (!response || typeof response !== 'object' || Array.isArray(response)) return false;
-    const errors = (response as Record<string, unknown>)['errors'];
-    if (!errors || typeof errors !== 'object' || Array.isArray(errors)) return false;
-    return ['channel', 'recipient'].some((field) => {
-        if (!Object.hasOwn(errors, field)) return false;
-        const detail = JSON.stringify((errors as Record<string, unknown>)[field]);
-        return /required|obrigat[oó]ri[oa]/iu.test(detail);
-    });
 }

@@ -207,7 +207,7 @@ export class AssinafyClient {
         );
         this.fields = new FieldsResource(this.axiosInstance, this.defaultAccountId, this.logger);
         this.signerDocuments = new SignerDocumentsResource(
-            this.publicAxiosInstance,
+            this.axiosInstance,
             this.defaultAccountId,
             this.logger,
             this.publicAxiosInstance,

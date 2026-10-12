@@ -1,6 +1,6 @@
 import { describe, test, expect } from 'bun:test';
 import axios from 'axios';
-import type { AxiosInstance, InternalAxiosRequestConfig } from 'axios';
+import type { AxiosAdapter, AxiosInstance, InternalAxiosRequestConfig } from 'axios';
 import packageJson from '../package.json';
 import { AssinafyClient } from './client';
 import { ApiError, ValidationError } from './errors';
@@ -351,6 +351,33 @@ describe('AssinafyClient', () => {
         expect(result.data).toEqual([{ id: 'd1' }] as never);
     });
 
+    test('exposes rate-limit headers on the ApiError once 429 retries are spent', async () => {
+        const client = new AssinafyClient({ apiKey: 'k', accountId: 'acc', maxRetries: 0 });
+        client.getAxiosInstance().defaults.adapter = async (config) => {
+            throw new axios.AxiosError('Too Many Requests', 'ERR_BAD_RESPONSE', config, {}, {
+                status: 429,
+                statusText: 'Too Many Requests',
+                headers: {
+                    'x-rate-limit-limit': '60',
+                    'x-rate-limit-remaining': '0',
+                    'x-rate-limit-reset': '42',
+                    'retry-after': '42',
+                },
+                data: { status: 429, message: 'Too many requests.' },
+                config,
+            });
+        };
+        const error = await client.documents.list().catch((e: unknown) => e);
+        expect(error).toBeInstanceOf(ApiError);
+        expect((error as ApiError).statusCode).toBe(429);
+        expect((error as ApiError).rateLimit).toEqual({
+            limit: 60,
+            remaining: 0,
+            reset: 42,
+            retryAfter: 42,
+        });
+    });
+
     test('aborts while waiting to retry a rate-limited request', async () => {
         const client = new AssinafyClient({ apiKey: 'k', maxRetries: 2 });
         const ax = client.getAxiosInstance();
@@ -570,6 +597,41 @@ describe('AssinafyClient', () => {
             id: 'signer-1',
         });
         expect(calls).toBe(2);
+    });
+
+    test('sends signer access codes without credentials and workspace lists without codes', async () => {
+        const client = new AssinafyClient({ apiKey: 'secret-key', accountId: 'acc', maxRetries: 0 });
+        const seen: Array<{ transport: string; url: string; apiKey: unknown; params: unknown }> = [];
+        const capture = (transport: string): AxiosAdapter =>
+            async (config) => {
+                seen.push({
+                    transport,
+                    url: config.url ?? '',
+                    apiKey: config.headers.get('X-Api-Key') ?? undefined,
+                    params: config.params,
+                });
+                return { data: { status: 200, data: [] }, status: 200, statusText: 'OK', headers: {}, config };
+            };
+        client.getAxiosInstance().defaults.adapter = capture('workspace');
+        (client as unknown as { publicAxiosInstance: AxiosInstance })
+            .publicAxiosInstance.defaults.adapter = capture('public');
+
+        await client.signerDocuments.list('s-1', 'code-1');
+        await client.signerDocuments.search('s-1', 'code-1', 'nda');
+        await client.signerDocuments.listAsWorkspace('s-1', { page: 2 });
+        await client.signerDocuments.searchAsWorkspace('s-1', 'nda');
+        await expect(client.signerDocuments.list('s-1', '  ')).rejects.toBeInstanceOf(ValidationError);
+        await expect(client.signerDocuments.listAsWorkspace(' ')).rejects.toBeInstanceOf(ValidationError);
+        await expect(
+            client.signerDocuments.searchAsWorkspace('s-1', 42 as never),
+        ).rejects.toBeInstanceOf(ValidationError);
+
+        expect(seen).toEqual([
+            { transport: 'public', url: '/signers/s-1/documents', apiKey: undefined, params: { 'signer-access-code': 'code-1' } },
+            { transport: 'public', url: '/signers/s-1/documents/search', apiKey: undefined, params: { 'signer-access-code': 'code-1', search: 'nda' } },
+            { transport: 'workspace', url: '/signers/s-1/documents', apiKey: 'secret-key', params: { page: 2 } },
+            { transport: 'workspace', url: '/signers/s-1/documents/search', apiKey: 'secret-key', params: { search: 'nda' } },
+        ]);
     });
 
     test('does not forward signer PII to logger callbacks', async () => {

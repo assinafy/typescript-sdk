@@ -296,6 +296,9 @@ configurações de conector; seus usuários não precisam que você registre nad
 
 ### Limite de requisições
 
+Quando as tentativas se esgotam, o `ApiError` traz `err.rateLimit` com `limit`, `remaining`,
+`reset` (de `X-Rate-Limit-*`) e `retryAfter` (`Retry-After`, em segundos).
+
 Em um HTTP `429` o cliente retenta até `maxRetries` vezes, aguardando o `Retry-After` (ou
 `X-Rate-Limit-Reset`) devolvido pelo servidor antes de cada tentativa. A repetição automática vale
 apenas para `GET`, `HEAD`, `OPTIONS` e `DELETE`, que são seguros de repetir. `GET /sign` fica de
@@ -338,7 +341,7 @@ As 106 operações documentadas em https://api.assinafy.com.br/v1/docs estão co
 | `client.oauth` | **getProtectedResourceMetadata**, **getAuthorizationServerMetadata**, **createAuthorizationUrl**, **readAuthorizationCallback**, **exchangeCode**, **refreshToken**, **revokeToken**, **getUserInfo** |
 | `client.auth` | getSocialLoginUrl, getSocialLoginCallbackUrl, login, verifyMfa, socialLogin, linkSocialLogin, createApiKey, getApiKey, deleteApiKey, changePassword, requestPasswordReset, resetPassword |
 | `client.users` | getCurrent, getStats, getNotificationPreferences, updateNotificationPreferences, getMfa, startTotpEnrollment, confirmTotpEnrollment, regenerateRecoveryCodes, deleteMfaMethod |
-| `client.signerDocuments` | getCurrent, list, search, download, signMultiple, declineMultiple, self, acceptTerms, verifyEmail, confirmData, uploadSignature, downloadSignature, getAssignment, sign, decline |
+| `client.signerDocuments` | getCurrent, list, search, listAsWorkspace, searchAsWorkspace, download, signMultiple, declineMultiple, self, acceptTerms, verifyEmail, confirmData, uploadSignature, downloadSignature, getAssignment, sign, decline |
 | `client.webhookVerifier` | verifySignature, extractEvent, getEventType, getEventData |
 
 Todo wrapper HTTP tem tipos de requisição e resposta verificados pelo TypeScript e JSDoc por método,
@@ -660,12 +663,8 @@ await client.documents.verify('FE32EDDADE7CBDDCBB934E7402047450B0E59C02');
 
 // Endpoints públicos (sem autenticação)
 await client.documents.getPublic(doc.id);
-// Corpo oficial: { email: 'maria@exemplo.com.br' }
-await client.documents.sendToken(doc.id, 'maria@exemplo.com.br');
-
-// Sobrecarga explícita de compatibilidade para deploys mais antigos:
-// { recipient: '+5548999990000', channel: 'whatsapp' }
-await client.documents.sendToken(doc.id, '+5548999990000', 'whatsapp');
+// Corpo: { channel: 'email', recipient: 'signer@example.com' } (só e-mail)
+await client.documents.sendToken(doc.id, 'signer@example.com');
 
 // O contrato OpenAPI atual exige IDs de tags já existentes.
 const tagContratos = await client.tags.create({ name: 'Contratos' });

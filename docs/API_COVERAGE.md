@@ -124,15 +124,17 @@ ordinary OAuth applications use the two SDK methods listed below.
 
 ## Signing and public flows — 17/17
 
-All methods in this section use the auth-free transport. Most signer operations
-authenticate with the `signer-access-code` query parameter required by the
-OpenAPI security scheme. The artifact download is explicitly public and accepts
+All access-code methods in this section use the auth-free transport and reject
+a missing or blank code; they authenticate with the `signer-access-code` query
+parameter required by the OpenAPI security scheme. The signer document list and
+search also accept workspace credentials; only the explicit `listAsWorkspace` /
+`searchAsWorkspace` methods send them, and never with an access code. The artifact download is explicitly public and accepts
 an optional fourth access-code argument only for legacy compatibility.
 
 | Method | Path | SDK method | Status |
 | --- | --- | --- | --- |
 | `GET` | `/v1/public/documents/{documentId}` | `client.documents.getPublic(documentId)` | Covered |
-| `PUT` | `/v1/public/documents/{documentId}/send-token` | `client.documents.sendToken(documentId, email)` | Covered |
+| `PUT` | `/v1/public/documents/{documentId}/send-token` | `client.documents.sendToken(documentId, recipient, channel?)` | Covered |
 | `GET` | `/v1/signers/self` | `client.signerDocuments.self(accessCode)` | Covered |
 | `GET` | `/v1/signers/{signerId}/document` | `client.signerDocuments.getCurrent(signerId, accessCode)` | Covered |
 | `GET` | `/v1/sign` | `client.signerDocuments.getAssignment(accessCode, hasAcceptedTerms?)` | Covered |
@@ -145,8 +147,8 @@ an optional fourth access-code argument only for legacy compatibility.
 | `PUT` | `/v1/signers/accept-terms` | `client.signerDocuments.acceptTerms(accessCode)` | Covered |
 | `POST` | `/v1/signature` | `client.signerDocuments.uploadSignature(accessCode, image, options?)` | Covered |
 | `GET` | `/v1/signature/{signatureType}` | `client.signerDocuments.downloadSignature(accessCode, signatureType)` | Covered |
-| `GET` | `/v1/signers/{signerId}/documents` | `client.signerDocuments.list(signerId, accessCode, params?)` | Covered |
-| `GET` | `/v1/signers/{signerId}/documents/search` | `client.signerDocuments.search(signerId, accessCode, search)` | Covered |
+| `GET` | `/v1/signers/{signerId}/documents` | `client.signerDocuments.list(signerId, accessCode, params?)` / `client.signerDocuments.listAsWorkspace(signerId, params?)` | Covered |
+| `GET` | `/v1/signers/{signerId}/documents/search` | `client.signerDocuments.search(signerId, accessCode, search)` / `client.signerDocuments.searchAsWorkspace(signerId, search?)` | Covered |
 | `GET` | `/v1/signers/{signerId}/documents/{documentId}/download/{artifactName}` | `client.signerDocuments.download(signerId, documentId, artifactName)` | Covered |
 
 ## Tags — 4/4

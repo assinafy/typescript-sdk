@@ -624,5 +624,9 @@ describe('SignerDocumentsResource — signer-access-code query auth', () => {
         expect(calls[0]?.body).toEqual({ decline_reason: 'bad terms' });
         expect(paramsOf(calls[0])).toEqual({ 'signer-access-code': 'code-xyz' });
         expect(result).toBeUndefined();
+        await expect(
+            new SignerDocumentsResource(http).decline('doc-1', 'asg-1', 'code-xyz', 'x'.repeat(2001)),
+        ).rejects.toBeInstanceOf(ValidationError);
+        expect(calls).toHaveLength(1);
     });
 });

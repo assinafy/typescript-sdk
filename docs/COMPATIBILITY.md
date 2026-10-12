@@ -194,30 +194,19 @@ and returns the JPEG bytes as a `Buffer`.
 
 ## Public send-token request
 
-The official operation requires a recipient and a channel (`email` is the only
-documented channel):
+The operation requires both `channel` and `recipient`; `email` is the only
+channel, and the response `data` is `{ document, channel, recipient }`:
 
 ```http
 PUT /v1/public/documents/{documentId}/send-token
 Content-Type: application/json
 
-{ "recipient": "signer@example.com", "channel": "email" }
+{ "channel": "email", "recipient": "signer@example.com" }
 ```
 
 ```ts
-await client.documents.sendToken(documentId, 'signer@example.com', 'email');
+const { recipient } = await client.documents.sendToken(documentId, 'signer@example.com');
 ```
-
-The two-argument overload sends the legacy `{ email }` shape, which current
-deployments still accept:
-
-```ts
-await client.documents.sendToken(documentId, 'signer@example.com');
-```
-
-When a deployment rejects `{ email }` with a validation response naming
-`recipient` or `channel` as required, the SDK retries the documented shape
-automatically. Other errors are returned unchanged.
 
 ## Document tags
 

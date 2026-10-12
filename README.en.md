@@ -308,6 +308,10 @@ anything for them.
 
 ### Rate limiting
 
+Once retries are spent, the `ApiError` carries `err.rateLimit` with `limit`,
+`remaining`, `reset` (from `X-Rate-Limit-*`) and `retryAfter` (`Retry-After`,
+in seconds).
+
 On an HTTP `429`, the client automatically retries up to `maxRetries` times,
 waiting for the server-provided `Retry-After` (or `X-Rate-Limit-Reset`) delay
 before each attempt. Automatic replay is limited to read-safe `GET`, `HEAD`,
@@ -352,7 +356,7 @@ ledger is in [docs/API_COVERAGE.md](docs/API_COVERAGE.md).
 | `client.oauth`        | **getProtectedResourceMetadata**, **getAuthorizationServerMetadata**, **createAuthorizationUrl**, **readAuthorizationCallback**, **exchangeCode**, **refreshToken**, **revokeToken**, **getUserInfo** |
 | `client.auth`         | getSocialLoginUrl, getSocialLoginCallbackUrl, login, verifyMfa, socialLogin, linkSocialLogin, createApiKey, getApiKey, deleteApiKey, changePassword, requestPasswordReset, resetPassword                                                                      |
 | `client.users`        | getCurrent, getStats, getNotificationPreferences, updateNotificationPreferences, getMfa, startTotpEnrollment, confirmTotpEnrollment, regenerateRecoveryCodes, deleteMfaMethod |
-| `client.signerDocuments` | getCurrent, list, search, download, signMultiple, declineMultiple, self, acceptTerms, verifyEmail, confirmData, uploadSignature, downloadSignature, getAssignment, sign, decline                                                            |
+| `client.signerDocuments` | getCurrent, list, search, listAsWorkspace, searchAsWorkspace, download, signMultiple, declineMultiple, self, acceptTerms, verifyEmail, confirmData, uploadSignature, downloadSignature, getAssignment, sign, decline                                                            |
 | `client.webhookVerifier` | verifySignature, extractEvent, getEventType, getEventData |
 
 Every HTTP wrapper has TypeScript-checked request/response shapes and
@@ -691,12 +695,8 @@ await client.documents.verify('FE32EDDADE7CBDDCBB934E7402047450B0E59C02');
 
 // Public endpoints (no auth)
 await client.documents.getPublic(doc.id);
-// Official request body: { email: 'jane@example.com' }
-await client.documents.sendToken(doc.id, 'jane@example.com');
-
-// Explicit compatibility overload for older deployments:
-// { recipient: '+5548999990000', channel: 'whatsapp' }
-await client.documents.sendToken(doc.id, '+5548999990000', 'whatsapp');
+// Body: { channel: 'email', recipient: 'signer@example.com' } (email only)
+await client.documents.sendToken(doc.id, 'signer@example.com');
 
 // The current OpenAPI contract requires existing tag IDs.
 const contractsTag = await client.tags.create({ name: 'Contracts' });

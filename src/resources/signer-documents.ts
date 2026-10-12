@@ -41,7 +41,15 @@ export class SignerDocumentsResource extends BaseResource {
         publicHttp?: AxiosInstance,
     ) {
         super(withoutCredentials(publicHttp ?? http), defaultAccountId, logger);
+        this.workspaceHttp = http;
     }
+
+    /**
+     * Credentialed transport used only by the explicit `*AsWorkspace` methods.
+     * Every access-code method stays on the credential-free `http`, so a
+     * signer code and the API key or bearer token never share a request.
+     */
+    private readonly workspaceHttp: AxiosInstance;
 
     /**
      * Fetch the document currently awaiting a given signer
@@ -219,6 +227,73 @@ export class SignerDocumentsResource extends BaseResource {
         return this.callList<IDocumentListItem>('Failed to search signer documents', () =>
             this.http.get(`/signers/${this.pathSegment(sid, 'Signer ID')}/documents/search`, {
                 params: cleanParams({ 'signer-access-code': code, search }),
+            }),
+        );
+    }
+
+    /**
+     * List a signer's documents with the workspace credentials
+     * (`GET /signers/{signer_id}/documents`).
+     *
+     * The same operation as {@link SignerDocumentsResource.list}, authorised by
+     * the client's API key or OAuth bearer token instead of a signer access
+     * code. No `signer-access-code` is sent.
+     *
+     * @param signerId - The signer whose documents are listed.
+     * @param params - Pagination: `page`, `per-page` (also accepts `per_page`).
+     * @returns Documents in the compact {@link IDocumentListItem} shape, with
+     * pagination in `meta` (same shape as {@link SignerDocumentsResource.list}):
+     * ```jsonc
+     * {
+     *   "data": [{ "id": "103acccd24234c07858ffddf6d84", "name": "Service agreement.pdf", "status": "pending_signature" }],
+     *   "meta": { "current_page": 1, "per_page": 20, "total": 1, "last_page": 1 }
+     * }
+     * ```
+     * @throws {ValidationError} If `signerId` is missing.
+     * @throws {ApiError} `401` if the workspace credentials are rejected.
+     *
+     * @example
+     * ```ts
+     * const { data } = await client.signerDocuments.listAsWorkspace(signerId, { page: 1 });
+     * ```
+     */
+    async listAsWorkspace(signerId: string, params: IListParams = {}): Promise<IDocumentListResponse> {
+        const sid = this.pathSegment(signerId, 'Signer ID');
+        return this.callList<IDocumentListItem>('Failed to list signer documents', () =>
+            this.workspaceHttp.get(`/signers/${sid}/documents`, {
+                params: cleanListParams(params),
+            }),
+        );
+    }
+
+    /**
+     * Search a signer's documents with the workspace credentials
+     * (`GET /signers/{signer_id}/documents/search`).
+     *
+     * The same operation as {@link SignerDocumentsResource.search}, authorised
+     * by the client's API key or OAuth bearer token instead of a signer access
+     * code. No `signer-access-code` is sent.
+     *
+     * @param signerId - The signer whose documents are searched.
+     * @param search - Free-text term matched against the document name.
+     * @returns Matching documents with pagination in `meta`, as
+     * {@link SignerDocumentsResource.listAsWorkspace} returns.
+     * @throws {ValidationError} If `signerId` is missing or `search` is not a string.
+     * @throws {ApiError} `401` if the workspace credentials are rejected.
+     *
+     * @example
+     * ```ts
+     * const { data } = await client.signerDocuments.searchAsWorkspace(signerId, 'agreement');
+     * ```
+     */
+    async searchAsWorkspace(signerId: string, search?: string): Promise<IDocumentListResponse> {
+        const sid = this.pathSegment(signerId, 'Signer ID');
+        if (search !== undefined && typeof search !== 'string') {
+            throw new ValidationError('search must be a string');
+        }
+        return this.callList<IDocumentListItem>('Failed to search signer documents', () =>
+            this.workspaceHttp.get(`/signers/${sid}/documents/search`, {
+                params: cleanParams({ search }),
             }),
         );
     }
@@ -1016,6 +1091,9 @@ function assertDocumentIds(documentIds: string[]): void {
 function assertDeclineReason(declineReason: string): void {
     if (typeof declineReason !== 'string' || !declineReason.trim()) {
         throw new ValidationError('declineReason is required');
+    }
+    if (declineReason.length > 2000) {
+        throw new ValidationError('declineReason must be at most 2000 characters');
     }
 }
 
