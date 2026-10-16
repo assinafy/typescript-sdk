@@ -14,7 +14,7 @@ import { SDK_USER_AGENT } from '../src/support/transport';
 const DEFAULT_SPEC_URL = 'https://api.assinafy.com.br/v1/docs/openapi.json';
 const COVERAGE_FILE = new URL('../docs/API_COVERAGE.md', import.meta.url);
 const HTTP_METHODS = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']);
-const EXPECTED_CONTRACT_FINGERPRINT = 'b896ffc1956cbe75639475247cf94ff4b2612512c154dff15f20d5826b9d9634';
+const EXPECTED_CONTRACT_FINGERPRINT = 'b4eb78f9c91268a2a46fa3f134d8470e7faf75d33712a16466488592c7599e5e';
 const NON_CONTRACT_KEYS = new Set([
     'description',
     'summary',
@@ -22,6 +22,11 @@ const NON_CONTRACT_KEYS = new Set([
     'example',
     'examples',
     'externalDocs',
+]);
+const NAMED_CONTRACT_MAPS = new Set([
+    'properties', 'patternProperties', '$defs', 'definitions', 'schemas',
+    'parameters', 'responses', 'headers', 'requestBodies', 'securitySchemes',
+    'links', 'callbacks',
 ]);
 
 interface OpenApiDocument {
@@ -58,16 +63,28 @@ function assertContract(condition: unknown, message: string): asserts condition 
     if (!condition) throw new Error(`OpenAPI structural drift: ${message}`);
 }
 
-function normalizedContract(value: unknown): unknown {
-    if (Array.isArray(value)) return value.map(normalizedContract);
+function normalizedContract(value: unknown, namedEntries = false): unknown {
+    if (Array.isArray(value)) return value.map((item) => normalizedContract(item));
     if (!isRecord(value)) return value;
 
     return Object.fromEntries(
         Object.keys(value)
-            .filter((key) => !NON_CONTRACT_KEYS.has(key))
+            .filter((key) => namedEntries || !NON_CONTRACT_KEYS.has(key))
             .sort()
-            .map((key) => [key, normalizedContract(value[key])]),
+            .map((key) => [key, normalizedContract(value[key], NAMED_CONTRACT_MAPS.has(key))]),
     );
+}
+
+function validateFingerprintNormalization(): void {
+    for (const name of NON_CONTRACT_KEYS) {
+        const fingerprint = (type: string, description: string): string => contractFingerprint({
+            components: { schemas: { [name]: { description, properties: { [name]: { type } } } } },
+        });
+        assertContract(fingerprint('string', 'first') === fingerprint('string', 'second'),
+            'fingerprints must ignore prose annotations');
+        assertContract(fingerprint('string', 'first') !== fingerprint('number', 'first'),
+            'fingerprints must retain schema names and payload properties named like annotations');
+    }
 }
 
 function contractFingerprint(spec: OpenApiDocument): string {
@@ -131,8 +148,8 @@ function validateProductionStructure(spec: OpenApiDocument): number {
             'enum',
         );
         requireValue(
-            Array.isArray(methods) && methods.includes('DigitalCertificate'),
-            `${path} must include DigitalCertificate`,
+            sameMembers(methods, ['Email', 'Whatsapp', 'DigitalCertificate', 'IdDocumentFaceMatchBasic']),
+            `${path} verification methods changed`,
         );
     }
 
@@ -245,6 +262,34 @@ function validateProductionStructure(spec: OpenApiDocument): number {
         sameMembers(at(createEndpointBody, 'required'), ['url', 'email', 'events'])
             && at(createEndpointBody, 'properties', 'signing_enabled', 'type') === 'boolean',
         'Webhook endpoint create body must require url/email/events and accept signing_enabled',
+    );
+    requireValue(
+        at(spec, 'paths', '/v1/accounts/{accountId}/webhooks/endpoints', 'post', 'responses',
+            '200', 'content', 'application/json', 'schema', 'allOf', 1, 'properties', 'data',
+            'allOf', 1, 'properties', 'secret', 'type') === 'string',
+        'Webhook endpoint creation must return its signing secret',
+    );
+    requireValue(
+        at(parameter(spec, '/v1/accounts/{accountId}/webhooks/endpoints', 'delete', 'url'), 'required') === true,
+        'Webhook deletion by URL must require the url query parameter',
+    );
+    requireValue(
+        at(parameter(spec, '/v1/accounts/{accountId}/webhooks/endpoints', 'get', 'url'), 'schema', 'type') === 'string',
+        'Webhook endpoint listing must accept the exact url filter',
+    );
+    requireValue(
+        sameMembers(at(spec, 'paths', '/v1/signers/identity-verification', 'post', 'requestBody',
+            'content', 'application/json', 'schema', 'required'), ['consent'])
+            && at(spec, 'paths', '/v1/signers/identity-verification', 'post', 'security', 0,
+                'signerAccessCode') instanceof Array,
+        'Identity verification must require explicit consent and signer-code authentication',
+    );
+    requireValue(
+        sameMembers(at(spec, 'paths', '/v1/documents/{documentId}/assignments/{assignmentId}/signers/{signerId}/identity-verification/review',
+            'post', 'requestBody', 'content', 'application/json', 'schema', 'properties', 'decision', 'enum'), ['Approved', 'Rejected'])
+            && at(spec, 'components', 'schemas', 'SignerIdentityReview', 'properties', 'reason_codes',
+                'items', 'properties', 'description', 'type') === 'string',
+        'Identity reviews must retain their decision values and reason descriptions',
     );
     requireValue(
         sameMembers(
@@ -515,6 +560,7 @@ async function fetchJson(url: string): Promise<unknown> {
 }
 
 async function main(): Promise<void> {
+    validateFingerprintNormalization();
     const specUrl = process.env['ASSINAFY_OPENAPI_URL'] ?? DEFAULT_SPEC_URL;
     const response = await fetch(specUrl, {
         headers: { Accept: 'application/json', 'User-Agent': SDK_USER_AGENT },

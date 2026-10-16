@@ -6,6 +6,96 @@ import {
 } from './assignments';
 import { ValidationError } from '../errors';
 import type { AxiosInstance } from 'axios';
+import type { ISignerIdentityReview } from '../types';
+
+describe('AssignmentResource identity verification', () => {
+    const review: ISignerIdentityReview = {
+        id: 'verification-1', status: 'InReview', provider: 'AssinafyVerify',
+        verification_method: 'IdDocumentFaceMatchBasic',
+        reason_codes: [{ code: 'NAME_MISMATCH', description: 'Name differs' }],
+        evidence_available: true, expected: { name: 'Example Signer', cpf: null },
+        document: { type: 'CNH', name: 'EXAMPLE SIGNER', cpf: null },
+        matches: { cpf: null, name: 0.52, birth_date: null },
+        checks: [{ name: 'name', result: 'review', score: 0.52, reasons: ['NAME_MISMATCH'] }],
+        images: ['document_front', 'face'], ruleset_version: '2026-10-12.2',
+        evidence_sha256: null, reviewed_by: null, reviewed_at: null, review_note: null,
+        completed_at: null,
+    };
+
+    test('reads the complete review and downloads each allowed evidence image', async () => {
+        const calls: unknown[] = [];
+        const bytes = Buffer.from('evidence');
+        const http = {
+            get: async (url: string, config?: unknown) => {
+                calls.push({ url, config });
+                return { status: 200, data: config ? bytes : { status: 200, data: review } };
+            },
+        } as unknown as AxiosInstance;
+        const resource = new AssignmentResource(http);
+        expect(await resource.getIdentityVerification('doc/1', 'asg?1', 'signer#1')).toEqual(review);
+        for (const name of ['document_front', 'document_back', 'document_pdf', 'face'] as const) {
+            expect(await resource.downloadIdentityVerificationImage('doc/1', 'asg?1', 'signer#1', name)).toEqual(bytes);
+        }
+        const path = '/documents/doc%2F1/assignments/asg%3F1/signers/signer%231/identity-verification';
+        expect(calls).toEqual([
+            { url: path, config: undefined },
+            ...['document_front', 'document_back', 'document_pdf', 'face'].map((name) => ({
+                url: `${path}/images/${name}`, config: { responseType: 'arraybuffer' },
+            })),
+        ]);
+    });
+
+    test('posts only the decision and optional nullable note', async () => {
+        const calls: unknown[] = [];
+        const http = {
+            post: async (url: string, body: unknown) => {
+                calls.push({ url, body });
+                return { status: 200, data: { status: 200, data: { ...review, status: 'Approved', images: [] } } };
+            },
+        } as unknown as AxiosInstance;
+        const resource = new AssignmentResource(http);
+        for (const payload of [
+            { decision: 'Approved' as const },
+            { decision: 'Rejected' as const, note: null },
+            { decision: 'Approved' as const, note: 'Verified independently.', extra: 'private' },
+        ]) {
+            const result = await resource.reviewIdentityVerification('d', 'a', 's', payload);
+            expect(result.status).toBe('Approved');
+            expect(result.images).toEqual([]);
+            expect(result.reason_codes[0]?.description).toBe('Name differs');
+        }
+        expect(calls).toEqual([
+            { url: '/documents/d/assignments/a/signers/s/identity-verification/review', body: { decision: 'Approved' } },
+            { url: '/documents/d/assignments/a/signers/s/identity-verification/review', body: { decision: 'Rejected', note: null } },
+            { url: '/documents/d/assignments/a/signers/s/identity-verification/review', body: { decision: 'Approved', note: 'Verified independently.' } },
+        ]);
+    });
+
+    test('rejects invalid identifiers, evidence names and decisions before requesting', async () => {
+        let calls = 0;
+        const http = { get: async () => { calls++; }, post: async () => { calls++; } } as unknown as AxiosInstance;
+        const resource = new AssignmentResource(http);
+        const requests = [
+            () => resource.getIdentityVerification('', 'a', 's'),
+            () => resource.getIdentityVerification('d', '', 's'),
+            () => resource.getIdentityVerification('d', 'a', ' '),
+            () => resource.downloadIdentityVerificationImage('d', 'a', 's', '../face' as never),
+            ...[null, [], {}, { decision: 'approved' }, { decision: 'Approved', note: 1 },
+                { decision: 'Rejected', note: 'x'.repeat(2001) }].map((payload) =>
+                () => resource.reviewIdentityVerification('d', 'a', 's', payload as never)),
+        ];
+        for (const request of requests) await expect(request()).rejects.toBeInstanceOf(ValidationError);
+        expect(calls).toBe(0);
+    });
+
+    test('accepts identity-document verification with either notification channel in create and pricing', () => {
+        for (const notification of ['Email', 'Whatsapp'] as const) {
+            const descriptor = { verification_method: 'IdDocumentFaceMatchBasic' as const, notification_methods: [notification] };
+            expect(buildAssignmentPayload({ signers: [{ id: 's', ...descriptor }] })['signers']).toEqual([{ id: 's', ...descriptor }]);
+            expect(buildAssignmentEstimatePayload({ signers: [descriptor] })['signers']).toEqual([descriptor]);
+        }
+    });
+});
 
 describe('buildAssignmentPayload', () => {
     test('rejects malformed payload objects with ValidationError', () => {

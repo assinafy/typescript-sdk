@@ -269,7 +269,7 @@ describe('SignerResource', () => {
         // The server silently clamps `per-page` to 50 instead of rejecting a
         // larger value, so asking for more only makes the scanned window look
         // wider than it is. Pin the real maximum.
-        expect(params).toEqual({ search: 'john@example.com', 'per-page': MAX_LIST_PAGE_SIZE });
+        expect(params).toEqual({ search: 'john@example.com', 'per-page': MAX_LIST_PAGE_SIZE, page: 1 });
         expect(MAX_LIST_PAGE_SIZE).toBe(50);
     });
 
@@ -373,6 +373,40 @@ describe('SignerResource', () => {
 });
 
 describe('SignerResource.create duplicate-email race recovery', () => {
+    test('looks past a full substring-match page and reuses the exact signer without posting', async () => {
+        const exact = { id: 'exact', full_name: 'Example Signer', email: 'a@example.com' };
+        for (const paginationHeaders of [true, false]) {
+            const pages: number[] = [];
+            let posts = 0;
+            const http = {
+                get: async (_url: string, config: { params: Record<string, unknown> }) => {
+                    const page = Number(config.params['page'] ?? 1);
+                    pages.push(page);
+                    return {
+                        status: 200, data: { status: 200, data: page === 1
+                            ? Array.from({ length: 50 }, (_, i) => ({ id: `other-${i}`, email: `${'b'.repeat(i + 1)}a@example.com` }))
+                            : [exact] },
+                        headers: paginationHeaders ? { 'x-pagination-page-count': '2' } : {},
+                    };
+                },
+                post: async () => { posts++; },
+            } as unknown as AxiosInstance;
+            expect(await new SignerResource(http, 'acc').create({ full_name: 'Example Signer', email: exact.email })).toEqual(exact);
+            expect(pages).toEqual([1, 2]);
+            expect(posts).toBe(0);
+        }
+    });
+
+    test('rejects dot-segment IDs before a delete reaches the transport', async () => {
+        let calls = 0;
+        const http = { delete: async () => { calls++; } } as unknown as AxiosInstance;
+        const resource = new SignerResource(http, 'workspace');
+        for (const id of ['.', '..']) {
+            await expect(resource.delete(id)).rejects.toBeInstanceOf(ValidationError);
+            await expect(resource.delete('signer', id)).rejects.toBeInstanceOf(ValidationError);
+        }
+        expect(calls).toBe(0);
+    });
     const list = (data: unknown[]) => ({ status: 200, data: { status: 200, data }, headers: {} });
     const existing = { id: 'signer-existing', full_name: 'Ana Souza', email: 'ana@example.com' };
 

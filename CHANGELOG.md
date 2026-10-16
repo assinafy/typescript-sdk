@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.8.0] - 2026-10-16
+
+### Added
+
+- Identity-document and face verification: `IdDocumentFaceMatchBasic` on
+  assignment and template creation and cost estimation,
+  `signerDocuments.getIdentityVerification()` and
+  `startIdentityVerification()`, and account-side
+  `assignments.getIdentityVerification()`,
+  `downloadIdentityVerificationImage()` and `reviewIdentityVerification()`.
+  Includes typed provider state, evidence, decisions, webhook events and the
+  `pending_identity_review` document status.
+- `webhooks.deleteEndpointByUrl()` deletes an endpoint using its exact
+  registered URL. `listEndpoints()` accepts an optional second argument
+  `{ url }` to filter by that URL.
+- `webhooks.createEndpoint()` returns `IWebhookEndpointCreateResponse`,
+  exposing the signing `secret` supplied at creation so OAuth applications can
+  store it without calling the API-key-only secret endpoint.
+
+### Fixed
+
+- Reject dot-segment resource IDs before URL normalization can change the
+  requested route, and prevent redirect hooks from changing the destination
+  after credential checks.
+- Reject invalid webhook timestamp tolerances instead of accepting stale
+  signed deliveries with a non-finite replay window.
+- Search every matching signer page for an exact email so idempotent creation
+  reuses an existing signer beyond the first 50 substring matches.
+- Let the API validate template signing order using its role definitions, so
+  copy receivers and editors are not counted as certificate signing peers.
+- Return processed documents waiting for identity review from
+  `documents.waitUntilReady()`.
+- Correct digital-certificate pricing to 0.5 credits plus notification in
+  method references and integration examples, and fix optional-page access in
+  TypeScript examples.
+
 ## [2.7.1] - 2026-10-12
 
 ### Added
@@ -798,7 +834,8 @@ signer fields with `cpf` and `whatsapp_phone_number`.
 - High-level `uploadAndRequestSignatures` helper on `AssinafyClient`.
 - `PaginatedResult<T>` with parsed `X-Pagination-*` header meta.
 
-[Unreleased]: https://github.com/assinafy/typescript-sdk/compare/v2.7.1...HEAD
+[Unreleased]: https://github.com/assinafy/typescript-sdk/compare/v2.8.0...HEAD
+[2.8.0]: https://github.com/assinafy/typescript-sdk/releases/tag/v2.8.0
 [2.7.1]: https://github.com/assinafy/typescript-sdk/compare/v2.7.0...v2.7.1
 [2.7.0]: https://github.com/assinafy/typescript-sdk/compare/v2.6.0...v2.7.0
 [2.6.0]: https://github.com/assinafy/typescript-sdk/compare/v2.5.2...v2.6.0

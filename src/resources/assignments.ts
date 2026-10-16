@@ -11,6 +11,9 @@ import type {
     IResendCostEstimate,
     IResendEmailResponse,
     IWhatsAppNotification,
+    IdentityVerificationImageName,
+    IReviewIdentityVerificationPayload,
+    ISignerIdentityReview,
     SignerReference,
 } from '../types';
 import { ValidationError } from '../errors';
@@ -18,7 +21,7 @@ import { assertDateTime, assertRecord, cleanListParams, cleanParams } from '../u
 import { BaseResource } from './base';
 
 const ASSIGNMENT_METHODS = new Set(['virtual', 'collect']);
-const VERIFICATION_METHODS = new Set(['Email', 'Whatsapp', 'DigitalCertificate']);
+const VERIFICATION_METHODS = new Set(['Email', 'Whatsapp', 'DigitalCertificate', 'IdDocumentFaceMatchBasic']);
 const NOTIFICATION_METHODS = new Set(['Email', 'Whatsapp']);
 
 /**
@@ -26,15 +29,17 @@ const NOTIFICATION_METHODS = new Set(['Email', 'Whatsapp']);
  *
  * The API couples the two: verification `Email` always notifies by e-mail and
  * `Whatsapp` always notifies over WhatsApp, because the verification code
- * travels on the notification channel. Only `DigitalCertificate` — where the
+ * travels on the notification channel. `DigitalCertificate` — where the
  * signer proves identity with their own ICP-Brasil certificate (A1 in software
  * or A3 on a token/smartcard) rather than with a code — is free to be announced
- * either way. Any other pairing is rejected with `400`.
+ * either way, as is hosted `IdDocumentFaceMatchBasic` verification. Any other
+ * pairing is rejected with `400`.
  */
 const ALLOWED_NOTIFICATION_METHODS: Record<string, ReadonlySet<string>> = {
     Email: new Set(['Email']),
     Whatsapp: new Set(['Whatsapp']),
     DigitalCertificate: NOTIFICATION_METHODS,
+    IdDocumentFaceMatchBasic: NOTIFICATION_METHODS,
 };
 
 /**
@@ -501,8 +506,10 @@ export class AssignmentResource extends BaseResource {
      * {@link buildAssignmentPayload}. A `virtual` assignment may be created at
      * `uploaded`, `metadata_processing`, or `metadata_ready` and is promoted
      * automatically; `collect` requires rendered pages at `metadata_ready`.
-     * `DigitalCertificate` costs two credits, requires the feature plus a
+     * `DigitalCertificate` costs 0.5 credits, requires the feature plus a
      * signer `government_id`, and that signer must be alone in its step.
+     * `IdDocumentFaceMatchBasic` needs the ID Document + Face Match feature
+     * and a valid CPF in the signer's `government_id`; estimate its fee first.
      *
      * Request body (`application/json`):
      * ```jsonc
@@ -641,7 +648,7 @@ export class AssignmentResource extends BaseResource {
      * only `verification_method` / `notification_methods` (or `{}` for the
      * default Email channel). {@link buildAssignmentEstimatePayload} projects
      * exactly the fields permitted by the estimate schema.
-     * `DigitalCertificate` is priced at two credits per signer and remains
+     * `DigitalCertificate` is priced at 0.5 credits per signer and remains
      * subject to the feature, identity, and one-signer-per-step requirements.
      * Current documented unit prices are 1 credit for an extra document, 0 for
      * email notification, and 0.45 for WhatsApp notification; a digital
@@ -934,5 +941,164 @@ export class AssignmentResource extends BaseResource {
                 `/documents/${this.pathSegment(docId, 'Document ID')}/assignments/${this.pathSegment(asgId, 'Assignment ID')}/whatsapp-notifications`,
             ),
         );
+    }
+
+    /**
+     * Read the account's signer identity review
+     * (`GET /documents/{documentId}/assignments/{assignmentId}/signers/{signerId}/identity-verification`).
+     *
+     * No request body. `InReview` lets the signer continue signing but holds
+     * certification. Evidence is a summary without images or biometrics; a
+     * directly approved verification exposes evidence on its activity instead.
+     *
+     * @param documentId - Document owning the assignment.
+     * @param assignmentId - Assignment containing the signer.
+     * @param signerId - Signer whose identity is under review.
+     * @returns The complete review summary:
+     * ```jsonc
+     * {
+     *   "id": "verification_example", "status": "InReview",
+     *   "provider": "AssinafyVerify", "verification_method": "IdDocumentFaceMatchBasic",
+     *   "reason_codes": [{ "code": "NAME_MISMATCH", "description": "Name differs" }],
+     *   "evidence_available": true,
+     *   "expected": { "name": "Example Signer", "cpf": null },
+     *   "document": { "type": "CNH", "name": "EXAMPLE SIGNER", "cpf": null },
+     *   "matches": { "cpf": null, "name": 0.52, "birth_date": null },
+     *   "checks": [{ "name": "name", "result": "review", "score": 0.52, "reasons": ["NAME_MISMATCH"] }],
+     *   "images": ["document_front", "face"], // available only while InReview
+     *   "ruleset_version": "2026-10-12.2", "evidence_sha256": null,
+     *   "reviewed_by": null, "reviewed_at": null, "review_note": null, "completed_at": null
+     * }
+     * ```
+     * @throws {ValidationError} If any ID is blank or invalid for a URL.
+     * @throws {ApiError} `401` for invalid credentials; `404` for an unknown
+     * assignment, signer or verification; `500` for a server failure.
+     * @example
+     * ```ts
+     * const review = await client.assignments.getIdentityVerification('doc-1', 'asg-1', 'signer-1');
+     * console.log(review.status, review.images.length);
+     * ```
+     */
+    async getIdentityVerification(
+        documentId: string,
+        assignmentId: string,
+        signerId: string,
+    ): Promise<ISignerIdentityReview> {
+        const path = this.identityVerificationPath(documentId, assignmentId, signerId);
+        return this.call('Failed to fetch signer identity review', () => this.http.get(path));
+    }
+
+    /**
+     * Download identity review evidence
+     * (`GET /documents/{documentId}/assignments/{assignmentId}/signers/{signerId}/identity-verification/images/{name}`).
+     *
+     * No request body. The provider supplies the bytes on each request; Assinafy
+     * never stores them. Available only while the review is open. Keep these
+     * sensitive bytes out of caches and logs (`Cache-Control: no-store`).
+     *
+     * @param documentId - Document owning the assignment.
+     * @param assignmentId - Assignment containing the signer.
+     * @param signerId - Signer whose evidence to view.
+     * @param name - One of the review's `images`: `document_front`,
+     * `document_back`, `document_pdf`, or `face`.
+     * @returns Raw JPEG, PNG or PDF bytes as a `Buffer`.
+     * @throws {ValidationError} If an ID or image name is invalid.
+     * @throws {ApiError} `401` for invalid credentials; `404` for absent evidence
+     * or a decided review; `500` for a provider/server failure.
+     * @example
+     * ```ts
+     * const bytes = await client.assignments.downloadIdentityVerificationImage('doc-1', 'asg-1', 'signer-1', 'face');
+     * ```
+     */
+    async downloadIdentityVerificationImage(
+        documentId: string,
+        assignmentId: string,
+        signerId: string,
+        name: IdentityVerificationImageName,
+    ): Promise<Buffer> {
+        const path = this.identityVerificationPath(documentId, assignmentId, signerId);
+        if (!['document_front', 'document_back', 'document_pdf', 'face'].includes(name)) {
+            throw new ValidationError('Invalid identity verification image name');
+        }
+        return this.callBinary('Failed to download identity review evidence', () =>
+            this.http.get<ArrayBuffer>(`${path}/images/${name}`, { responseType: 'arraybuffer' }),
+        );
+    }
+
+    /**
+     * Decide a signer identity review
+     * (`POST /documents/{documentId}/assignments/{assignmentId}/signers/{signerId}/identity-verification/review`).
+     *
+     * Requires `InReview` and a document at `pending_signature` or
+     * `pending_identity_review`. Approval allows certification once all signers
+     * sign and every review is approved. Rejection cancels the document as
+     * `rejected_by_user` and sends cancellation notices to signers and copy
+     * receivers. The note is hidden from them; the provider receives the decision.
+     *
+     * Request body (`application/json`):
+     * ```jsonc
+     * { "decision": "Approved", "note": "Verified independently." }
+     * ```
+     * @param documentId - Document owning the assignment.
+     * @param assignmentId - Assignment containing the signer.
+     * @param signerId - Signer whose review to decide.
+     * @param payload - Explicit account review decision.
+     * @param payload.decision - `Approved` or `Rejected`.
+     * @param payload.note - Optional nullable note, at most 2000 characters.
+     * @returns The updated review, in the full
+     * {@link AssignmentResource.getIdentityVerification} shape:
+     * ```jsonc
+     * {
+     *   "id": "verification_example", "status": "Approved",
+     *   "provider": "AssinafyVerify", "verification_method": "IdDocumentFaceMatchBasic",
+     *   "reason_codes": [{ "code": "NAME_MISMATCH", "description": "Name differs" }],
+     *   "evidence_available": true,
+     *   "expected": { "name": "Example Signer", "cpf": null },
+     *   "document": { "type": "CNH", "name": "EXAMPLE SIGNER", "cpf": null },
+     *   "matches": { "cpf": null, "name": 0.52, "birth_date": null },
+     *   "checks": [{ "name": "name", "result": "review", "score": 0.52, "reasons": ["NAME_MISMATCH"] }],
+     *   "images": [], "ruleset_version": "2026-10-12.2", "evidence_sha256": null,
+     *   "reviewed_by": { "id": "user_example", "name": "Example Reviewer" },
+     *   "reviewed_at": "2026-10-16T12:00:00Z", "review_note": "Verified independently.",
+     *   "completed_at": "2026-10-16T12:00:00Z"
+     * }
+     * ```
+     * @throws {ValidationError} If IDs, decision or note are invalid.
+     * @throws {ApiError} `400` for a closed review or invalid document state;
+     * `401` for invalid credentials; `404` if absent; `500` for a server failure.
+     * @example
+     * ```ts
+     * await client.assignments.reviewIdentityVerification('doc-1', 'asg-1', 'signer-1', {
+     *   decision: 'Approved', note: 'Verified independently.',
+     * });
+     * ```
+     */
+    async reviewIdentityVerification(
+        documentId: string,
+        assignmentId: string,
+        signerId: string,
+        payload: IReviewIdentityVerificationPayload,
+    ): Promise<ISignerIdentityReview> {
+        const path = this.identityVerificationPath(documentId, assignmentId, signerId);
+        assertRecord(payload, 'identity review payload');
+        if (payload.decision !== 'Approved' && payload.decision !== 'Rejected') {
+            throw new ValidationError('decision must be Approved or Rejected');
+        }
+        if (payload.note !== undefined && payload.note !== null
+            && (typeof payload.note !== 'string' || [...payload.note].length > 2000)) {
+            throw new ValidationError('note must be a string of at most 2000 characters, or null');
+        }
+        const body: IReviewIdentityVerificationPayload = { decision: payload.decision };
+        if (payload.note !== undefined) body.note = payload.note;
+        return this.call('Failed to decide signer identity review', () =>
+            this.http.post(`${path}/review`, body),
+        );
+    }
+
+    private identityVerificationPath(documentId: string, assignmentId: string, signerId: string): string {
+        const docId = this.pathSegment(documentId, 'Document ID');
+        const asgId = this.pathSegment(assignmentId, 'Assignment ID');
+        const sid = this.pathSegment(signerId, 'Signer ID');
+        return `/documents/${docId}/assignments/${asgId}/signers/${sid}/identity-verification`;
     }
 }

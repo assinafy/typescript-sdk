@@ -298,6 +298,8 @@ export class FieldsResource extends BaseResource {
      * @param value - The value to check (validated against the field's
      *   type/regex). Sent as `{ value }` in the request body.
      * @param options - Account override and optional legacy `signerAccessCode`.
+     * @param options.accountId - Override the client's default workspace.
+     * @param options.signerAccessCode - Legacy signer code sent as a query parameter.
      * @returns The validation result. Response shape:
      * ```jsonc
      * {
@@ -364,6 +366,8 @@ export class FieldsResource extends BaseResource {
      *
      * @param entries - Non-empty array of `{ field_id, value }` pairs.
      * @param options - Account override and optional legacy `signerAccessCode`.
+     * @param options.accountId - Override the client's default workspace.
+     * @param options.signerAccessCode - Legacy signer code sent as a query parameter.
      * @returns One validation result per entry. Response shape:
      * ```jsonc
      * [

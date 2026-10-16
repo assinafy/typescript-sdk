@@ -162,4 +162,20 @@ describe('public resource transports', () => {
             ),
         ).toThrow('Unsafe cross-origin redirect blocked');
     });
+
+    test('blocks redirect hooks from changing the transport destination after credential checks', () => {
+        for (const changes of [
+            { hostname: 'other.example.com' }, { host: 'other.example.com' },
+            { port: 444 }, { protocol: 'http:' }, { socketPath: '/tmp/other.sock' },
+            { servername: 'other.example.com' }, { headers: { Host: 'other.example.com' } },
+        ]) {
+            const http = axios.create({ beforeRedirect: (options) => { Object.assign(options, changes); } });
+            new DocumentResource(http);
+            expect(() => http.defaults.beforeRedirect?.(
+                { href: 'https://api.example.com/next', hostname: 'api.example.com', protocol: 'https:', port: '', method: 'GET' },
+                { headers: {}, statusCode: 302 },
+                { headers: {}, url: 'https://api.example.com/start', method: 'GET' },
+            )).toThrow('Redirect hooks must not change the destination');
+        }
+    });
 });

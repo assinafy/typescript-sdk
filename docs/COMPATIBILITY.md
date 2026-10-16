@@ -38,7 +38,7 @@ GET /v1/login-callback
 
 They map to `auth.getSocialLoginUrl()` and
 `auth.getSocialLoginCallbackUrl()` and are not part of the official
-106-operation total.
+112-operation total.
 
 The SDK also includes the production contract additions for:
 
@@ -210,7 +210,7 @@ const { recipient } = await client.documents.sendToken(documentId, 'signer@examp
 
 ## Document tags
 
-Replace and attach requests require existing tag IDs:
+The published contract specifies existing tag IDs for replace and attach:
 
 ```ts
 const tag = await client.tags.create({ name: 'Contracts', color: '#ff8800' });
@@ -224,6 +224,13 @@ The API accepts a tag color with or without a leading `#` and returns the
 stored six-character value without it. Unknown tag names are not the normal
 attachment input; create or list the tag first and send its ID. An empty array
 passed to `replaceTags` detaches every tag.
+
+Older sandbox deployments interpret those same string arrays as **tag names**:
+sending an ID creates a new tag whose name is that ID. On such a deployment,
+pass the existing tag's `name` intentionally to attach it. `detachTag` still
+takes an ID. The SDK sends the supplied strings unchanged; it does not retry a
+successful mutation or infer an ID-to-name translation. Check the returned tag
+IDs and names when selecting the deployment's input shape.
 
 ## Account branding fields
 
@@ -273,8 +280,37 @@ responses do not return it.
 
 `DigitalCertificate` requires the account feature, a CPF or CNPJ stored in the
 signer's `government_id`, and exactly one certificate signer in that signing
-step. It costs two credits per signer in addition to the selected notification
+step. It costs 0.5 credits per signer in addition to the selected notification
 cost. Notification methods remain `Email` and `Whatsapp`.
+
+Template role IDs do not reveal which entries are signers, editors or copy
+receivers. The SDK validates each entry's channel and positive `step`, then
+lets the API enforce role-aware signing order and certificate isolation.
+
+## Identity document and face verification
+
+`IdDocumentFaceMatchBasic` requires the **ID Document + Face Match** feature and
+a valid CPF in the signer's `government_id` (a CNPJ is not sufficient). It
+accepts either notification channel. Use assignment or template cost estimation
+for its current per-signer fee before creating the assignment.
+
+`signerDocuments.self()` exposes `verification_method` before verification.
+For this method, obtain explicit biometric consent and call
+`startIdentityVerification(accessCode, { consent: true })`; preserve the entire
+returned bearer URL, including its fragment, and keep it out of logs and
+browser storage. `getIdentityVerification()` returns `can_start`, `status`,
+`url`, `expires_at`, and `completed_at`. Only no session or an `Expired` session
+allows another start. `expires_at` is the capture-link expiry, not a processing
+or review deadline. `Declined` and `Abandoned` require a new document/assignment.
+
+`InReview` permits signing but holds certification. Once everyone has signed,
+the document is `pending_identity_review`. Account reviewers use
+`assignments.getIdentityVerification()`, `downloadIdentityVerificationImage()`
+and `reviewIdentityVerification()`. Evidence images are available only while
+the review is open and must not be cached. Approval permits certification after
+all reviews are approved; rejection cancels the document and notifies signers
+and copy receivers. The optional nullable note (2000 characters maximum) is
+recorded in activity and sent to the provider, but hidden from signers.
 
 For a `collect` assignment, each field can include `display_settings`.
 `left`, `top`, `width`, `height`, and `fontSize` are required; `fontFamily` and
@@ -413,16 +449,29 @@ fields.
 
 An account has 1 webhook endpoint, or up to 3 on paid plans. The subscription
 routes (`webhooks.register()`, `get()`, `inactivate()`) act on the account's
-oldest endpoint; the endpoint routes address each one by ID.
+oldest endpoint; the endpoint routes address each one by ID. Exact registered
+URLs can also filter `listEndpoints(accountId?, { url })` and identify the
+target of `deleteEndpointByUrl(url, accountId?)`.
+
+`createEndpoint()` returns `IWebhookEndpointCreateResponse` with `secret` when
+signing is enabled. Store that value securely at creation, including for OAuth
+applications: they cannot read or rotate the secret afterward. If an OAuth
+application loses it, delete and recreate its endpoint.
 
 Signing-enabled endpoints follow Standard Webhooks:
 `webhook-signature` holds space-separated `v1,<base64>` entries, each an
 HMAC-SHA256 of `{webhook-id}.{webhook-timestamp}.{raw body}` keyed with the
 base64-decoded part of the `whsec_` secret.
 `webhookVerifier.verifySignature()` implements this, with a 300-second
-timestamp tolerance by default. The signing-secret routes are not available to
+timestamp tolerance by default; non-finite or negative windows fail closed.
+The signing-secret routes are not available to
 OAuth applications. The earlier `webhookVerifier.verify()` (hex HMAC over the
 body alone) is deprecated; it never matched an Assinafy signature.
+
+Older sandbox deployments can omit `secret` from the creation response and
+return `404` for deletion by URL. API-key integrations can still use the secret
+read/rotation and deletion-by-ID routes. OAuth integrations need a deployment
+that returns the creation secret to configure signed endpoints.
 
 ## Authentication isolation
 

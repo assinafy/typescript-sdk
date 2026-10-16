@@ -4,7 +4,7 @@
 
 TypeScript SDK for the [Assinafy API](https://api.assinafy.com.br/v1/docs) — a Brazilian digital signature platform.
 
-Covers all 106 operations in the current official OpenAPI document: accounts,
+Covers all 112 operations in the current official OpenAPI document: accounts,
 authentication, OAuth 2.1 applications, users, documents, assignments, signers,
 signer-side flows, templates, tags, fields, webhooks, branding, statistics, and
 the high-level `uploadAndRequestSignatures` workflow. Five additional
@@ -339,7 +339,7 @@ The configuration object accepted by `fromConfig` has the exported type
 
 ## Endpoint coverage
 
-All 106 operations documented at https://api.assinafy.com.br/v1/docs are
+All 112 operations documented at https://api.assinafy.com.br/v1/docs are
 covered. The table below is the resource-level summary; the detailed operation
 ledger is in [docs/API_COVERAGE.md](docs/API_COVERAGE.md).
 
@@ -347,16 +347,16 @@ ledger is in [docs/API_COVERAGE.md](docs/API_COVERAGE.md).
 | --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `client.documents`    | list, **search**, upload, details, get, **rename**, activities, waitUntilReady, download, thumbnail, downloadPage, statuses, delete, verify, createFromTemplate, estimateCostFromTemplate, getPublic, sendToken, listTags, replaceTags, addTags, detachTag, isFullySigned, getSigningProgress |
 | `client.signers`      | create, get, list, update, delete, findByEmail                                                                                                                                                                                                     |
-| `client.assignments`  | list, create, estimateCost, resetExpiration, resendNotification, estimateResendCost, listWhatsAppNotifications                                                                                                                                  |
+| `client.assignments`  | list, create, estimateCost, resetExpiration, resendNotification, estimateResendCost, listWhatsAppNotifications, getIdentityVerification, downloadIdentityVerificationImage, reviewIdentityVerification                                                                                                                                  |
 | `client.templates`    | create, list, get, update, delete, downloadPage                                                                                                                                                                                        |
 | `client.tags`         | list, create, update, delete                                                                                                                                                                                                                       |
 | `client.workspaces`   | create, list, get, update, delete, getTheme, downloadLogo, uploadLogo, deleteLogo, getStats                                                                                                                                                        |
-| `client.webhooks`     | listEndpoints, createEndpoint, getEndpoint, updateEndpoint, deleteEndpoint, getEndpointSecret, rotateEndpointSecret, register, get, inactivate, listEventTypes, listDispatches, retryDispatch |
+| `client.webhooks`     | listEndpoints, createEndpoint, getEndpoint, updateEndpoint, deleteEndpoint, deleteEndpointByUrl, getEndpointSecret, rotateEndpointSecret, register, get, inactivate, listEventTypes, listDispatches, retryDispatch |
 | `client.fields`       | create, list, get, update, delete, validate, validateMultiple, listTypes                                                                                                                                                                           |
 | `client.oauth`        | **getProtectedResourceMetadata**, **getAuthorizationServerMetadata**, **createAuthorizationUrl**, **readAuthorizationCallback**, **exchangeCode**, **refreshToken**, **revokeToken**, **getUserInfo** |
 | `client.auth`         | getSocialLoginUrl, getSocialLoginCallbackUrl, login, verifyMfa, socialLogin, linkSocialLogin, createApiKey, getApiKey, deleteApiKey, changePassword, requestPasswordReset, resetPassword                                                                      |
 | `client.users`        | getCurrent, getStats, getNotificationPreferences, updateNotificationPreferences, getMfa, startTotpEnrollment, confirmTotpEnrollment, regenerateRecoveryCodes, deleteMfaMethod |
-| `client.signerDocuments` | getCurrent, list, search, listAsWorkspace, searchAsWorkspace, download, signMultiple, declineMultiple, self, acceptTerms, verifyEmail, confirmData, uploadSignature, downloadSignature, getAssignment, sign, decline                                                            |
+| `client.signerDocuments` | getCurrent, list, search, listAsWorkspace, searchAsWorkspace, download, signMultiple, declineMultiple, self, getIdentityVerification, startIdentityVerification, acceptTerms, verifyEmail, confirmData, uploadSignature, downloadSignature, getAssignment, sign, decline                                                            |
 | `client.webhookVerifier` | verifySignature, extractEvent, getEventType, getEventData |
 
 Every HTTP wrapper has TypeScript-checked request/response shapes and
@@ -429,7 +429,7 @@ type DocumentUploadShape = {
 ```
 
 `DocumentStatus` covers `uploading`, `uploaded`, `metadata_processing`,
-`metadata_ready`, `pending_signature`, `expired`, `certificating`,
+`metadata_ready`, `pending_signature`, `pending_identity_review`, `expired`, `certificating`,
 `certificated`, `rejected_by_signer`, `rejected_by_user`, and `failed`.
 
 Uploads must be PDFs, at most 25 MB and at most 2,000 pages (the byte limit is
@@ -602,6 +602,52 @@ accessCode, entries)` with a non-empty array of
 before signing. A `DigitalCertificate` signer cannot call `sign`; that branch
 uses Assinafy's certificate flow, described in
 [ICP-Brasil digital certificate](#icp-brasil-digital-certificate).
+
+#### Identity-document verification branch
+
+For a separate assignment configured with `verification_method:
+'IdDocumentFaceMatchBasic'`, enable the **ID Document + Face Match** feature
+and register a valid CPF in the signer's `government_id`. Either notification
+channel is supported; estimate the fee before creating the assignment.
+`self.verification_method` tells a custom signing portal to use this branch
+instead of the email/WhatsApp OTP step.
+
+```ts
+const state = await signerClient.signerDocuments.getIdentityVerification(accessCode);
+// Only after the signer's explicit biometric-processing consent:
+if (state.can_start && signerConsented) {
+  const capture = await signerClient.signerDocuments.startIdentityVerification(
+    accessCode, { consent: true },
+  );
+  response.redirect(capture.url); // preserve the fragment; never log or store this bearer URL
+}
+```
+
+An existing `Pending` session exposes its capture link in `state.url`.
+Only no session or `Expired` allows a new start; `Declined` and `Abandoned`
+require a new document/assignment. An elapsed `expires_at` alone does not
+authorize a restart. Once `Approved` or `InReview`, continue with data/terms
+confirmation and signing. `InReview` holds certification; after everyone
+signs the document becomes `pending_identity_review`.
+
+```ts
+// Account-side review, using workspace credentials:
+const review = await client.assignments.getIdentityVerification(documentId, assignmentId, signerId);
+const image = review.images[0];
+if (image) {
+  const bytes = await client.assignments.downloadIdentityVerificationImage(documentId, assignmentId, signerId, image);
+  // Show to the authorized reviewer without caching or logging the evidence.
+}
+// Send only the account reviewer's explicit decision:
+await client.assignments.reviewIdentityVerification(documentId, assignmentId, signerId, {
+  decision: 'Approved', note: 'Verified independently.',
+});
+```
+
+Approval permits certification after all signatures and reviews are complete.
+`Rejected` cancels the document and notifies signers and copy receivers; the
+optional note (up to 2000 characters, or null) stays hidden from them.
+Images are available only while `InReview`.
 
 ### 6. Observe completion and download artifacts
 
@@ -862,7 +908,8 @@ to `Email`.
 | --- | --- | --- | --- |
 | `Email` *(default)* | One-time code (OTP) by email | `Email` | Free |
 | `Whatsapp` | One-time code (OTP) by WhatsApp | `Whatsapp` | 0.45 credit (the notification), paid plans only |
-| `DigitalCertificate` | The signer signs with their **own ICP-Brasil certificate — A1 or A3 —** through the Web PKI extension, producing a **qualified PAdES signature** | `Email` **or** `Whatsapp` | 2 credits + the notification |
+| `DigitalCertificate` | The signer signs with their **own ICP-Brasil certificate — A1 or A3 —** through the Web PKI extension, producing a **qualified PAdES signature** | `Email` **or** `Whatsapp` | 0.5 credits + the notification |
+| `IdDocumentFaceMatchBasic` | Hosted identity-document, face and liveness verification | `Email` **or** `Whatsapp` | Use `estimateCost()` |
 
 Exactly one notification method per signer. The SDK rejects an invalid
 combination before the request; the API would answer `400`.
@@ -909,7 +956,7 @@ forward them outside the signing flow.
 
 `DigitalCertificate` requires the account feature, a CPF or CNPJ in the
 signer's `government_id`, and exactly one certificate signer in that signing
-step. It costs two credits per certificate signer in addition to the selected
+step. It costs 0.5 credits per certificate signer in addition to the selected
 notification cost.
 
 **A1 and A3 are certificate media**, chosen by the signer in their browser at
@@ -1024,6 +1071,10 @@ await client.tags.delete(tag.id, { force: true });        // detach everywhere, 
 
 Attach/detach tags on a specific document via `client.documents.listTags / replaceTags / addTags / detachTag` (see [Documents](#documents)).
 
+The published attachment contract takes tag IDs. Older sandbox deployments
+instead interpret strings as names and create ID-named tags for ID inputs;
+pass existing names intentionally there. See [document tag compatibility](docs/COMPATIBILITY.md#document-tags).
+
 ### Workspaces
 
 The official create/update request schemas define `name` and
@@ -1083,7 +1134,7 @@ await client.fields.get(fieldId);
 await client.fields.update(fieldId, { name: 'Updated Name' });
 await client.fields.delete(fieldId);
 
-// Validate a single value (signer-access-code only required for signer-side calls)
+// Workspace credentials apply; signerAccessCode is an optional legacy query.
 await client.fields.validate(fieldId, '400.676.228-36', { signerAccessCode });
 
 // Validate multiple values at once
@@ -1182,7 +1233,8 @@ Replacing an already confirmed authenticator also needs `password` or
 An account has 1 webhook endpoint, or up to 3 on paid plans. Every active
 endpoint subscribed to an event receives it independently. OAuth tokens need
 `account:read` to read endpoints and `webhooks:write` to change them; the
-signing secret is available only with an API key.
+creation response includes `secret` when signing is enabled. Store it then,
+including for OAuth integrations; reading or rotating it later requires an API key.
 
 ```ts
 const endpoint = await client.webhooks.createEndpoint({
@@ -1194,12 +1246,15 @@ const endpoint = await client.webhooks.createEndpoint({
 });
 // → { id, name, url, email, events, is_active, signing_enabled, created_at, updated_at }
 
-const { secret } = await client.webhooks.getEndpointSecret(endpoint.id); // 'whsec_…'
+const secret = endpoint.secret; // 'whsec_…'; store securely at creation
 await client.webhooks.listEndpoints();                                  // IWebhookEndpoint[]
+await client.webhooks.listEndpoints(undefined, { url: endpoint.url });   // exact URL filter
 await client.webhooks.getEndpoint(endpoint.id);
 await client.webhooks.updateEndpoint(endpoint.id, { is_active: false }); // only the fields sent
 await client.webhooks.rotateEndpointSecret(endpoint.id); // the old secret stops at once
 await client.webhooks.deleteEndpoint(endpoint.id);       // frees the plan slot
+// Alternative when the integration kept only the registered URL:
+// await client.webhooks.deleteEndpointByUrl(endpoint.url);
 
 await client.webhooks.listEventTypes();
 const history = await client.webhooks.listDispatches({
@@ -1286,6 +1341,11 @@ Event-specific values are:
 | `signer_whatsapp_verified` | `Signer` | `Document` | `signer_whatsapp_phone_number` |
 | `signer_data_confirmed` | `Signer` | `Document` | `signer_email` |
 | `signer_viewed_document` | `Signer` | `Document` | `signer_full_name` |
+| `signer_identity_verified` | `Signer` | `Document` | `signer_full_name`, `evidence` when available |
+| `signer_identity_verification_failed` | `Signer` | `Document` | `signer_full_name`, `reason` |
+| `signer_identity_review_required` | `Signer` | `Document` | `signer_full_name`, `reason_codes` |
+| `signer_identity_review_approved` | `Signer` | `Document` | `signer_full_name`, `reviewer_id`, `reviewer_name`, `reason_codes` |
+| `signer_identity_review_rejected` | `Signer` | `Document` | `signer_full_name`, `reviewer_id`, `reviewer_name`, `note` |
 | `signer_signed_document` | `Signer` | `Document` | `signer_full_name` |
 | `signer_rejected_document` | `Signer` | `Document` | `signer_full_name` |
 | `user_rejected_document` | `User` | `Document` | `user_name` |

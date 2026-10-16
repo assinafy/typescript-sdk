@@ -24,6 +24,7 @@ export class TagResource extends BaseResource {
      *
      * @param params - Optional filters. `search` matches tag names
      * case-insensitively (substring).
+     * @param params.search - Optional case-insensitive tag-name substring.
      * @param accountId - Override the client's default account ID.
      * @returns The matching tags (list items carry no `resource` field):
      * ```jsonc
@@ -198,6 +199,8 @@ export class TagResource extends BaseResource {
      * @param tagId - The tag to delete.
      * @param options - `force` to detach-and-delete when the tag is still in
      * use, and `accountId` to override the client's default account ID.
+     * @param options.force - Detach the tag from documents before deletion.
+     * @param options.accountId - Override the client's default workspace.
      * @returns `{ deleted: true }` when the tag was deleted.
      * @throws {ValidationError} If `tagId` is missing, or no account ID is available.
      * @throws {ApiError} `404` if the tag does not exist; `409` if the tag is

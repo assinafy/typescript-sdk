@@ -49,7 +49,8 @@ export class WebhookVerifier {
      * @param toleranceSeconds - Accepted clock distance. Defaults to `300`.
      * @returns `true` only when a signature entry matches (constant-time) and
      * the timestamp is fresh; `false` when verification is disabled, a header
-     * is missing, or anything does not match.
+     * is missing, the tolerance is not finite and non-negative, or anything
+     * does not match.
      *
      * @example
      * ```ts
@@ -69,7 +70,8 @@ export class WebhookVerifier {
         toleranceSeconds = DEFAULT_TOLERANCE_SECONDS,
     ): boolean {
         const key = decodeSecret(this.webhookSecret);
-        if (!key || (typeof payload !== 'string' && !Buffer.isBuffer(payload)) || !headers) {
+        if (!key || (typeof payload !== 'string' && !Buffer.isBuffer(payload)) || !headers
+            || !Number.isFinite(toleranceSeconds) || toleranceSeconds < 0) {
             return false;
         }
         const id = header(headers, 'webhook-id');

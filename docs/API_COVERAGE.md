@@ -2,7 +2,7 @@
 
 This ledger maps the official
 [`GET /v1/docs/openapi.json`](https://api.assinafy.com.br/v1/docs/openapi.json)
-contract to the public SDK API: 81 paths, 106 HTTP operations, and 44 component
+contract to the public SDK API: 85 paths, 112 HTTP operations, and 45 component
 schemas.
 
 All paths below include the `/v1` prefix shown by the OpenAPI document, except
@@ -14,7 +14,7 @@ Status meanings:
 
 - **Covered** — a public, typed SDK method sends the operation.
 - **Compatibility extension** — route retained for existing integrations but
-  absent from the current OpenAPI path set and excluded from the 106-operation
+  absent from the current OpenAPI path set and excluded from the 112-operation
   total.
 
 ## Accounts — 10/10
@@ -32,7 +32,7 @@ Status meanings:
 | `DELETE` | `/v1/accounts/{accountId}/logo` | `client.workspaces.deleteLogo(accountId)` | Covered |
 | `GET` | `/v1/accounts/{accountId}/stats` | `client.workspaces.getStats(accountId, params?)` | Covered |
 
-## Assignments — 7/7
+## Assignments — 10/10
 
 | Method | Path | SDK method | Status |
 | --- | --- | --- | --- |
@@ -43,6 +43,9 @@ Status meanings:
 | `POST` | `/v1/documents/{documentId}/assignments/{assignmentId}/signers/{signerId}/estimate-resend-cost` | `client.assignments.estimateResendCost(documentId, assignmentId, signerId)` | Covered |
 | `PUT` | `/v1/documents/{documentId}/assignments/{assignmentId}/reset-expiration` | `client.assignments.resetExpiration(documentId, assignmentId, expiresAt)` | Covered |
 | `GET` | `/v1/documents/{documentId}/assignments/{assignmentId}/whatsapp-notifications` | `client.assignments.listWhatsAppNotifications(documentId, assignmentId)` | Covered |
+| `GET` | `/v1/documents/{documentId}/assignments/{assignmentId}/signers/{signerId}/identity-verification` | `client.assignments.getIdentityVerification(documentId, assignmentId, signerId)` | Covered |
+| `GET` | `/v1/documents/{documentId}/assignments/{assignmentId}/signers/{signerId}/identity-verification/images/{name}` | `client.assignments.downloadIdentityVerificationImage(documentId, assignmentId, signerId, name)` | Covered |
+| `POST` | `/v1/documents/{documentId}/assignments/{assignmentId}/signers/{signerId}/identity-verification/review` | `client.assignments.reviewIdentityVerification(documentId, assignmentId, signerId, payload)` | Covered |
 
 ## Authentication — 10/10
 
@@ -122,7 +125,7 @@ ordinary OAuth applications use the two SDK methods listed below.
 | `PUT` | `/v1/accounts/{accountId}/signers/{signerId}` | `client.signers.update(signerId, payload, accountId?)` | Covered |
 | `DELETE` | `/v1/accounts/{accountId}/signers/{signerId}` | `client.signers.delete(signerId, accountId?)` | Covered |
 
-## Signing and public flows — 17/17
+## Signing and public flows — 19/19
 
 All access-code methods in this section use the auth-free transport and reject
 a missing or blank code; they authenticate with the `signer-access-code` query
@@ -136,6 +139,8 @@ an optional fourth access-code argument only for legacy compatibility.
 | `GET` | `/v1/public/documents/{documentId}` | `client.documents.getPublic(documentId)` | Covered |
 | `PUT` | `/v1/public/documents/{documentId}/send-token` | `client.documents.sendToken(documentId, recipient, channel?)` | Covered |
 | `GET` | `/v1/signers/self` | `client.signerDocuments.self(accessCode)` | Covered |
+| `GET` | `/v1/signers/identity-verification` | `client.signerDocuments.getIdentityVerification(accessCode)` | Covered |
+| `POST` | `/v1/signers/identity-verification` | `client.signerDocuments.startIdentityVerification(accessCode, payload)` | Covered |
 | `GET` | `/v1/signers/{signerId}/document` | `client.signerDocuments.getCurrent(signerId, accessCode)` | Covered |
 | `GET` | `/v1/sign` | `client.signerDocuments.getAssignment(accessCode, hasAcceptedTerms?)` | Covered |
 | `POST` | `/v1/documents/{documentId}/assignments/{assignmentId}` | `client.signerDocuments.sign(documentId, assignmentId, accessCode, entries)` | Covered |
@@ -183,7 +188,7 @@ Five additional routes are documented separately under
 | `POST` | `/v1/users/self/mfa/recovery-codes` | `client.users.regenerateRecoveryCodes(proof)` | Covered |
 | `DELETE` | `/v1/users/self/mfa/{customId}` | `client.users.deleteMfaMethod(methodId, proof)` | Covered |
 
-## Webhooks — 13/13
+## Webhooks — 14/14
 
 | Method | Path | SDK method | Status |
 | --- | --- | --- | --- |
@@ -193,8 +198,9 @@ Five additional routes are documented separately under
 | `GET` | `/v1/webhooks/event-types` | `client.webhooks.listEventTypes()` | Covered |
 | `GET` | `/v1/accounts/{accountId}/webhooks` | `client.webhooks.listDispatches(params?, accountId?)` | Covered |
 | `POST` | `/v1/accounts/{accountId}/webhooks/{historyId}/retry` | `client.webhooks.retryDispatch(historyId, accountId?)` | Covered |
-| `GET` | `/v1/accounts/{accountId}/webhooks/endpoints` | `client.webhooks.listEndpoints(accountId?)` | Covered |
+| `GET` | `/v1/accounts/{accountId}/webhooks/endpoints` | `client.webhooks.listEndpoints(accountId?, params?)` | Covered |
 | `POST` | `/v1/accounts/{accountId}/webhooks/endpoints` | `client.webhooks.createEndpoint(payload, accountId?)` | Covered |
+| `DELETE` | `/v1/accounts/{accountId}/webhooks/endpoints` | `client.webhooks.deleteEndpointByUrl(url, accountId?)` | Covered |
 | `GET` | `/v1/accounts/{accountId}/webhooks/endpoints/{endpointId}` | `client.webhooks.getEndpoint(endpointId, accountId?)` | Covered |
 | `PUT` | `/v1/accounts/{accountId}/webhooks/endpoints/{endpointId}` | `client.webhooks.updateEndpoint(endpointId, payload, accountId?)` | Covered |
 | `DELETE` | `/v1/accounts/{accountId}/webhooks/endpoints/{endpointId}` | `client.webhooks.deleteEndpoint(endpointId, accountId?)` | Covered |
@@ -204,7 +210,7 @@ Five additional routes are documented separately under
 ## Template compatibility routes
 
 These routes are available to existing integrations but do not appear in the
-current OpenAPI path set. They are excluded from the official 106-operation
+current OpenAPI path set. They are excluded from the official 112-operation
 coverage count.
 
 | Method | Path | SDK method | Status |
@@ -219,7 +225,7 @@ coverage count.
 
 Two browser URL helpers used by older deployments are live but absent from the
 current OpenAPI path set, so they are likewise excluded from the official
-106-operation coverage count.
+112-operation coverage count.
 
 | Method | Path | SDK method | Status |
 | --- | --- | --- | --- |

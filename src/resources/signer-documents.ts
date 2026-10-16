@@ -11,6 +11,9 @@ import type {
     ISignFieldEntry,
     ISigner,
     ISignerSelf,
+    ISignerIdentityVerification,
+    ISignerIdentityVerificationSession,
+    IStartIdentityVerificationPayload,
     IUploadSignatureOptions,
     Logger,
     SignatureImageType,
@@ -486,7 +489,8 @@ export class SignerDocumentsResource extends BaseResource {
      *   "has_accepted_terms": false,
      *   "has_signature": false,
      *   "has_initial": false,
-     *   "is_signature_reusable": false
+     *   "is_signature_reusable": false,
+     *   "verification_method": "IdDocumentFaceMatchBasic"
      * }
      * ```
      * @throws {ValidationError} If `signerAccessCode` is missing.
@@ -504,6 +508,95 @@ export class SignerDocumentsResource extends BaseResource {
         const code = this.requireId(signerAccessCode, 'signer-access-code');
         return this.call<ISignerSelf>('Failed to fetch signer profile', () =>
             this.http.get('/signers/self', { params: { 'signer-access-code': code } }),
+        );
+    }
+
+    /**
+     * Read the signer's identity verification state
+     * (`GET /signers/identity-verification?signer-access-code=…`).
+     *
+     * No request body or workspace credentials. Reads a pending provider
+     * decision when available. A new session can start before the first capture
+     * or after `Expired`; `Declined` and `Abandoned` require a new document and
+     * assignment. `InReview` lets the signer continue; account approval gates
+     * certification, with `pending_identity_review` after everyone signs.
+     *
+     * @param signerAccessCode - Access code from the signer's signing link.
+     * @returns Provider state, with nullable fields before a session exists:
+     * ```jsonc
+     * {
+     *   "can_start": false, "status": "Pending",
+     *   "url": "https://verify.example.com/c/session#t=opaque",
+     *   "expires_at": "2026-10-16T12:30:00Z", "completed_at": null
+     * }
+     * ```
+     * `url` exists only while Pending. It is a bearer link: open it intact,
+     * including its fragment, and keep it out of logs and browser storage.
+     * @throws {ValidationError} If the access code is blank.
+     * @throws {ApiError} `401` for an invalid/expired code; `500` for a server failure.
+     * @example
+     * ```ts
+     * const state = await client.signerDocuments.getIdentityVerification(accessCode);
+     * console.log(state.status, state.can_start);
+     * ```
+     */
+    async getIdentityVerification(signerAccessCode: string): Promise<ISignerIdentityVerification> {
+        const code = this.requireId(signerAccessCode, 'signer-access-code');
+        return this.call('Failed to fetch signer identity verification', () =>
+            this.http.get('/signers/identity-verification', { params: { 'signer-access-code': code } }),
+        );
+    }
+
+    /**
+     * Record biometric consent and open an identity verification session
+     * (`POST /signers/identity-verification?signer-access-code=…`).
+     *
+     * Send only after the signer explicitly consents. Starts a session when
+     * none exists or replaces an Expired session. Other states return `400`;
+     * resending a notification never replaces a live session. The account is
+     * billed at assignment creation, with no new charge for a restart.
+     *
+     * Request body (`application/json`):
+     * ```jsonc
+     * { "consent": true }
+     * ```
+     * @param signerAccessCode - Access code from the signer's signing link.
+     * @param payload - Explicit consent from the signer.
+     * @param payload.consent - Must be `true`; never default or infer consent.
+     * @returns The newly opened provider session:
+     * ```jsonc
+     * {
+     *   "id": "verification_example",
+     *   "url": "https://verify.example.com/c/session#t=opaque",
+     *   "expires_at": "2026-10-16T12:30:00Z"
+     * }
+     * ```
+     * `expires_at` can be null. Open the URL as-is; it is a bearer credential
+     * and its fragment must survive navigation. Do not log or persist it in
+     * browser storage. No workspace credential is attached to this call.
+     * @throws {ValidationError} If the code is blank or consent is not `true`.
+     * @throws {ApiError} `400` when a non-expired session already exists;
+     * `401` for an invalid/expired code; `500` for a provider/server failure.
+     * @example
+     * ```ts
+     * // Inside the handler for the signer's explicit consent action:
+     * const session = await client.signerDocuments.startIdentityVerification(accessCode, { consent: true });
+     * response.redirect(session.url);
+     * ```
+     */
+    async startIdentityVerification(
+        signerAccessCode: string,
+        payload: IStartIdentityVerificationPayload,
+    ): Promise<ISignerIdentityVerificationSession> {
+        const code = this.requireId(signerAccessCode, 'signer-access-code');
+        assertRecord(payload, 'identity verification payload');
+        if (payload.consent !== true) {
+            throw new ValidationError('Explicit biometric-processing consent is required');
+        }
+        return this.call('Failed to start signer identity verification', () =>
+            this.http.post('/signers/identity-verification', { consent: true }, {
+                params: { 'signer-access-code': code },
+            }),
         );
     }
 
@@ -543,10 +636,10 @@ export class SignerDocumentsResource extends BaseResource {
     }
 
     /**
-     * Verify the signer's email one-time password
+     * Verify the signer's email or WhatsApp one-time password
      * (`POST /verify?signer-access-code=…`).
      *
-     * Confirms the 6-digit OTP the platform emailed the signer. The access code
+     * Confirms the 6-digit OTP sent through the selected channel. The access code
      * authenticates via the `signer-access-code` **query param**; the request
      * **body carries only `verification-code`** (putting the access code in the
      * body leaves the request unauthenticated → `401`).
@@ -560,6 +653,8 @@ export class SignerDocumentsResource extends BaseResource {
      *
      * @param payload - `signerAccessCode` (the signing-link code) and
      *   `verificationCode` (the OTP the signer received).
+     * @param payload.signerAccessCode - Signing-link code sent only in the query.
+     * @param payload.verificationCode - Email or WhatsApp OTP sent as `verification-code`.
      * @returns Resolves when the API acknowledges the operation. The response
      *   envelope has no `data` field and is intentionally discarded.
      * @throws {ValidationError} If `signerAccessCode` or `verificationCode` is
@@ -715,6 +810,8 @@ export class SignerDocumentsResource extends BaseResource {
      * @param image - The image bytes as a non-empty `Buffer`.
      * @param options - `imageType` (`'signature'` default, or `'initial'`) and
      *   `reuse` (persist for reuse). The official request content type is PNG.
+     * @param options.imageType - Signature image category; defaults to `signature`.
+     * @param options.reuse - Persist the image for future signing requests.
      * @returns Resolves when the API acknowledges the upload. The response
      *   envelope has no `data` field and is intentionally discarded.
      * @throws {ValidationError} If `signerAccessCode` is missing or `image` is not
@@ -744,6 +841,9 @@ export class SignerDocumentsResource extends BaseResource {
      * @param signerAccessCode - Access code sent in the query string.
      * @param image - Non-empty raw image bytes, without a JSON envelope.
      * @param options - Image type, reuse preference and compatibility content type.
+     * @param options.imageType - Signature image category; defaults to `signature`.
+     * @param options.reuse - Persist the image for future signing requests.
+     * @param options.contentType - Compatibility media type; the official type is `image/png`.
      * @returns Nothing; the acknowledgement body is discarded.
      * @throws {ValidationError} If the code, image or options are invalid.
      * @throws {ApiError} If the API rejects the upload.
@@ -883,7 +983,7 @@ export class SignerDocumentsResource extends BaseResource {
      *     "expires_at": null,
      *     "signers": [
      *       { "id": "19e6b92e7895332ed9708535d8c", "step": 1, "email": "signer@example.com",
-     *         "full_name": "Example Signer", "notified": true, "completed": false }
+     *         "full_name": "Example Signer", "notified": true }
      *     ],
      *     "items": [
      *       { "id": "item-1", "page": { "id": "page-1", "number": 1, "height": 1651, "width": 1275,

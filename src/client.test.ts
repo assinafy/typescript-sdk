@@ -618,6 +618,8 @@ describe('AssinafyClient', () => {
 
         await client.signerDocuments.list('s-1', 'code-1');
         await client.signerDocuments.search('s-1', 'code-1', 'nda');
+        await client.signerDocuments.getIdentityVerification('code-1');
+        await client.signerDocuments.startIdentityVerification('code-1', { consent: true });
         await client.signerDocuments.listAsWorkspace('s-1', { page: 2 });
         await client.signerDocuments.searchAsWorkspace('s-1', 'nda');
         await expect(client.signerDocuments.list('s-1', '  ')).rejects.toBeInstanceOf(ValidationError);
@@ -629,6 +631,8 @@ describe('AssinafyClient', () => {
         expect(seen).toEqual([
             { transport: 'public', url: '/signers/s-1/documents', apiKey: undefined, params: { 'signer-access-code': 'code-1' } },
             { transport: 'public', url: '/signers/s-1/documents/search', apiKey: undefined, params: { 'signer-access-code': 'code-1', search: 'nda' } },
+            { transport: 'public', url: '/signers/identity-verification', apiKey: undefined, params: { 'signer-access-code': 'code-1' } },
+            { transport: 'public', url: '/signers/identity-verification', apiKey: undefined, params: { 'signer-access-code': 'code-1' } },
             { transport: 'workspace', url: '/signers/s-1/documents', apiKey: 'secret-key', params: { page: 2 } },
             { transport: 'workspace', url: '/signers/s-1/documents/search', apiKey: 'secret-key', params: { search: 'nda' } },
         ]);

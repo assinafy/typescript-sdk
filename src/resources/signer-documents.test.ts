@@ -22,7 +22,46 @@ const signerSelfResponse: ISignerSelf = {
     has_signature: true,
     has_initial: false,
     is_signature_reusable: true,
+    verification_method: 'IdDocumentFaceMatchBasic',
 };
+
+describe('SignerDocumentsResource identity verification', () => {
+    test('preserves nullable status and the complete capture URL, and sends explicit consent', async () => {
+        const state = { can_start: true, status: null, url: null, expires_at: null, completed_at: null };
+        const session = { id: 'verification-1', url: 'https://verify.example.com/c/session#t=opaque', expires_at: null };
+        const calls: unknown[] = [];
+        const http = {
+            get: async (url: string, config: unknown) => {
+                calls.push({ method: 'GET', url, config });
+                return { status: 200, data: { status: 200, data: state } };
+            },
+            post: async (url: string, body: unknown, config: unknown) => {
+                calls.push({ method: 'POST', url, body, config });
+                return { status: 200, data: { status: 200, data: session } };
+            },
+        } as unknown as AxiosInstance;
+        const resource = new SignerDocumentsResource(http);
+        expect(await resource.getIdentityVerification('code')).toEqual(state);
+        expect(await resource.startIdentityVerification('code', { consent: true, extra: 'private' } as never)).toEqual(session);
+        expect(calls).toEqual([
+            { method: 'GET', url: '/signers/identity-verification', config: { params: { 'signer-access-code': 'code' } } },
+            { method: 'POST', url: '/signers/identity-verification', body: { consent: true }, config: { params: { 'signer-access-code': 'code' } } },
+        ]);
+    });
+
+    test('rejects blank access codes or anything other than explicit biometric consent', async () => {
+        const { http, calls } = mockHttp();
+        const resource = new SignerDocumentsResource(http);
+        const requests = [
+            () => resource.getIdentityVerification(' '),
+            () => resource.startIdentityVerification('', { consent: true }),
+            ...[null, [], {}, { consent: false }, { consent: 'true' }, { consent: 1 }].map((payload) =>
+                () => resource.startIdentityVerification('code', payload as never)),
+        ];
+        for (const request of requests) await expect(request()).rejects.toBeInstanceOf(ValidationError);
+        expect(calls).toHaveLength(0);
+    });
+});
 
 const documentResponse: IDocumentDetailsResponse = {
     resource: 'document',

@@ -284,6 +284,8 @@ export class WorkspaceResource extends BaseResource {
      * @param accountId - Account to aggregate.
      * @param params - Omit for 12 monthly rows, or request daily rows with
      * `{ granularity: 'daily', month: '2026-06' }`.
+     * @param params.granularity - `monthly` (default) or `daily`.
+     * @param params.month - Month in `YYYY-MM` format; required for daily rows.
      * @returns Zero-filled KPI rows:
      * ```jsonc
      * [{
@@ -412,6 +414,7 @@ export class WorkspaceResource extends BaseResource {
      * @param accountId - The workspace to delete.
      * @param options - Set `force: true` to cancel an active paid subscription
      * and proceed with deletion.
+     * @param options.force - Cancel an active subscription and bypass deletion restrictions.
      * @returns Nothing on success (`200` with no meaningful body).
      * @throws {ValidationError} If `accountId` is missing.
      * @throws {ApiError} `400` (with a `restrictions` list) when the workspace

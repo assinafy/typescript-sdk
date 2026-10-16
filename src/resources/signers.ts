@@ -297,9 +297,8 @@ export class SignerResource extends BaseResource {
      * re-filtered here for an exact, case-insensitive email match.
      *
      * Page size is pinned to {@link MAX_LIST_PAGE_SIZE}, the largest page the
-     * server actually returns. An exact address realistically matches one
-     * signer, but a search term that matched more than that could in principle
-     * miss one — the API exposes no exact-email filter to rule that out.
+     * server actually returns. Pages are searched until an exact match is found
+     * or the result set ends, so substring matches cannot hide an existing signer.
      *
      * A `404` from the underlying list is treated as "no match" and mapped to
      * `null`; any other {@link ApiError} propagates.
@@ -329,12 +328,18 @@ export class SignerResource extends BaseResource {
     async findByEmail(email: string, accountId?: string): Promise<ISigner | null> {
         this.assertEmail(email);
         try {
-            const { data } = await this.list(
-                { search: email, 'per-page': MAX_LIST_PAGE_SIZE },
-                accountId,
-            );
             const lower = email.toLowerCase();
-            return data.find((s) => (s.email ?? '').toLowerCase() === lower) ?? null;
+            for (let page = 1; ; page++) {
+                const { data, meta } = await this.list(
+                    { search: email, 'per-page': MAX_LIST_PAGE_SIZE, page },
+                    accountId,
+                );
+                const match = data.find((s) => (s.email ?? '').toLowerCase() === lower);
+                if (match) return match;
+                if (data.length === 0 || (meta?.last_page !== undefined
+                    ? page >= meta.last_page
+                    : data.length < MAX_LIST_PAGE_SIZE)) return null;
+            }
         } catch (err) {
             if (err instanceof ApiError && err.statusCode === 404) {
                 return null;

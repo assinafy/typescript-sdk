@@ -134,4 +134,13 @@ describe('WebhookVerifier.verifySignature (Standard Webhooks)', () => {
         const headers = headersFor(old, sign('msg_1', old, body));
         expect(new WebhookVerifier(secret).verifySignature(body, headers, 900)).toBe(true);
     });
+
+    test('rejects invalid replay windows instead of accepting stale signed deliveries', () => {
+        const old = String(Math.floor(Date.now() / 1000) - 86_400);
+        const headers = headersFor(old, sign('msg_1', old, body));
+        const verifier = new WebhookVerifier(secret);
+        for (const tolerance of [NaN, Infinity, -1, '300', null]) {
+            expect(verifier.verifySignature(body, headers, tolerance as never)).toBe(false);
+        }
+    });
 });

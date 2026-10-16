@@ -3,6 +3,42 @@ import type { AxiosInstance } from 'axios';
 import { ApiError, ValidationError } from '../errors';
 import { DEFAULT_WEBHOOK_EVENTS, WebhookResource } from './webhooks';
 
+describe('WebhookResource.deleteEndpointByUrl', () => {
+    test('listEndpoints filters by the exact URL and validates before requesting', async () => {
+        const calls: unknown[] = [];
+        const http = { get: async (url: string, config: unknown) => {
+            calls.push({ url, config });
+            return response([]);
+        } } as unknown as AxiosInstance;
+        const resource = new WebhookResource(http, 'account-1');
+        const url = 'https://example.com/hook?tenant=one&source=two';
+        expect(await resource.listEndpoints(undefined, { url })).toEqual([]);
+        await expect(resource.listEndpoints(undefined, { url: 'invalid' })).rejects.toBeInstanceOf(ValidationError);
+        await expect(resource.listEndpoints(undefined, null as never)).rejects.toBeInstanceOf(ValidationError);
+        expect(calls).toEqual([{ url: '/accounts/account-1/webhooks/endpoints', config: { params: { url } } }]);
+    });
+    test('sends the exact registered URL as a query parameter without a body', async () => {
+        const calls: unknown[] = [];
+        const http = {
+            delete: async (url: string, config: unknown) => {
+                calls.push({ url, config });
+                return response([]);
+            },
+        } as unknown as AxiosInstance;
+        const resource = new WebhookResource(http, 'default');
+        const url = 'https://example.com/hook?tenant=one&source=two';
+        await expect(resource.deleteEndpointByUrl(url, 'account/1')).resolves.toBeUndefined();
+        expect(calls).toEqual([{
+            url: '/accounts/account%2F1/webhooks/endpoints', config: { params: { url } },
+        }]);
+        for (const url of ['', 'relative/path', 'ftp://example.com/hook']) {
+            await expect(resource.deleteEndpointByUrl(url)).rejects.toBeInstanceOf(ValidationError);
+        }
+        await expect(new WebhookResource(http).deleteEndpointByUrl(url)).rejects.toBeInstanceOf(ValidationError);
+        expect(calls).toHaveLength(1);
+    });
+});
+
 type HttpCall = {
     method: 'GET' | 'POST' | 'PUT';
     url: string;
@@ -389,7 +425,7 @@ describe('WebhookResource', () => {
             },
             post: async (url: string, body?: unknown) => {
                 calls.push({ method: 'POST', url, body });
-                return response(url.endsWith('/rotate') ? SECRET : ENDPOINT);
+                return response(url.endsWith('/rotate') ? SECRET : { ...ENDPOINT, ...SECRET });
             },
             put: async (url: string, body?: unknown) => {
                 calls.push({ method: 'PUT', url, body });
@@ -411,7 +447,7 @@ describe('WebhookResource', () => {
                 name: 'ERP',
                 signing_enabled: true,
             }),
-        ).toEqual(ENDPOINT);
+        ).toEqual({ ...ENDPOINT, ...SECRET });
         expect(await resource.getEndpoint('endpoint-1')).toEqual(ENDPOINT);
         expect(await resource.updateEndpoint('endpoint-1', { is_active: false })).toEqual(ENDPOINT);
         await expect(resource.deleteEndpoint('endpoint-1')).resolves.toBeUndefined();

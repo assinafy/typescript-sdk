@@ -1,5 +1,6 @@
 import axios, { type AxiosInstance, type AxiosRequestConfig } from 'axios';
 import packageJson from '../../package.json';
+import { readHeader } from './headers';
 
 export const SDK_USER_AGENT = `Assinafy-Typescript-SDK/v${packageJson.version}`;
 
@@ -53,9 +54,15 @@ export function applySdkTransportDefaults(http: AxiosInstance): AxiosInstance {
                 && typeof options['href'] === 'string'
                 && new URL(request.url).origin === new URL(options['href']).origin
             ) {
+                const destinationKeys = ['protocol', 'host', 'hostname', 'port', 'socketPath', 'servername'] as const;
+                const destination = destinationKeys.map((key) => options[key]);
+                const host = readHeader(options['headers'] as Record<string, unknown> | undefined, 'host');
                 current(options, response, request);
-                // The re-check is deliberate: the caller hook just ran and may
-                // have rewritten options.href to a cross-origin destination.
+                // Credential stripping already ran; a hook must not retarget the socket afterward.
+                if (destinationKeys.some((key, index) => options[key] !== destination[index])
+                    || readHeader(options['headers'] as Record<string, unknown> | undefined, 'host') !== host) {
+                    throw new Error('Redirect hooks must not change the destination');
+                }
                 guardRedirect(options, response, request);
             }
         };

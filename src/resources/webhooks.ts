@@ -2,6 +2,7 @@ import type {
     IWebhookDispatch,
     IWebhookEndpoint,
     IWebhookEndpointCreatePayload,
+    IWebhookEndpointCreateResponse,
     IWebhookEndpointSecret,
     IWebhookEndpointUpdatePayload,
     IWebhookDispatchListParams,
@@ -12,7 +13,7 @@ import type {
     WebhookEventType,
 } from '../types';
 import { ValidationError } from '../errors';
-import { cleanListParams, isEmail } from '../utils';
+import { assertRecord, cleanListParams, isEmail } from '../utils';
 import { BaseResource } from './base';
 
 /**
@@ -362,6 +363,8 @@ export class WebhookResource extends BaseResource {
      * `account:read` scope.
      *
      * @param accountId - Override the client's default account ID.
+     * @param params - Optional endpoint filters.
+     * @param params.url - Match the exact registered endpoint URL.
      * @returns Every endpoint (1 on free plans, up to 3 on paid plans):
      * ```jsonc
      * [
@@ -387,9 +390,13 @@ export class WebhookResource extends BaseResource {
      * const signed = endpoints.filter((endpoint) => endpoint.signing_enabled);
      * ```
      */
-    async listEndpoints(accountId?: string): Promise<IWebhookEndpoint[]> {
+    async listEndpoints(accountId?: string, params: { url?: string } = {}): Promise<IWebhookEndpoint[]> {
+        assertRecord(params, 'webhook endpoint filters');
+        if (params.url !== undefined) validateWebhookUrl(params.url);
         const path = this.endpointsPath(accountId);
-        return this.call('Failed to list webhook endpoints', () => this.http.get(path));
+        return this.call('Failed to list webhook endpoints', () =>
+            this.http.get(path, params.url === undefined ? undefined : { params: { url: params.url } }),
+        );
     }
 
     /**
@@ -398,8 +405,9 @@ export class WebhookResource extends BaseResource {
      *
      * An account can have 1 endpoint, or up to 3 on paid plans. Each endpoint
      * of a workspace needs a different `url`. With `signing_enabled: true` the
-     * API generates a signing secret; read it with
-     * {@link WebhookResource.getEndpointSecret}. When `events` is omitted or
+     * API returns a signing `secret` in this creation response. Store it now:
+     * OAuth applications cannot call {@link WebhookResource.getEndpointSecret}
+     * or rotate it later. When `events` is omitted or
      * empty, {@link DEFAULT_WEBHOOK_EVENTS} is sent. OAuth tokens need the
      * `webhooks:write` scope.
      *
@@ -429,6 +437,7 @@ export class WebhookResource extends BaseResource {
      *   "events": ["document_ready", "signer_signed_document"],
      *   "is_active": true,
      *   "signing_enabled": true, // deliveries carry a `webhook-signature` header
+     *   "secret": "whsec_c2VjcmV0", // only in this response when signing is enabled
      *   "created_at": "2026-10-01T12:00:00Z",
      *   "updated_at": "2026-10-01T12:00:00Z"
      * }
@@ -448,13 +457,13 @@ export class WebhookResource extends BaseResource {
      *   events: ['document_ready', 'signer_signed_document'],
      *   signing_enabled: true,
      * });
-     * const { secret } = await client.webhooks.getEndpointSecret(endpoint.id);
+     * if (endpoint.secret) await secretStore.save(endpoint.id, endpoint.secret);
      * ```
      */
     async createEndpoint(
         payload: IWebhookEndpointCreatePayload,
         accountId?: string,
-    ): Promise<IWebhookEndpoint> {
+    ): Promise<IWebhookEndpointCreateResponse> {
         validateWebhookFields(payload, true);
         const path = this.endpointsPath(accountId);
         this.logger.info('Creating webhook endpoint');
@@ -581,6 +590,32 @@ export class WebhookResource extends BaseResource {
         const path = this.endpointPath(endpointId, accountId);
         this.logger.info('Deleting webhook endpoint');
         await this.callVoid('Failed to delete webhook endpoint', () => this.http.delete(path));
+    }
+
+    /**
+     * Delete a webhook endpoint using its registered URL
+     * (`DELETE /accounts/{accountId}/webhooks/endpoints?url=…`).
+     *
+     * No request body. The query URL must match the registered value exactly.
+     * Frees its plan slot; OAuth applications need `webhooks:write`.
+     *
+     * @param url - Exact registered HTTP(S) endpoint URL, including its query.
+     * @param accountId - Override the client's default workspace.
+     * @returns Resolves on acknowledgement (`{ "status": 200, "data": [] }`).
+     * @throws {ValidationError} If the URL is invalid or the account is missing.
+     * @throws {ApiError} `400` for a missing URL; `401` for invalid credentials;
+     * `403` for missing scope; `404` if no endpoint uses the URL; `500` on failure.
+     * @example
+     * ```ts
+     * await client.webhooks.deleteEndpointByUrl('https://example.com/webhooks/assinafy');
+     * ```
+     */
+    async deleteEndpointByUrl(url: string, accountId?: string): Promise<void> {
+        validateWebhookUrl(url);
+        const path = this.endpointsPath(accountId);
+        return this.callVoid('Failed to delete webhook endpoint', () =>
+            this.http.delete(path, { params: { url } }),
+        );
     }
 
     /**

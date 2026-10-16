@@ -5,7 +5,7 @@
 SDK oficial em TypeScript para a [API Assinafy](https://api.assinafy.com.br/v1/docs) — plataforma
 brasileira de assinatura eletrônica de documentos.
 
-Cobre as 106 operações do documento OpenAPI oficial: contas, autenticação, aplicações OAuth 2.1,
+Cobre as 112 operações do documento OpenAPI oficial: contas, autenticação, aplicações OAuth 2.1,
 usuários, documentos, assignments, signatários, fluxos do lado do signatário, templates, tags,
 campos, webhooks, identidade visual, estatísticas e o fluxo de alto nível
 `uploadAndRequestSignatures`. Cinco rotas adicionais de gestão de templates usadas por integrações
@@ -324,7 +324,7 @@ O objeto aceito por `fromConfig` tem o tipo exportado `ClientConfigInput`.
 
 ## Cobertura de endpoints
 
-As 106 operações documentadas em https://api.assinafy.com.br/v1/docs estão cobertas. A tabela abaixo
+As 112 operações documentadas em https://api.assinafy.com.br/v1/docs estão cobertas. A tabela abaixo
 é o resumo por recurso; o mapa detalhado por operação está em
 [docs/API_COVERAGE.md](docs/API_COVERAGE.md).
 
@@ -332,16 +332,16 @@ As 106 operações documentadas em https://api.assinafy.com.br/v1/docs estão co
 | --- | --- |
 | `client.documents` | list, search, upload, details, get, rename, activities, waitUntilReady, download, thumbnail, downloadPage, statuses, delete, verify, createFromTemplate, estimateCostFromTemplate, getPublic, sendToken, listTags, replaceTags, addTags, detachTag, isFullySigned, getSigningProgress |
 | `client.signers` | create, get, list, update, delete, findByEmail |
-| `client.assignments` | list, create, estimateCost, resetExpiration, resendNotification, estimateResendCost, listWhatsAppNotifications |
+| `client.assignments` | list, create, estimateCost, resetExpiration, resendNotification, estimateResendCost, listWhatsAppNotifications, getIdentityVerification, downloadIdentityVerificationImage, reviewIdentityVerification |
 | `client.templates` | create, list, get, update, delete, downloadPage |
 | `client.tags` | list, create, update, delete |
 | `client.workspaces` | create, list, get, update, delete, getTheme, downloadLogo, uploadLogo, deleteLogo, getStats |
-| `client.webhooks` | listEndpoints, createEndpoint, getEndpoint, updateEndpoint, deleteEndpoint, getEndpointSecret, rotateEndpointSecret, register, get, inactivate, listEventTypes, listDispatches, retryDispatch |
+| `client.webhooks` | listEndpoints, createEndpoint, getEndpoint, updateEndpoint, deleteEndpoint, deleteEndpointByUrl, getEndpointSecret, rotateEndpointSecret, register, get, inactivate, listEventTypes, listDispatches, retryDispatch |
 | `client.fields` | create, list, get, update, delete, validate, validateMultiple, listTypes |
 | `client.oauth` | **getProtectedResourceMetadata**, **getAuthorizationServerMetadata**, **createAuthorizationUrl**, **readAuthorizationCallback**, **exchangeCode**, **refreshToken**, **revokeToken**, **getUserInfo** |
 | `client.auth` | getSocialLoginUrl, getSocialLoginCallbackUrl, login, verifyMfa, socialLogin, linkSocialLogin, createApiKey, getApiKey, deleteApiKey, changePassword, requestPasswordReset, resetPassword |
 | `client.users` | getCurrent, getStats, getNotificationPreferences, updateNotificationPreferences, getMfa, startTotpEnrollment, confirmTotpEnrollment, regenerateRecoveryCodes, deleteMfaMethod |
-| `client.signerDocuments` | getCurrent, list, search, listAsWorkspace, searchAsWorkspace, download, signMultiple, declineMultiple, self, acceptTerms, verifyEmail, confirmData, uploadSignature, downloadSignature, getAssignment, sign, decline |
+| `client.signerDocuments` | getCurrent, list, search, listAsWorkspace, searchAsWorkspace, download, signMultiple, declineMultiple, self, getIdentityVerification, startIdentityVerification, acceptTerms, verifyEmail, confirmData, uploadSignature, downloadSignature, getAssignment, sign, decline |
 | `client.webhookVerifier` | verifySignature, extractEvent, getEventType, getEventData |
 
 Todo wrapper HTTP tem tipos de requisição e resposta verificados pelo TypeScript e JSDoc por método,
@@ -407,7 +407,7 @@ type DocumentUploadShape = {
 ```
 
 `DocumentStatus` cobre `uploading`, `uploaded`, `metadata_processing`, `metadata_ready`,
-`pending_signature`, `expired`, `certificating`, `certificated`, `rejected_by_signer`,
+`pending_signature`, `pending_identity_review`, `expired`, `certificating`, `certificated`, `rejected_by_signer`,
 `rejected_by_user` e `failed`.
 
 O envio precisa ser um PDF de no máximo 25 MB e 2.000 páginas (o limite em bytes está exportado
@@ -572,6 +572,53 @@ e chame `sign(documentId, assignmentId, accessCode, entries)` com um array não 
 assinar. Um signatário `DigitalCertificate` não pode usar `sign`; esse ramo passa pelo fluxo de
 certificado da Assinafy, descrito em
 [Certificado digital ICP-Brasil](#certificado-digital-icp-brasil).
+
+#### Ramo de verificação do documento de identidade
+
+Para um assignment separado com `verification_method:
+'IdDocumentFaceMatchBasic'`, habilite **ID Document + Face Match** e cadastre
+um CPF válido no `government_id` do signatário. Os dois canais de notificação
+são aceitos; estime o custo antes de criar o assignment.
+`self.verification_method` informa ao portal que deve usar este ramo em vez
+da etapa de código de uso único por e-mail/WhatsApp.
+
+```ts
+const estado = await clienteSignatario.signerDocuments.getIdentityVerification(accessCode);
+// Somente após consentimento explícito do signatário para o tratamento biométrico:
+if (estado.can_start && signatarioConsentiu) {
+  const captura = await clienteSignatario.signerDocuments.startIdentityVerification(
+    accessCode, { consent: true },
+  );
+  response.redirect(captura.url); // preserve o fragmento; não registre nem armazene esta URL credencial
+}
+```
+
+Uma sessão `Pending` existente expõe o link de captura em `estado.url`.
+Só a ausência de sessão ou `Expired` permite iniciar outra; `Declined` e
+`Abandoned` exigem novo documento/assignment. O simples vencimento de
+`expires_at` não autoriza reinício. Em `Approved` ou `InReview`, continue
+com confirmação dos dados/termos e assinatura. `InReview` segura a
+certificação; depois que todos assinam, o documento fica
+`pending_identity_review`.
+
+```ts
+// Lado da conta, com credenciais do workspace:
+const revisao = await client.assignments.getIdentityVerification(documentId, assignmentId, signerId);
+const imagem = revisao.images[0];
+if (imagem) {
+  const bytes = await client.assignments.downloadIdentityVerificationImage(documentId, assignmentId, signerId, imagem);
+  // Exiba ao revisor autorizado sem cache nem log das evidências.
+}
+// Envie somente a decisão explícita do revisor da conta:
+await client.assignments.reviewIdentityVerification(documentId, assignmentId, signerId, {
+  decision: 'Approved', note: 'Identidade conferida independentemente.',
+});
+```
+
+A aprovação permite certificar depois de todas as assinaturas e aprovações.
+`Rejected` cancela o documento e notifica signatários e destinatários de cópia;
+a nota opcional (até 2000 caracteres, ou null) não é mostrada a eles.
+As imagens só ficam disponíveis em `InReview`.
 
 ### 6. Acompanhe a conclusão e baixe os artefatos
 
@@ -821,7 +868,8 @@ que faltar é inferido. Sem nenhum dos dois, ambos assumem `Email`.
 | --- | --- | --- | --- |
 | `Email` *(padrão)* | Código de uso único (OTP) por e-mail | `Email` | Gratuito |
 | `Whatsapp` | Código de uso único (OTP) por WhatsApp | `Whatsapp` | 0,45 crédito (a notificação), só em planos pagos |
-| `DigitalCertificate` | O signatário assina com o **próprio certificado ICP-Brasil — A1 ou A3 —** pela extensão Web PKI, gerando uma assinatura **PAdES qualificada** | `Email` **ou** `Whatsapp` | 2 créditos + a notificação |
+| `DigitalCertificate` | O signatário assina com o **próprio certificado ICP-Brasil — A1 ou A3 —** pela extensão Web PKI, gerando uma assinatura **PAdES qualificada** | `Email` **ou** `Whatsapp` | 0,5 crédito + a notificação |
+| `IdDocumentFaceMatchBasic` | Documento de identidade, foto e prova de vida em sessão hospedada | `Email` **ou** `Whatsapp` | Consulte `estimateCost()` |
 
 Apenas um método de notificação por signatário. O SDK recusa uma combinação inválida antes da
 requisição; a API responderia `400`.
@@ -867,7 +915,7 @@ nem encaminhe fora do fluxo de assinatura.
 
 `DigitalCertificate` exige o recurso **Certificado Digital** na conta (planos Standard e Pro), CPF ou
 CNPJ em `government_id` do signatário, e exatamente **um signatário por certificado naquele passo de
-assinatura**. Custa 2 créditos por signatário, além do custo da notificação escolhida.
+assinatura**. Custa 0,5 crédito por signatário, além do custo da notificação escolhida.
 
 **A1 e A3 são mídias de certificado**, escolhidas pelo próprio signatário no navegador na hora de
 assinar: A1 fica em software (um arquivo na máquina) e A3 em hardware (token ou cartão). A API
@@ -992,6 +1040,10 @@ await client.tags.delete(tag.id, { force: true });        // desanexa de tudo e 
 Anexe/desanexe tags em um documento específico com `client.documents.listTags / replaceTags /
 addTags / detachTag` (veja [Documentos](#documentos)).
 
+O contrato publicado usa IDs para anexar tags. Sandboxes antigos interpretam
+essas strings como nomes e criam tags com o ID como nome; nesses ambientes,
+envie nomes existentes intencionalmente. Veja a [compatibilidade de tags](docs/COMPATIBILITY.md#document-tags).
+
 ### Workspaces
 
 Os schemas oficiais de criação/atualização definem `name` e `notification_sender_type`. O sandbox
@@ -1051,7 +1103,7 @@ await client.fields.get(fieldId);
 await client.fields.update(fieldId, { name: 'Nome atualizado' });
 await client.fields.delete(fieldId);
 
-// Valida um único valor (o código de acesso só é exigido nas chamadas do signatário)
+// Usa credenciais do workspace; signerAccessCode é uma query legada opcional.
 await client.fields.validate(fieldId, '400.676.228-36', { signerAccessCode });
 
 // Valida vários valores de uma vez
@@ -1152,7 +1204,8 @@ Trocar um autenticador já confirmado exige também `password` ou `reauth_code` 
 
 Uma conta tem 1 endpoint de webhook, ou até 3 nos planos pagos. Cada endpoint ativo inscrito em um
 evento o recebe, de forma independente. Tokens OAuth exigem `account:read` para ler endpoints e
-`webhooks:write` para alterá-los; o segredo de assinatura só é acessível com chave de API.
+`webhooks:write` para alterá-los. Com assinatura ativa, a criação devolve `secret`: guarde-o também
+nas integrações OAuth. Ler ou rotacionar esse segredo depois exige chave de API.
 
 ```ts
 const endpoint = await client.webhooks.createEndpoint({
@@ -1164,12 +1217,15 @@ const endpoint = await client.webhooks.createEndpoint({
 });
 // → { id, name, url, email, events, is_active, signing_enabled, created_at, updated_at }
 
-const { secret } = await client.webhooks.getEndpointSecret(endpoint.id); // 'whsec_…'
+const secret = endpoint.secret; // 'whsec_…'; guarde em armazenamento seguro na criação
 await client.webhooks.listEndpoints();                                  // IWebhookEndpoint[]
+await client.webhooks.listEndpoints(undefined, { url: endpoint.url });   // filtro exato por URL
 await client.webhooks.getEndpoint(endpoint.id);
 await client.webhooks.updateEndpoint(endpoint.id, { is_active: false }); // só os campos enviados
 await client.webhooks.rotateEndpointSecret(endpoint.id); // o segredo antigo para na hora
 await client.webhooks.deleteEndpoint(endpoint.id);       // libera a vaga do plano
+// Alternativa quando a integração guardou somente a URL:
+// await client.webhooks.deleteEndpointByUrl(endpoint.url);
 
 await client.webhooks.listEventTypes();
 const historico = await client.webhooks.listDispatches({
@@ -1250,6 +1306,11 @@ Os valores por evento são:
 | `signer_whatsapp_verified` | `Signer` | `Document` | `signer_whatsapp_phone_number` |
 | `signer_data_confirmed` | `Signer` | `Document` | `signer_email` |
 | `signer_viewed_document` | `Signer` | `Document` | `signer_full_name` |
+| `signer_identity_verified` | `Signer` | `Document` | `signer_full_name`, `evidence` quando disponível |
+| `signer_identity_verification_failed` | `Signer` | `Document` | `signer_full_name`, `reason` |
+| `signer_identity_review_required` | `Signer` | `Document` | `signer_full_name`, `reason_codes` |
+| `signer_identity_review_approved` | `Signer` | `Document` | `signer_full_name`, `reviewer_id`, `reviewer_name`, `reason_codes` |
+| `signer_identity_review_rejected` | `Signer` | `Document` | `signer_full_name`, `reviewer_id`, `reviewer_name`, `note` |
 | `signer_signed_document` | `Signer` | `Document` | `signer_full_name` |
 | `signer_rejected_document` | `Signer` | `Document` | `signer_full_name` |
 | `user_rejected_document` | `User` | `Document` | `user_name` |

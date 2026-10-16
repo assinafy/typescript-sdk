@@ -251,6 +251,11 @@ describe('DocumentResource.rename', () => {
 });
 
 describe('DocumentResource.waitUntilReady error handling', () => {
+    test('returns a processed document waiting for identity review without waiting for certification', async () => {
+        const http = { get: async () => envelope({ id: 'doc-1', status: 'pending_identity_review' }) } as unknown as AxiosInstance;
+        const result = await new DocumentResource(http).waitUntilReady('doc-1', { maxWaitMs: 500, pollIntervalMs: 1 });
+        expect(result.status).toBe('pending_identity_review');
+    });
     const envelope = (data: unknown) => ({ status: 200, data: { status: 200, data }, headers: {} });
 
     test('surfaces a 4xx immediately instead of masking it as a timeout', async () => {
@@ -386,6 +391,36 @@ describe('DocumentResource.isFullySigned', () => {
 });
 
 describe('DocumentResource.createFromTemplate', () => {
+    test('leaves role-aware certificate isolation to the API for templates with copy receivers', async () => {
+        const signers = [
+            { role_id: 'signature-role', id: 's', verification_method: 'DigitalCertificate' as const },
+            { role_id: 'copy-role', id: 'copy' },
+        ];
+        let body: unknown;
+        const http = { post: async (_url: string, value: unknown) => {
+            body = value;
+            return { status: 200, data: { status: 200, data: { id: 'd' } } };
+        } } as unknown as AxiosInstance;
+        await new DocumentResource(http, 'acc').createFromTemplate('t', signers);
+        expect(body).toEqual({ signers });
+    });
+    test('uses identity verification for template creation and estimation with either channel', async () => {
+        const calls: unknown[] = [];
+        const http = { post: async (url: string, body: unknown) => {
+            calls.push({ url, body });
+            return { status: 200, data: { status: 200, data: { id: 'doc-1' } } };
+        } } as unknown as AxiosInstance;
+        const resource = new DocumentResource(http, 'acc');
+        for (const channel of ['Email', 'Whatsapp'] as const) {
+            const descriptor = { role_id: 'r', verification_method: 'IdDocumentFaceMatchBasic' as const, notification_methods: [channel] };
+            await resource.createFromTemplate('t', [{ id: 's', ...descriptor }]);
+            await resource.estimateCostFromTemplate('t', [descriptor]);
+            expect(calls.splice(0)).toEqual([
+                { url: '/accounts/acc/templates/t/documents', body: { signers: [{ id: 's', ...descriptor }] } },
+                { url: '/accounts/acc/templates/t/documents/estimate-cost', body: { signers: [descriptor] } },
+            ]);
+        }
+    });
     test('POSTs the template documents endpoint with { signers, ...options }', async () => {
         let url = '';
         let body: unknown;
@@ -474,23 +509,7 @@ describe('DocumentResource.createFromTemplate', () => {
                     notification_methods: ['Email', 'Whatsapp'],
                 },
             ],
-            [
-                { role_id: 'role1', id: 'signer1', step: 1 },
-                { role_id: 'role2', id: 'signer2' },
-            ],
-            [
-                { role_id: 'role1', id: 'signer1', step: 1 },
-                { role_id: 'role2', id: 'signer2', step: 3 },
-            ],
-            [
-                {
-                    role_id: 'role1',
-                    id: 'signer1',
-                    step: 1,
-                    verification_method: 'DigitalCertificate',
-                },
-                { role_id: 'role2', id: 'signer2', step: 1 },
-            ],
+            [{ role_id: 'role1', id: 'signer1', step: 0 }],
         ];
 
         for (const signers of invalid) {

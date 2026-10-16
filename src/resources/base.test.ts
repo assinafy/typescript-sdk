@@ -41,6 +41,9 @@ describe('BaseResource helpers', () => {
         );
         expect(() => res().segment$('   ')).toThrow('ID is required');
         expect(() => res().segment$('\ud800')).toThrow('ID contains invalid URL characters');
+        for (const id of ['.', '..']) {
+            expect(() => res().segment$(id)).toThrow('ID contains invalid URL characters');
+        }
     });
 
     test('callOptional returns null on a 404 ApiError but rethrows others', async () => {

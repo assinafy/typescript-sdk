@@ -32,6 +32,8 @@ export class TemplateResource extends BaseResource {
      *
      * @param source - The PDF to upload, as a file path or an in-memory buffer.
      * @param options - `name` (display name) and an optional `accountId` override.
+     * @param options.name - Multipart filename override, with a `.pdf` extension.
+     * @param options.accountId - Override the client's default workspace.
      * @returns The created template (envelope unwrapped). Response shape:
      * ```jsonc
      * {
@@ -203,7 +205,7 @@ export class TemplateResource extends BaseResource {
      * @example
      * ```ts
      * const tmpl = await client.templates.get('103ad2171db7979468c3e97eb067');
-     * if (tmpl.status === 'Ready') console.log(tmpl.pages.length);
+     * if (tmpl.status === 'Ready') console.log(tmpl.pages?.length ?? 0);
      * ```
      */
     async get(templateId: string, accountId?: string): Promise<ITemplateDetailsResponse> {

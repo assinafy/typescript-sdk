@@ -35,7 +35,7 @@ import {
 import { BaseResource } from './base';
 import type { DocumentUploadSource } from './upload';
 import { withoutCredentials } from '../support/transport';
-import { validateAssignmentSignerOptions, validateSigningOrder } from './assignments';
+import { validateAssignmentSignerOptions } from './assignments';
 
 export type { DocumentUploadSource } from './upload';
 
@@ -52,6 +52,7 @@ export function validateDocumentWaitOptions(
 const READY_STATUSES: ReadonlySet<DocumentStatus | string> = new Set([
     'metadata_ready',
     'pending_signature',
+    'pending_identity_review',
     'certificated',
 ]);
 
@@ -103,6 +104,9 @@ export class DocumentResource extends BaseResource {
      *
      * @param source - The PDF to upload, as a file path or an in-memory buffer.
      * @param options - Display name, metadata, and account override.
+     * @param options.name - Multipart filename override; the API derives the display name from it.
+     * @param options.metadata - JSON metadata (compatibility multipart part).
+     * @param options.accountId - Override the client's default workspace.
      * @returns The created document, freshly uploaded (`status: 'uploaded'`,
      * empty `pages` until `metadata_ready`). Response shape:
      * ```jsonc
@@ -219,7 +223,7 @@ export class DocumentResource extends BaseResource {
      *   method: 'virtual',
      *   'per-page': 50,
      * });
-     * console.log(data[0]?.pages.length, meta?.total);
+     * console.log(data[0]?.pages?.length, meta?.total);
      * ```
      */
     async list(params: IDocumentListParams = {}, accountId?: string): Promise<IDocumentListResponse> {
@@ -437,7 +441,8 @@ export class DocumentResource extends BaseResource {
 
     /**
      * Poll {@link DocumentResource.details} until the document reaches a ready
-     * status (`metadata_ready`, `pending_signature`, or `certificated`),
+     * status (`metadata_ready`, `pending_signature`, `pending_identity_review`,
+     * or `certificated`),
      * throwing on a terminal failure status or timeout.
      *
      * Transient errors are tolerated — a `5xx` or `429` is retried on the next
@@ -447,6 +452,8 @@ export class DocumentResource extends BaseResource {
      * @param documentId - The document to wait on.
      * @param options - `maxWaitMs` (default `30_000`) and `pollIntervalMs`
      * (default `2_000`).
+     * @param options.maxWaitMs - Finite non-negative wait budget in milliseconds; default `30_000`.
+     * @param options.pollIntervalMs - Finite positive polling interval in milliseconds; default `2_000`.
      * @returns The document details once it reaches a ready status (see
      * {@link DocumentResource.details} for the shape).
      * @throws {ValidationError} If `documentId` is missing, the document enters
@@ -731,6 +738,9 @@ export class DocumentResource extends BaseResource {
      * names are not portable identifiers and should not be used here. This
      * overwrites the existing set — use
      * {@link DocumentResource.addTags} to append.
+     * Older sandbox deployments interpret these strings as names and create
+     * ID-named tags for ID inputs; pass existing names intentionally there.
+     * Strings are sent unchanged. See `docs/COMPATIBILITY.md` for this variant.
      *
      * Request body (`application/json`):
      * ```jsonc
@@ -785,6 +795,8 @@ export class DocumentResource extends BaseResource {
      * `tags` is a non-empty array of tag **IDs**. Attaching an ID already
      * present is a no-op. To replace the whole set instead, use
      * {@link DocumentResource.replaceTags}.
+     * On older name-based sandbox deployments, pass existing tag names
+     * intentionally; ID inputs create ID-named tags. No automatic remapping occurs.
      *
      * Request body (`application/json`):
      * ```jsonc
@@ -912,10 +924,17 @@ export class DocumentResource extends BaseResource {
      * plus optional `verification_method`, `notification_methods`, `step`).
      * Only one notification method is allowed per signer; when only one of the
      * verification/notification fields is supplied, the API infers the other.
-     * `DigitalCertificate` costs two credits, requires the feature plus a
+     * `DigitalCertificate` costs 0.5 credits, requires the feature plus a
      * signer `government_id`, and that signer must be alone in its step.
+     * `IdDocumentFaceMatchBasic` needs the ID Document + Face Match feature
+     * and a valid CPF in `government_id`; estimate the per-signer fee first.
      * @param options - Optional `name`, `message`, `expires_at`,
      * `editor_fields`, `tags`.
+     * @param options.name - Generated document display name.
+     * @param options.message - Signing invitation message.
+     * @param options.expires_at - ISO-8601 signature deadline.
+     * @param options.editor_fields - Template editor values as `{ field_id, value }` entries.
+     * @param options.tags - Tag names attached to the generated document.
      * @param accountId - Override the client's default account ID.
      * @returns The created document (an {@link IDocumentDetailsResponse} with
      * `template_id` set and its `assignment` populated):
@@ -998,7 +1017,7 @@ export class DocumentResource extends BaseResource {
      *
      * A dry run: sends only `{ signers }` and consumes nothing. Use it to check
      * balances before calling {@link DocumentResource.createFromTemplate}.
-     * `DigitalCertificate` adds two credits per signer and has the same feature,
+     * `DigitalCertificate` adds 0.5 credits per signer and has the same feature,
      * `government_id`, and signing-step prerequisites as document creation.
      *
      * Request body (`application/json`):
@@ -1347,7 +1366,7 @@ function normaliseTemplateSigners(signers: ITemplateSigner[]): ITemplateSigner[]
         if (signer.step !== undefined) projected.step = signer.step;
         return projected;
     });
-    validateSigningOrder(normalised, 'template signers');
+    // Only the API knows which role IDs are signers versus editors or copy receivers.
     return normalised;
 }
 

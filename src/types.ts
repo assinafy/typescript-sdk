@@ -5,6 +5,7 @@ export type DocumentStatus =
     | 'metadata_processing'
     | 'metadata_ready'
     | 'pending_signature'
+    | 'pending_identity_review'
     | 'expired'
     | 'certificating'
     | 'certificated'
@@ -48,7 +49,8 @@ export type AssignmentMethod = 'virtual' | 'collect';
  * | --- | --- | --- | --- |
  * | `Email` | One-time code sent by e-mail (the default). | An `email`. | 0 credits |
  * | `Whatsapp` | One-time code sent over WhatsApp. | A `whatsapp_phone_number`; paid plan. | 0.45 credits |
- * | `DigitalCertificate` | The signer signs with their own ICP-Brasil certificate — **A1** (software, a file on the machine) or **A3** (hardware, a token or smartcard) — through the Web PKI browser extension, producing a qualified PAdES signature. | Digital Certificate feature (Standard/Pro); `government_id` (CPF, or CNPJ naming the signer as legal representative); the signer must be alone in their signing step. | 2 credits + notification |
+ * | `DigitalCertificate` | The signer signs with their own ICP-Brasil certificate — **A1** (software, a file on the machine) or **A3** (hardware, a token or smartcard) — through the Web PKI browser extension, producing a qualified PAdES signature. | Digital Certificate feature (Standard/Pro); `government_id`; the signer must be alone in their signing step. | 0.5 credits + notification |
+ * | `IdDocumentFaceMatchBasic` | Hosted identity-document and face verification, with explicit biometric consent. | ID Document + Face Match feature; valid CPF in `government_id`; account approval for any `InReview` result before certification. | Use cost estimation for current pricing. |
  *
  * A1 and A3 are certificate *media*, chosen by the signer in their browser at
  * signing time. The API models both as the single `DigitalCertificate` value —
@@ -58,13 +60,84 @@ export type AssignmentMethod = 'virtual' | 'collect';
  * Verification is coupled to {@link AssignmentNotificationMethod}: the
  * verification code travels on the notification channel, so `Email` pairs only
  * with `Email` and `Whatsapp` only with `Whatsapp`. `DigitalCertificate`
- * carries no code and may be announced over either channel. The SDK rejects an
+ * and `IdDocumentFaceMatchBasic` carry no OTP and may be announced over either
+ * channel. The SDK rejects an
  * invalid pairing before the request; the API answers `400`.
  *
  * Send neither field to get `Email`/`Email`; send one and the other is
  * inferred from it.
  */
-export type AssignmentVerificationMethod = 'Email' | 'Whatsapp' | 'DigitalCertificate';
+export type AssignmentVerificationMethod =
+    | 'Email'
+    | 'Whatsapp'
+    | 'DigitalCertificate'
+    | 'IdDocumentFaceMatchBasic';
+
+/** Provider session state; `InReview` permits signing but holds certification. */
+export type IdentityVerificationStatus =
+    | 'Pending'
+    | 'InReview'
+    | 'Approved'
+    | 'Declined'
+    | 'Expired'
+    | 'Abandoned';
+
+/** Evidence names accepted by the account review image endpoint. */
+export type IdentityVerificationImageName = 'document_front' | 'document_back' | 'document_pdf' | 'face';
+
+/** Signer-facing identity verification state, including an optional live capture link. */
+export interface ISignerIdentityVerification {
+    /** True before a session exists or when the last session is Expired. */
+    can_start: boolean;
+    status: IdentityVerificationStatus | AnyString | null;
+    /** Bearer link: preserve its fragment, never log it or persist it in browser storage. */
+    url: string | null;
+    /** Capture-link expiry, not a deadline for processing or account review. */
+    expires_at: string | null;
+    completed_at: string | null;
+}
+
+/** Explicit biometric-processing consent; never infer it from another action. */
+export interface IStartIdentityVerificationPayload {
+    consent: true;
+}
+
+/** A newly opened identity verification provider session. */
+export interface ISignerIdentityVerificationSession {
+    id: string;
+    /** Open as-is, including any fragment; treat it as a credential. */
+    url: string;
+    expires_at: string | null;
+}
+
+/** Account review decision. Rejection cancels the document and notifies its recipients. */
+export interface IReviewIdentityVerificationPayload {
+    decision: 'Approved' | 'Rejected';
+    /** Up to 2000 characters; recorded in activity and sent to the provider, hidden from signers. */
+    note?: string | null;
+}
+
+/** Account-visible identity review summary; contains no image bytes or biometrics. */
+export interface ISignerIdentityReview {
+    id: string;
+    status: IdentityVerificationStatus | AnyString;
+    provider: 'AssinafyVerify' | AnyString;
+    verification_method: 'IdDocumentFaceMatchBasic' | AnyString;
+    reason_codes: Array<{ code: string; description: string }>;
+    evidence_available: boolean;
+    expected: { name: string | null; cpf: string | null } | null;
+    document: { type: string | null; name: string | null; cpf: string | null } | null;
+    matches: { cpf: boolean | null; name: number | null; birth_date: boolean | null } | null;
+    checks: Array<{ name: string; result: string; score: number | null; reasons: string[] }>;
+    /** Evidence available only while `InReview`; empty after the decision. */
+    images: IdentityVerificationImageName[];
+    ruleset_version: string | null;
+    evidence_sha256: string | null;
+    reviewed_by: { id: string; name: string } | null;
+    reviewed_at: string | null;
+    review_note: string | null;
+    completed_at: string | null;
+}
 
 /**
  * How the signing invitation reaches the signer. Exactly one per signer.
@@ -189,6 +262,8 @@ export interface ISigner {
 
 /** Signer profile returned by the signer-code-authenticated `GET /signers/self`. */
 export interface ISignerSelf extends ISigner {
+    /** Available before verification so the signing UI can select OTP, certificate or identity capture. */
+    verification_method?: AssignmentVerificationMethod | AnyString;
     /** Optional for compatibility with deployments that omit this field. */
     has_signature?: boolean;
     /** Optional for compatibility with deployments that omit this field. */
@@ -375,6 +450,8 @@ export interface IEstimateAssignmentCostPayload {
 
 /** A signer as embedded inside an assignment (richer than the bare {@link ISigner}). */
 export interface IAssignmentSigner extends ISigner {
+    /** `InReview` requires an account decision before document certification. */
+    identity_verification_status?: IdentityVerificationStatus | AnyString | null;
     /** Only present in account-owner contexts; omitted from signer-code responses. */
     completed?: boolean | null;
     /** Optional because some deployments omit notification history. */
@@ -532,6 +609,11 @@ export type WebhookEventType =
     | 'signer_whatsapp_verified'
     | 'signer_data_confirmed'
     | 'signer_viewed_document'
+    | 'signer_identity_verified'
+    | 'signer_identity_verification_failed'
+    | 'signer_identity_review_required'
+    | 'signer_identity_review_approved'
+    | 'signer_identity_review_rejected'
     | 'signer_signed_document'
     | 'signer_rejected_document'
     | 'user_rejected_document'
@@ -886,6 +968,12 @@ export interface IWebhookEndpoint {
     created_at: string;
     /** ISO-8601 UTC timestamp. */
     updated_at: string;
+}
+
+/** Endpoint creation also returns the signing secret when signing is enabled. */
+export interface IWebhookEndpointCreateResponse extends IWebhookEndpoint {
+    /** Store securely at creation: OAuth applications cannot read or rotate this later. */
+    secret?: string;
 }
 
 /** An endpoint's Standard Webhooks signing secret. */
