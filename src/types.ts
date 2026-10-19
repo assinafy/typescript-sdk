@@ -49,7 +49,7 @@ export type AssignmentMethod = 'virtual' | 'collect';
  * | --- | --- | --- | --- |
  * | `Email` | One-time code sent by e-mail (the default). | An `email`. | 0 credits |
  * | `Whatsapp` | One-time code sent over WhatsApp. | A `whatsapp_phone_number`; paid plan. | 0.45 credits |
- * | `DigitalCertificate` | The signer signs with their own ICP-Brasil certificate — **A1** (software, a file on the machine) or **A3** (hardware, a token or smartcard) — through the Web PKI browser extension, producing a qualified PAdES signature. | Digital Certificate feature (Standard/Pro); `government_id`; the signer must be alone in their signing step. | 0.5 credits + notification |
+ * | `DigitalCertificate` | The signer signs with their own ICP-Brasil certificate — **A1** (software, a file on the machine) or **A3** (hardware, a token or smartcard) — through the Web PKI browser extension, producing a qualified PAdES signature. | `method: 'virtual'`; Digital Certificate feature (Standard/Pro); `government_id`; the signer must be alone in their signing step. | 0.5 credits + notification |
  * | `IdDocumentFaceMatchBasic` | Hosted identity-document and face verification, with explicit biometric consent. | ID Document + Face Match feature; valid CPF in `government_id`; account approval for any `InReview` result before certification. | Use cost estimation for current pricing. |
  *
  * A1 and A3 are certificate *media*, chosen by the signer in their browser at
@@ -344,6 +344,7 @@ export type SignerReference =
     | {
           id?: string;
           signer_id?: string;
+          /** `DigitalCertificate` is valid only when the assignment method is `virtual`. */
           verification_method?: AssignmentVerificationMethod;
           notification_methods?: AssignmentNotificationMethod[];
           /**
@@ -426,7 +427,7 @@ export interface IAssignmentEntry {
     }>;
 }
 
-/** Channel descriptor accepted by assignment cost estimation. */
+/** Channel descriptor accepted by assignment cost estimation. `DigitalCertificate` requires `method: 'virtual'`. */
 export interface IAssignmentCostSigner {
     verification_method?: AssignmentVerificationMethod;
     notification_methods?: AssignmentNotificationMethod[];
@@ -1156,7 +1157,13 @@ export interface ITemplateDetailsResponse {
     [key: string]: unknown;
 }
 
-/** Signer assignment for creating a document from a template. */
+/**
+ * Signer assignment for creating a document from a template.
+ *
+ * The SDK temporarily rejects `DigitalCertificate` because the server derives
+ * the method from template fields and can create an unusable `collect`
+ * assignment. Use a direct `virtual` assignment for certificate signers.
+ */
 export interface ITemplateSigner {
     role_id: string;
     id: string;
@@ -1168,7 +1175,9 @@ export interface ITemplateSigner {
 
 /**
  * Role/channel descriptor used only for template cost estimation. The official
- * schema intentionally omits signer `id` and sequential-signing `step`.
+ * schema intentionally omits signer `id` and sequential-signing `step`. The SDK
+ * temporarily rejects `DigitalCertificate`; use direct virtual-assignment cost
+ * estimation instead.
  */
 export interface ITemplateCostSigner {
     role_id: string;

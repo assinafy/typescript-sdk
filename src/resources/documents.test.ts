@@ -1,6 +1,7 @@
 import { describe, test, expect, beforeEach } from 'bun:test';
 import { DocumentResource } from './documents';
 import { ApiError, ValidationError } from '../errors';
+import { DIGITAL_CERTIFICATE_REQUIRES_VIRTUAL_METHOD } from './assignments';
 import axios, { type AxiosInstance } from 'axios';
 
 describe('DocumentResource', () => {
@@ -391,18 +392,35 @@ describe('DocumentResource.isFullySigned', () => {
 });
 
 describe('DocumentResource.createFromTemplate', () => {
-    test('leaves role-aware certificate isolation to the API for templates with copy receivers', async () => {
-        const signers = [
-            { role_id: 'signature-role', id: 's', verification_method: 'DigitalCertificate' as const },
-            { role_id: 'copy-role', id: 'copy' },
+    test('refuses certificate creation and estimation because templates derive the method', async () => {
+        let calls = 0;
+        const resource = new DocumentResource({
+            post: async () => {
+                calls++;
+                return { status: 200 };
+            },
+        } as unknown as AxiosInstance, 'acc');
+        const requests = [
+            () => resource.createFromTemplate('t', [{
+                role_id: 'signature-role',
+                id: 's',
+                verification_method: 'DigitalCertificate',
+            }]),
+            () => resource.estimateCostFromTemplate('t', [{
+                role_id: 'signature-role',
+                verification_method: 'DigitalCertificate',
+            }]),
         ];
-        let body: unknown;
-        const http = { post: async (_url: string, value: unknown) => {
-            body = value;
-            return { status: 200, data: { status: 200, data: { id: 'd' } } };
-        } } as unknown as AxiosInstance;
-        await new DocumentResource(http, 'acc').createFromTemplate('t', signers);
-        expect(body).toEqual({ signers });
+
+        for (const request of requests) {
+            await expect(request()).rejects.toMatchObject({
+                errors: {
+                    code: DIGITAL_CERTIFICATE_REQUIRES_VIRTUAL_METHOD,
+                    method: null,
+                },
+            });
+        }
+        expect(calls).toBe(0);
     });
     test('uses identity verification for template creation and estimation with either channel', async () => {
         const calls: unknown[] = [];
@@ -435,7 +453,7 @@ describe('DocumentResource.createFromTemplate', () => {
             {
                 role_id: 'role1',
                 id: 'signer1',
-                verification_method: 'DigitalCertificate' as const,
+                verification_method: 'Email' as const,
                 internal_secret: 'do-not-send',
             },
         ];
@@ -459,7 +477,7 @@ describe('DocumentResource.createFromTemplate', () => {
                 {
                     role_id: 'role1',
                     id: 'signer1',
-                    verification_method: 'DigitalCertificate',
+                    verification_method: 'Email',
                 },
             ],
             name: 'My Contract',
@@ -567,7 +585,7 @@ describe('DocumentResource.estimateCostFromTemplate', () => {
             },
         } as unknown as AxiosInstance;
         const signers = [
-            { role_id: 'role1', verification_method: 'DigitalCertificate' as const },
+            { role_id: 'role1', verification_method: 'Email' as const },
         ];
         await new DocumentResource(ax, 'acc').estimateCostFromTemplate('tmpl1', signers);
         expect(url).toBe('/accounts/acc/templates/tmpl1/documents/estimate-cost');

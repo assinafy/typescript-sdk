@@ -43,8 +43,9 @@ They map to `auth.getSocialLoginUrl()` and
 The SDK also includes the production contract additions for:
 
 - the `pades` document artifact;
-- `DigitalCertificate` verification on assignment and template-document
-  creation and cost estimation;
+- `DigitalCertificate` verification on virtual assignment creation and cost
+  estimation (template calls remain typed but are temporarily rejected because
+  the server derives their method);
 - typed `display_settings` for collect fields;
 - signer `government_id` updates;
 - signature-image `reuse`;
@@ -281,11 +282,20 @@ responses do not return it.
 `DigitalCertificate` requires the account feature, a CPF or CNPJ stored in the
 signer's `government_id`, and exactly one certificate signer in that signing
 step. It costs 0.5 credits per signer in addition to the selected notification
-cost. Notification methods remain `Email` and `Whatsapp`.
+cost. Notification methods remain `Email` and `Whatsapp`. It also requires
+`method: virtual`: certificate completion completes a virtual item, while the
+ordinary field-signing endpoint refuses certificate signers. The SDK rejects a
+certificate/`collect` combination before assignment creation or cost
+estimation with `ValidationError.errors.code` set to
+`digital_certificate_requires_virtual_method`.
 
 Template role IDs do not reveal which entries are signers, editors or copy
 receivers. The SDK validates each entry's channel and positive `step`, then
-lets the API enforce role-aware signing order and certificate isolation.
+lets the API enforce role-aware signing order. The server also derives the
+assignment method from placed template fields but does not yet reject an
+unusable certificate/`collect` result. Until it does, the SDK refuses
+`DigitalCertificate` on both template-document creation and cost estimation
+with the same stable code; use a direct virtual assignment instead.
 
 ## Identity document and face verification
 

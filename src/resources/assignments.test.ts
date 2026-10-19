@@ -3,6 +3,7 @@ import {
     AssignmentResource,
     buildAssignmentEstimatePayload,
     buildAssignmentPayload,
+    DIGITAL_CERTIFICATE_REQUIRES_VIRTUAL_METHOD,
 } from './assignments';
 import { ValidationError } from '../errors';
 import type { AxiosInstance } from 'axios';
@@ -152,6 +153,36 @@ describe('buildAssignmentPayload', () => {
             method: 'virtual',
             signers: [{ verification_method: 'DigitalCertificate' }, {}],
         });
+    });
+
+    test('rejects certificate collect payloads with a stable code', () => {
+        const entries = [{ page_id: 'page-1', fields: [] }];
+        const requests: Array<() => unknown> = [
+            () => buildAssignmentPayload({
+                method: 'collect',
+                signers: [{ id: 'certificate-signer', verification_method: 'DigitalCertificate' }],
+                entries,
+            }),
+            () => buildAssignmentEstimatePayload({
+                method: 'collect',
+                signers: [{ verification_method: 'DigitalCertificate' }],
+                entries,
+            }),
+        ];
+
+        for (const request of requests) {
+            let caught: unknown;
+            try {
+                request();
+            } catch (error) {
+                caught = error;
+            }
+            expect(caught).toBeInstanceOf(ValidationError);
+            expect((caught as ValidationError).errors).toEqual({
+                code: DIGITAL_CERTIFICATE_REQUIRES_VIRTUAL_METHOD,
+                method: 'collect',
+            });
+        }
     });
 
     test('projects collect entries and display settings to their exact wire fields', () => {
@@ -478,6 +509,36 @@ describe('AssignmentResource', () => {
             signers: [],
             entries: [{ page_id: 'page-1', fields: [] }],
         })).rejects.toThrow(/At least one signer/);
+    });
+
+    test('create and estimateCost refuse certificate collect requests before HTTP', async () => {
+        let calls = 0;
+        const resource = new AssignmentResource({
+            post: async () => {
+                calls++;
+                return { status: 200 };
+            },
+        } as unknown as AxiosInstance, 'acc');
+        const entries = [{ page_id: 'page-1', fields: [] }];
+        const requests = [
+            () => resource.create('doc-1', {
+                method: 'collect',
+                signers: [{ id: 'certificate-signer', verification_method: 'DigitalCertificate' }],
+                entries,
+            }),
+            () => resource.estimateCost('doc-1', {
+                method: 'collect',
+                signers: [{ verification_method: 'DigitalCertificate' }],
+                entries,
+            }),
+        ];
+
+        for (const request of requests) {
+            await expect(request()).rejects.toMatchObject({
+                errors: { code: DIGITAL_CERTIFICATE_REQUIRES_VIRTUAL_METHOD },
+            });
+        }
+        expect(calls).toBe(0);
     });
 
     test('estimateCost returns the full ICostEstimate shape', async () => {

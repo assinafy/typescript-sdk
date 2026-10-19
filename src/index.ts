@@ -11,7 +11,11 @@ export { MAX_LIST_PAGE_SIZE } from './utils';
 export { SignerResource } from './resources/signers';
 export { WorkspaceResource } from './resources/workspaces';
 export type { AccountLogoUploadSource } from './resources/workspaces';
-export { AssignmentResource, buildAssignmentPayload } from './resources/assignments';
+export {
+    AssignmentResource,
+    buildAssignmentPayload,
+    DIGITAL_CERTIFICATE_REQUIRES_VIRTUAL_METHOD,
+} from './resources/assignments';
 export { WebhookResource, DEFAULT_WEBHOOK_EVENTS } from './resources/webhooks';
 export { TemplateResource } from './resources/templates';
 export { TagResource } from './resources/tags';

@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.8.1] - 2026-10-19
+
+### Fixed
+
+- Reject `DigitalCertificate` signers unless an assignment is explicitly
+  `virtual`, before direct creation or cost estimation can invite or charge for
+  an unusable `collect` assignment. Template creation and estimation reject
+  certificate signers until the API enforces its server-derived method. All
+  paths expose the stable
+  `digital_certificate_requires_virtual_method` validation code.
+
 ## [2.8.0] - 2026-10-16
 
 ### Added
@@ -834,7 +845,8 @@ signer fields with `cpf` and `whatsapp_phone_number`.
 - High-level `uploadAndRequestSignatures` helper on `AssinafyClient`.
 - `PaginatedResult<T>` with parsed `X-Pagination-*` header meta.
 
-[Unreleased]: https://github.com/assinafy/typescript-sdk/compare/v2.8.0...HEAD
+[Unreleased]: https://github.com/assinafy/typescript-sdk/compare/v2.8.1...HEAD
+[2.8.1]: https://github.com/assinafy/typescript-sdk/compare/v2.8.0...v2.8.1
 [2.8.0]: https://github.com/assinafy/typescript-sdk/releases/tag/v2.8.0
 [2.7.1]: https://github.com/assinafy/typescript-sdk/compare/v2.7.0...v2.7.1
 [2.7.0]: https://github.com/assinafy/typescript-sdk/compare/v2.6.0...v2.7.0

@@ -35,7 +35,10 @@ import {
 import { BaseResource } from './base';
 import type { DocumentUploadSource } from './upload';
 import { withoutCredentials } from '../support/transport';
-import { validateAssignmentSignerOptions } from './assignments';
+import {
+    validateAssignmentSignerOptions,
+    validateDigitalCertificateMethod,
+} from './assignments';
 
 export type { DocumentUploadSource } from './upload';
 
@@ -925,7 +928,10 @@ export class DocumentResource extends BaseResource {
      * Only one notification method is allowed per signer; when only one of the
      * verification/notification fields is supplied, the API infers the other.
      * `DigitalCertificate` costs 0.5 credits, requires the feature plus a
-     * signer `government_id`, and that signer must be alone in its step.
+     * signer `government_id`, and that signer must be alone in its step. The
+     * server derives the assignment method from placed template fields but
+     * does not yet reject unusable certificate/`collect` combinations, so the
+     * SDK temporarily refuses certificate signers on this template route.
      * `IdDocumentFaceMatchBasic` needs the ID Document + Face Match feature
      * and a valid CPF in `government_id`; estimate the per-signer fee first.
      * @param options - Optional `name`, `message`, `expires_at`,
@@ -956,15 +962,16 @@ export class DocumentResource extends BaseResource {
      *   "updated_at": "2026-07-15T19:59:33Z"
      * }
      * ```
-     * @throws {ValidationError} If `templateId` is missing or no account ID is
-     * available.
+     * @throws {ValidationError} If `templateId` is missing, no account ID is
+     * available, or a signer uses `DigitalCertificate`. Certificate refusals
+     * have `errors.code === 'digital_certificate_requires_virtual_method'`.
      * @throws {ApiError} `400` if the signers/roles are invalid or the template
      * is not ready.
      *
      * @example
      * ```ts
      * await client.documents.createFromTemplate('tmpl_id', [
-     *   { role_id: 'role_id', id: 'signer_id', verification_method: 'DigitalCertificate' },
+     *   { role_id: 'role_id', id: 'signer_id', verification_method: 'Email' },
      * ], { name: 'My Contract' });
      * ```
      */
@@ -1017,8 +1024,10 @@ export class DocumentResource extends BaseResource {
      *
      * A dry run: sends only `{ signers }` and consumes nothing. Use it to check
      * balances before calling {@link DocumentResource.createFromTemplate}.
-     * `DigitalCertificate` adds 0.5 credits per signer and has the same feature,
-     * `government_id`, and signing-step prerequisites as document creation.
+     * `DigitalCertificate` requires a provably `virtual` assignment. Because
+     * this route leaves method detection to the server, the SDK temporarily
+     * refuses certificate signers instead of returning a price for an
+     * assignment that may charge credits but cannot be completed.
      *
      * Request body (`application/json`):
      * ```jsonc
@@ -1060,14 +1069,15 @@ export class DocumentResource extends BaseResource {
      *   "message": null
      * }
      * ```
-     * @throws {ValidationError} If `templateId` is missing or no account ID is
-     * available.
+     * @throws {ValidationError} If `templateId` is missing, no account ID is
+     * available, or a signer uses `DigitalCertificate`. Certificate refusals
+     * have `errors.code === 'digital_certificate_requires_virtual_method'`.
      * @throws {ApiError} If the API rejects the request.
      *
      * @example
      * ```ts
      * const estimate = await client.documents.estimateCostFromTemplate('tmpl_id', [
-     *   { role_id: 'role_id', verification_method: 'DigitalCertificate' },
+     *   { role_id: 'role_id', verification_method: 'Email' },
      * ]);
      * if (!estimate.has_sufficient_resources) throw new Error(estimate.blocking_reason ?? 'insufficient');
      * ```
@@ -1366,6 +1376,7 @@ function normaliseTemplateSigners(signers: ITemplateSigner[]): ITemplateSigner[]
         if (signer.step !== undefined) projected.step = signer.step;
         return projected;
     });
+    validateDigitalCertificateMethod(undefined, normalised);
     // Only the API knows which role IDs are signers versus editors or copy receivers.
     return normalised;
 }
@@ -1394,7 +1405,7 @@ function normaliseTemplateCostSigners(signers: ITemplateCostSigner[]): ITemplate
     if (!Array.isArray(signers) || signers.length === 0) {
         throw new ValidationError('At least one template role is required for cost estimation');
     }
-    return signers.map((signer, index) => {
+    const normalised = signers.map((signer, index) => {
         if (!signer || typeof signer !== 'object') {
             throw new ValidationError(`Template cost signer ${index + 1} is invalid`);
         }
@@ -1411,6 +1422,8 @@ function normaliseTemplateCostSigners(signers: ITemplateCostSigner[]): ITemplate
         }
         return descriptor;
     });
+    validateDigitalCertificateMethod(undefined, normalised);
+    return normalised;
 }
 
 function validateWaitOption(value: number, name: 'maxWaitMs' | 'pollIntervalMs'): void {

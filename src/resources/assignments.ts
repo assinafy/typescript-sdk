@@ -24,6 +24,10 @@ const ASSIGNMENT_METHODS = new Set(['virtual', 'collect']);
 const VERIFICATION_METHODS = new Set(['Email', 'Whatsapp', 'DigitalCertificate', 'IdDocumentFaceMatchBasic']);
 const NOTIFICATION_METHODS = new Set(['Email', 'Whatsapp']);
 
+/** Stable {@link ValidationError.errors} code for an unusable certificate assignment. */
+export const DIGITAL_CERTIFICATE_REQUIRES_VIRTUAL_METHOD =
+    'digital_certificate_requires_virtual_method';
+
 /**
  * Notification channel each verification method may be paired with.
  *
@@ -130,6 +134,30 @@ export function validateSigningOrder(
 }
 
 /**
+ * Reject a certificate signer unless the assignment is known to be virtual.
+ *
+ * Certificate completion can complete only the signer's virtual item; the
+ * ordinary field-signing endpoint refuses certificate signers. Template
+ * requests pass no method, so they are refused until the API enforces this
+ * rule after deriving the method from the template's placed fields.
+ */
+export function validateDigitalCertificateMethod(
+    method: 'virtual' | 'collect' | undefined,
+    signers: ReadonlyArray<{ verification_method?: unknown }>,
+): void {
+    if (
+        method === 'virtual'
+        || !signers.some((signer) => signer.verification_method === 'DigitalCertificate')
+    ) {
+        return;
+    }
+    throw new ValidationError('DigitalCertificate signers require method: virtual', {
+        code: DIGITAL_CERTIFICATE_REQUIRES_VIRTUAL_METHOD,
+        method: method ?? null,
+    });
+}
+
+/**
  * Normalize a public assignment input into the exact create-request body.
  * String IDs and legacy `signer_id` aliases become signer objects, omitted
  * values are removed, and collect assignments must include placement entries.
@@ -139,7 +167,9 @@ export function validateSigningOrder(
  * @returns A JSON-ready body shaped as
  * `{ method, signers: [{ id, verification_method?, notification_methods?, step? }], message?, expires_at?, copy_receivers?, entries? }`.
  * @throws {ValidationError} If no signer is present, a signer reference is
- * malformed, or a collect assignment has no field-placement entries.
+ * malformed, a collect assignment has no field-placement entries, or a
+ * `DigitalCertificate` signer is combined with `method: 'collect'`. The last
+ * case has `errors.code === 'digital_certificate_requires_virtual_method'`.
  *
  * @example
  * ```ts
@@ -188,6 +218,7 @@ export function buildAssignmentPayload(
     }
 
     const normalisedSigners = signers.map((ref) => normaliseSignerRef(ref));
+    validateDigitalCertificateMethod(method, normalisedSigners);
     validateSigningOrder(normalisedSigners, 'assignment signers');
     return cleanParams({
         method,
@@ -207,7 +238,9 @@ export function buildAssignmentPayload(
  * @returns A JSON-ready `{ method, signers, entries? }` request body. Signer
  * IDs and create-only step fields are never forwarded to pricing.
  * @throws {ValidationError} If the estimate has no signer descriptor, or a
- * collect estimate has no placement entry.
+ * collect estimate has no placement entry, or a `DigitalCertificate` signer
+ * is combined with `method: 'collect'`. The last case has `errors.code ===
+ * 'digital_certificate_requires_virtual_method'`.
  *
  * @example
  * ```ts
@@ -237,9 +270,11 @@ export function buildAssignmentEstimatePayload(
         throw new ValidationError('At least one field-placement entry is required for a collect cost estimate');
     }
 
+    const normalisedSigners = signers.map((signer) => normaliseEstimateSigner(signer));
+    validateDigitalCertificateMethod(method, normalisedSigners);
     return cleanParams({
         method,
-        signers: signers.map((signer) => normaliseEstimateSigner(signer)),
+        signers: normalisedSigners,
         entries,
     });
 }
@@ -507,7 +542,9 @@ export class AssignmentResource extends BaseResource {
      * `uploaded`, `metadata_processing`, or `metadata_ready` and is promoted
      * automatically; `collect` requires rendered pages at `metadata_ready`.
      * `DigitalCertificate` costs 0.5 credits, requires the feature plus a
-     * signer `government_id`, and that signer must be alone in its step.
+     * signer `government_id`, that signer must be alone in its step, and the
+     * assignment must use `method: 'virtual'`. Certificate completion marks a
+     * virtual item complete; it cannot submit placed `collect` fields.
      * `IdDocumentFaceMatchBasic` needs the ID Document + Face Match feature
      * and a valid CPF in the signer's `government_id`; estimate its fee first.
      *
@@ -607,7 +644,9 @@ export class AssignmentResource extends BaseResource {
      * }
      * ```
      * @throws {ValidationError} If `documentId` is missing, no signer is
-     * supplied, or a signer reference is invalid.
+     * supplied, a signer reference is invalid, or `DigitalCertificate` is
+     * combined with `collect`. The last case has `errors.code ===
+     * 'digital_certificate_requires_virtual_method'`.
      * @throws {ApiError} `400` for an invalid assignment or unmet verification
      * precondition; otherwise if the API rejects the request.
      *
@@ -649,7 +688,9 @@ export class AssignmentResource extends BaseResource {
      * default Email channel). {@link buildAssignmentEstimatePayload} projects
      * exactly the fields permitted by the estimate schema.
      * `DigitalCertificate` is priced at 0.5 credits per signer and remains
-     * subject to the feature, identity, and one-signer-per-step requirements.
+     * subject to the feature and identity requirements. It is valid only with
+     * `method: 'virtual'`; the SDK refuses to quote a certificate/`collect`
+     * request because that assignment cannot be completed.
      * Current documented unit prices are 1 credit for an extra document, 0 for
      * email notification, and 0.45 for WhatsApp notification; a digital
      * certificate charge is added on top of its notification cost.
@@ -694,7 +735,9 @@ export class AssignmentResource extends BaseResource {
      * ```
      * @throws {ValidationError} If `documentId` is missing, a `virtual` request
      * has no signer entry, or a `collect` request has no signer entry or no
-     * field-placement entry.
+     * field-placement entry, or combines `DigitalCertificate` with `collect`.
+     * The last case has `errors.code ===
+     * 'digital_certificate_requires_virtual_method'`.
      * @throws {ApiError} If the API rejects the request.
      *
      * @example

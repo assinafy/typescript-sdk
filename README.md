@@ -868,7 +868,7 @@ que faltar é inferido. Sem nenhum dos dois, ambos assumem `Email`.
 | --- | --- | --- | --- |
 | `Email` *(padrão)* | Código de uso único (OTP) por e-mail | `Email` | Gratuito |
 | `Whatsapp` | Código de uso único (OTP) por WhatsApp | `Whatsapp` | 0,45 crédito (a notificação), só em planos pagos |
-| `DigitalCertificate` | O signatário assina com o **próprio certificado ICP-Brasil — A1 ou A3 —** pela extensão Web PKI, gerando uma assinatura **PAdES qualificada** | `Email` **ou** `Whatsapp` | 0,5 crédito + a notificação |
+| `DigitalCertificate` | O signatário assina com o **próprio certificado ICP-Brasil — A1 ou A3 —** pela extensão Web PKI, gerando uma assinatura **PAdES qualificada**; exige `method: 'virtual'` | `Email` **ou** `Whatsapp` | 0,5 crédito + a notificação |
 | `IdDocumentFaceMatchBasic` | Documento de identidade, foto e prova de vida em sessão hospedada | `Email` **ou** `Whatsapp` | Consulte `estimateCost()` |
 
 Apenas um método de notificação por signatário. O SDK recusa uma combinação inválida antes da
@@ -913,9 +913,16 @@ nem encaminhe fora do fluxo de assinatura.
 
 #### Certificado digital ICP-Brasil
 
-`DigitalCertificate` exige o recurso **Certificado Digital** na conta (planos Standard e Pro), CPF ou
-CNPJ em `government_id` do signatário, e exatamente **um signatário por certificado naquele passo de
-assinatura**. Custa 0,5 crédito por signatário, além do custo da notificação escolhida.
+`DigitalCertificate` exige `method: 'virtual'`, o recurso **Certificado Digital** na conta (planos
+Standard e Pro), CPF ou CNPJ em `government_id` do signatário, e exatamente **um signatário por
+certificado naquele passo de assinatura**. Custa 0,5 crédito por signatário, além do custo da
+notificação escolhida. O fluxo por certificado conclui o item virtual do signatário; ele não consegue
+enviar campos posicionados pelo endpoint comum de assinatura `collect`.
+
+O SDK rejeita signatários por certificado em assignments `collect`, tanto em `create()` quanto em
+`estimateCost()`, antes de qualquer requisição. Ramifique por
+`ValidationError.errors.code === 'digital_certificate_requires_virtual_method'`, ou compare com a
+constante exportada `DIGITAL_CERTIFICATE_REQUIRES_VIRTUAL_METHOD`; não dependa da mensagem legível.
 
 **A1 e A3 são mídias de certificado**, escolhidas pelo próprio signatário no navegador na hora de
 assinar: A1 fica em software (um arquivo na máquina) e A3 em hardware (token ou cartão). A API
@@ -1015,9 +1022,11 @@ await client.documents.estimateCostFromTemplate(templateId, [
 //     has_sufficient_resources: true, blocking_reason: null, breakdown: [], … }
 ```
 
-Os descritores de signatário de template também aceitam
-`verification_method: 'DigitalCertificate'`, com os mesmos pré-requisitos de
-[Certificado digital ICP-Brasil](#certificado-digital-icp-brasil).
+O servidor deduz o método do assignment de template a partir dos campos posicionados e hoje aceita
+signatários por certificado mesmo quando isso cria um assignment `collect` impossível de concluir.
+Até a API impor atomicamente a regra de método virtual, o SDK rejeita `DigitalCertificate` tanto em
+`createFromTemplate()` quanto em `estimateCostFromTemplate()`, com o mesmo código estável. Para
+certificados, crie diretamente um assignment `virtual`.
 
 Criar um template apenas envia o PDF e provisiona o papel de editor padrão — configure papéis e
 campos no editor da Assinafy depois. Os `download_url` dos objetos de página do template são URLs

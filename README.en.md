@@ -908,7 +908,7 @@ to `Email`.
 | --- | --- | --- | --- |
 | `Email` *(default)* | One-time code (OTP) by email | `Email` | Free |
 | `Whatsapp` | One-time code (OTP) by WhatsApp | `Whatsapp` | 0.45 credit (the notification), paid plans only |
-| `DigitalCertificate` | The signer signs with their **own ICP-Brasil certificate — A1 or A3 —** through the Web PKI extension, producing a **qualified PAdES signature** | `Email` **or** `Whatsapp` | 0.5 credits + the notification |
+| `DigitalCertificate` | The signer signs with their **own ICP-Brasil certificate — A1 or A3 —** through the Web PKI extension, producing a **qualified PAdES signature**; requires `method: 'virtual'` | `Email` **or** `Whatsapp` | 0.5 credits + the notification |
 | `IdDocumentFaceMatchBasic` | Hosted identity-document, face and liveness verification | `Email` **or** `Whatsapp` | Use `estimateCost()` |
 
 Exactly one notification method per signer. The SDK rejects an invalid
@@ -954,10 +954,19 @@ forward them outside the signing flow.
 
 #### ICP-Brasil digital certificate
 
-`DigitalCertificate` requires the account feature, a CPF or CNPJ in the
-signer's `government_id`, and exactly one certificate signer in that signing
-step. It costs 0.5 credits per certificate signer in addition to the selected
-notification cost.
+`DigitalCertificate` requires `method: 'virtual'`, the account feature, a CPF
+or CNPJ in the signer's `government_id`, and exactly one certificate signer in
+that signing step. It costs 0.5 credits per certificate signer in addition to
+the selected notification cost. A certificate flow completes the signer's
+virtual item; it cannot submit placed fields through the ordinary `collect`
+signing endpoint.
+
+The SDK rejects certificate signers on a `collect` assignment in both
+`create()` and `estimateCost()` before any request. Branch on
+`ValidationError.errors.code ===
+'digital_certificate_requires_virtual_method'`, or compare it with the
+exported `DIGITAL_CERTIFICATE_REQUIRES_VIRTUAL_METHOD` constant; do not match
+the human-readable message.
 
 **A1 and A3 are certificate media**, chosen by the signer in their browser at
 signing time: A1 lives in software (a file on the machine) and A3 in hardware
@@ -1047,9 +1056,12 @@ await client.documents.estimateCostFromTemplate(templateId, [
 //     has_sufficient_resources: true, blocking_reason: null, breakdown: [], … }
 ```
 
-Template signer descriptors also accept
-`verification_method: 'DigitalCertificate'` with the same prerequisites under
-[ICP-Brasil digital certificate](#icp-brasil-digital-certificate).
+The server derives a template assignment's method from its placed fields, and
+currently accepts certificate signers even when that produces an unusable
+`collect` assignment. Until the API enforces the virtual-only rule atomically,
+the SDK rejects `DigitalCertificate` in both `createFromTemplate()` and
+`estimateCostFromTemplate()` with the same stable validation code. Create a
+direct `virtual` assignment for certificate signers instead.
 
 Template creation only uploads the PDF and provisions the default editor role —
 configure roles/fields in the Assinafy editor (or the web UI) afterwards.
