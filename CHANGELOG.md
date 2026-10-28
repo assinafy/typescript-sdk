@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.9.1] - 2026-10-28
+
+### Fixed
+
+- Live smoke tests accept all 13 notification preference fields, including the
+  four contract lifecycle notification settings.
+
 ## [2.9.0] - 2026-10-28
 
 ### Added

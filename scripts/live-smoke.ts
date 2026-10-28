@@ -341,7 +341,7 @@ async function runGlobalReads(
         async () => {
             const preferences = await client.users.getNotificationPreferences();
             assertCondition(
-                Object.keys(preferences).length === 9 &&
+                Object.keys(preferences).length === 13 &&
                 Object.values(preferences).every((value) => typeof value === 'boolean'),
             );
             return preferences;
@@ -353,7 +353,7 @@ async function runGlobalReads(
                 notificationPreferences.value,
             );
             assertCondition(
-                Object.keys(updated).length === 9 &&
+                Object.keys(updated).length === 13 &&
                 Object.values(updated).every((value) => typeof value === 'boolean'),
             );
         });
