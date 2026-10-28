@@ -496,10 +496,19 @@ export interface IAssignmentItem {
     [key: string]: unknown;
 }
 
+/** Per-signer browser URL returned with a created assignment. */
+export interface ISigningUrl {
+    signer_id: string;
+    url: string;
+}
+
 /** Assignment object as returned by the API. */
 export interface IAssignment {
     resource?: string;
     id: string;
+    /** The document this assignment belongs to; null only after document deletion. */
+    document_id?: string | null;
+    created_at?: string;
     sender_email?: string;
     method: AssignmentMethod;
     expires_at?: string | null;
@@ -516,7 +525,7 @@ export interface IAssignment {
         signers: Array<ISigner & { completed?: boolean }>;
     };
     /** Per-signer signing URLs. Array of `{ signer_id, url }` (not a map). */
-    signing_urls?: Array<{ signer_id: string; url: string }>;
+    signing_urls?: ISigningUrl[];
 }
 
 /** Assignment returned after requesting signatures. */
@@ -621,7 +630,15 @@ export type WebhookEventType =
     | 'document_processing_failed'
     | 'template_created'
     | 'template_processed'
-    | 'template_processing_failed';
+    | 'template_processing_failed'
+    | 'document_contract_updated'
+    | 'document_contract_renewal_notice'
+    | 'document_contract_expiring'
+    | 'document_contract_expired'
+    | 'document_contract_renewed'
+    | 'document_contract_terminated'
+    | 'document_contract_amended'
+    | 'document_contract_amendment_updated';
 
 /** Document listing item (paginated). */
 export interface IDocumentListItem {
@@ -647,6 +664,130 @@ export interface IDocumentListItem {
 
 /** Paginated document-list/search response. */
 export type IDocumentListResponse = PaginatedResult<IDocumentListItem>;
+
+/** Lifecycle state of contract terms tracked on a document. */
+export type DocumentContractStatus = 'draft' | 'active' | 'expired' | 'terminated';
+
+/** How a signed instrument changes its parent contract. */
+export type DocumentContractRelationType = 'amendment' | 'renewal' | 'termination';
+
+/** External-system identifier attached to contract terms. */
+export interface IDocumentContractExternalReference {
+    system: string;
+    id: string;
+}
+
+/** Contract terms tracked on one workspace document. */
+export interface IDocumentContract {
+    resource?: 'document_contract' | AnyString;
+    document_id: string;
+    status: DocumentContractStatus;
+    counterparty_name: string | null;
+    /** Normalized CPF or CNPJ. */
+    counterparty_taxpayer_id: string | null;
+    value: number | null;
+    /** ISO 4217 currency code, or null when the contract has no value. */
+    currency: string | null;
+    /** Calendar dates use `YYYY-MM-DD`. */
+    start_date: string | null;
+    end_date: string | null;
+    auto_renew: boolean;
+    renewal_term_months: number | null;
+    notice_period_days: number | null;
+    /** Starts at 1 and increments on every renewal. */
+    term: number;
+    owner_id: string | null;
+    metadata: Record<string, string> | null;
+    external_references: IDocumentContractExternalReference[];
+    /** Present only when `contracts.list({ expand: 'document' })` is used. */
+    document?: IDocumentDetailsResponse;
+    /** Present on single-contract and related-family reads. */
+    amendments?: IDocumentContractAmendment[];
+    created_at: string;
+    updated_at: string;
+}
+
+/** A document linked to amend, renew, or terminate a parent contract. */
+export interface IDocumentContractAmendment {
+    resource?: 'document_contract_amendment' | AnyString;
+    document_id: string;
+    document_name: string;
+    parent_document_id: string;
+    relation_type: DocumentContractRelationType;
+    /** Position among applied amendments; null while the instrument is pending. */
+    number: number | null;
+    status: 'pending' | 'applied';
+    document_status: DocumentStatus | AnyString;
+    apply_error: string | null;
+    currency: string | null;
+    /** Only the parent terms this instrument changes. */
+    terms: Record<string, unknown> | null;
+    /** Parent fields moved by the instrument, as `{ from, to }`. */
+    changes: Record<string, { from: unknown; to: unknown }> | null;
+    applied_at: string | null;
+    created_at: string;
+    updated_at: string;
+}
+
+/** Partial terms accepted by `contracts.set()`. Null clears the field where documented. */
+export interface IDocumentContractInput {
+    status?: DocumentContractStatus;
+    counterparty_name?: string | null;
+    counterparty_taxpayer_id?: string | null;
+    value?: number | null;
+    currency?: string | null;
+    start_date?: string | null;
+    end_date?: string | null;
+    auto_renew?: boolean;
+    renewal_term_months?: number | null;
+    notice_period_days?: number | null;
+    owner_id?: string | null;
+    metadata?: Record<string, string> | null;
+    /** Replaces the complete list; an empty array or null clears it. */
+    external_references?: IDocumentContractExternalReference[] | null;
+    /** Link this document as an instrument, or null to unlink a pending one. */
+    parent_document_id?: string | null;
+    relation_type?: DocumentContractRelationType;
+    /** Optimistic-concurrency value read from the contract or pending amendment. */
+    updated_at?: string | null;
+}
+
+/** Filters accepted by `contracts.list()`. */
+export interface IDocumentContractListParams {
+    status?: DocumentContractStatus[];
+    counterparty?: string;
+    search?: string;
+    end_date_from?: string;
+    end_date_to?: string;
+    ending_within_days?: number;
+    external_system?: string;
+    external_id?: string;
+    sort?: 'end_date' | '-end_date' | 'updated_at' | '-updated_at';
+    expand?: 'document';
+    page?: number;
+    per_page?: number;
+    'per-page'?: number;
+}
+
+/** Body accepted by `contracts.renew()`. */
+export interface IRenewDocumentContractPayload {
+    end_date?: string | null;
+    value?: number | null;
+    /** Current contract term; makes a renewal safe to repeat. */
+    term?: number;
+    /** Optional optimistic-concurrency value read from the contract. */
+    updated_at?: string;
+}
+
+/** Body accepted by `contracts.terminate()`. */
+export interface ITerminateDocumentContractPayload {
+    reason?: string | null;
+    /** Optional optimistic-concurrency value read from the contract. */
+    updated_at?: string;
+}
+
+/** Paginated workspace contract list. */
+export type IDocumentContractListResponse = PaginatedResult<IDocumentContract>;
 
 /** Query parameters accepted by `documents.list`. */
 export interface IDocumentListParams extends IListParams {
@@ -748,6 +889,10 @@ export interface IDocumentDetailsResponse {
     download_url?: string;
     download_final_url?: string;
     signing_url?: string;
+    verification_code?: string | null;
+    verification_url?: string | null;
+    /** Present only on workspace detail reads when contract tracking is available. */
+    has_contract?: boolean;
     artifacts?: {
         original: string;
         certificated?: string;
@@ -1288,7 +1433,7 @@ export interface IAuthenticatedUser {
 
 /**
  * Owner-facing document e-mail preferences returned by
- * `GET /users/self/notification-preferences`. The API always returns all nine
+ * `GET /users/self/notification-preferences`. The API always returns all thirteen
  * keys; `true` means that notification is enabled.
  */
 export interface INotificationPreferences {
@@ -1301,6 +1446,10 @@ export interface INotificationPreferences {
     DocumentProcessingFailed: boolean;
     TemplateProcessingFailed: boolean;
     SignerWhatsappFailed: boolean;
+    ContractRenewalNotice: boolean;
+    ContractExpiring: boolean;
+    ContractExpired: boolean;
+    ContractRenewed: boolean;
 }
 
 /** Partial preference map accepted by `PUT /users/self/notification-preferences`. */

@@ -4,9 +4,10 @@
 
 TypeScript SDK for the [Assinafy API](https://api.assinafy.com.br/v1/docs) — a Brazilian digital signature platform.
 
-Covers all 112 operations in the current official OpenAPI document: accounts,
+Covers all 118 operations in the current official OpenAPI document: accounts,
 authentication, OAuth 2.1 applications, users, documents, assignments, signers,
-signer-side flows, templates, tags, fields, webhooks, branding, statistics, and
+signer-side flows, contract lifecycle management (CLM), templates, tags, fields,
+webhooks, branding, statistics, and
 the high-level `uploadAndRequestSignatures` workflow. Five additional
 template-management routes used by existing integrations and two legacy browser
 URL helpers are retained for compatibility.
@@ -37,6 +38,7 @@ afterwards.
 
 **Per-resource detail** — [Resource reference](#resource-reference):
 [documents](#documents) · [signers](#signers) · [assignments](#assignments) ·
+[contract lifecycle management](#contract-lifecycle-management-clm) ·
 [paid signing branches](#paid-signing-branches) · [templates](#templates) ·
 [tags](#tags) · [workspaces](#workspaces) ·
 [field definitions](#field-definitions) ·
@@ -52,9 +54,9 @@ afterwards.
 ## Requirements
 
 - Node.js 22+ for the built-in `FormData` / `Blob` APIs used by uploads. Packed
-  CJS and ESM imports are tested on 22 (maintenance LTS), 24 (active LTS), and
-  26 (Current); Node 20 reached end-of-life in April 2026 and is unsupported.
-- or Bun 1.4.0 (the version pinned for development and CI)
+  CJS and ESM imports are tested on 22 and 24 (maintenance LTS) and 26 (active
+  LTS); Node 20 reached end-of-life in April 2026 and is unsupported.
+- or Bun 1.4.4 (the version pinned for development and CI)
 - HTTPS with TLS 1.2 or higher, which the API requires; Node.js 22+ and Bun
   negotiate it by default
 
@@ -339,7 +341,7 @@ The configuration object accepted by `fromConfig` has the exported type
 
 ## Endpoint coverage
 
-All 112 operations documented at https://api.assinafy.com.br/v1/docs are
+All 118 operations documented at https://api.assinafy.com.br/v1/docs are
 covered. The table below is the resource-level summary; the detailed operation
 ledger is in [docs/API_COVERAGE.md](docs/API_COVERAGE.md).
 
@@ -348,6 +350,7 @@ ledger is in [docs/API_COVERAGE.md](docs/API_COVERAGE.md).
 | `client.documents`    | list, **search**, upload, details, get, **rename**, activities, waitUntilReady, download, thumbnail, downloadPage, statuses, delete, verify, createFromTemplate, estimateCostFromTemplate, getPublic, sendToken, listTags, replaceTags, addTags, detachTag, isFullySigned, getSigningProgress |
 | `client.signers`      | create, get, list, update, delete, findByEmail                                                                                                                                                                                                     |
 | `client.assignments`  | list, create, estimateCost, resetExpiration, resendNotification, estimateResendCost, listWhatsAppNotifications, getIdentityVerification, downloadIdentityVerificationImage, reviewIdentityVerification                                                                                                                                  |
+| `client.contracts`    | list, get, set, listRelated, renew, terminate |
 | `client.templates`    | create, list, get, update, delete, downloadPage                                                                                                                                                                                        |
 | `client.tags`         | list, create, update, delete                                                                                                                                                                                                                       |
 | `client.workspaces`   | create, list, get, update, delete, getTheme, downloadLogo, uploadLogo, deleteLogo, getStats                                                                                                                                                        |
@@ -775,6 +778,108 @@ both are silent rather than errors:
   The exported `MAX_LIST_PAGE_SIZE` constant is that ceiling; page through with
   `page` rather than requesting a larger page, and trust `meta.per_page` over
   the value you asked for.
+
+### Contract lifecycle management (CLM)
+
+Contract lifecycle management tracks the business terms attached to an existing
+document without changing how that document is uploaded, sent, or signed. The
+production API supports the complete flow below; a sandbox can lag a newly
+released CLM route or plan entitlement (see
+[compatibility notes](docs/COMPATIBILITY.md#contract-lifecycle-management-clm)).
+
+```ts
+// 1. Upload or select the contract document, then attach its terms.
+const document = await client.documents.upload({ filePath: './agreement.pdf' });
+const contract = await client.contracts.set(document.id, {
+  status: 'active',
+  counterparty_name: 'Example Ltda',
+  counterparty_taxpayer_id: '11.222.333/0001-81',
+  value: 120000.50,
+  currency: 'BRL',
+  start_date: '2026-11-01',
+  end_date: '2027-10-31',
+  auto_renew: true,
+  renewal_term_months: 12,
+  notice_period_days: 30,
+  metadata: { crm_stage: 'won' },
+  external_references: [{ system: 'crm', id: '98765' }],
+});
+
+// 2. Read or synchronize the portfolio. `updated_at` moves after every change.
+const current = await client.contracts.get(document.id);
+const endingSoon = await client.contracts.list({
+  status: ['active'],
+  ending_within_days: 30,
+  sort: 'end_date',
+  expand: 'document',
+});
+
+// 3. Use the value you read to reject a concurrent edit with HTTP 409.
+if (current.resource === 'document_contract') {
+  await client.contracts.set(document.id, {
+    notice_period_days: 60,
+    updated_at: current.updated_at,
+  });
+}
+
+// 4. A signed amendment is another document linked to the root contract.
+const amendment = await client.documents.upload({ filePath: './amendment.pdf' });
+await client.contracts.set(amendment.id, {
+  parent_document_id: document.id,
+  relation_type: 'amendment',
+  value: 130000,
+  end_date: '2028-06-30',
+});
+// Send and sign `amendment` through the ordinary assignment flow. Its delta is
+// applied to the root after certification; inspect the complete family here:
+const family = await client.contracts.listRelated(amendment.id);
+
+// 5. Start a new term directly, or close the lifecycle.
+const renewed = await client.contracts.renew(document.id, {
+  term: family.term,
+  value: 135000,
+  updated_at: family.updated_at,
+});
+await client.contracts.terminate(document.id, {
+  reason: 'Replaced by a new agreement',
+  updated_at: renewed.updated_at,
+});
+```
+
+Writes need `documents:write` for OAuth and a workspace plan with contract
+tracking. Reads need `documents:read` and continue working after the plan lapses.
+The hourly lifecycle emits renewal-notice, expiring, expired, and renewed
+notifications; configure the owner preferences and subscribe to the matching
+webhook events when your integration must react:
+
+```ts
+await client.users.updateNotificationPreferences({
+  ContractRenewalNotice: true,
+  ContractExpiring: true,
+  ContractExpired: true,
+  ContractRenewed: true,
+});
+
+await client.webhooks.createEndpoint({
+  url: 'https://example.com/webhooks/assinafy',
+  email: 'operations@example.com',
+  events: [
+    'document_contract_updated',
+    'document_contract_renewal_notice',
+    'document_contract_expiring',
+    'document_contract_expired',
+    'document_contract_renewed',
+    'document_contract_terminated',
+    'document_contract_amended',
+    'document_contract_amendment_updated',
+  ],
+});
+```
+
+`set()`, `renew()`, and `terminate()` are not automatically retried. A lost
+response is safe to resolve by reading the contract again: `updated_at`, the
+current `term`, and the explicit renewal date provide the concurrency and
+repeat protections documented by the API.
 
 ### Signers
 
@@ -1214,9 +1319,10 @@ const preferences = await client.users.getNotificationPreferences();
 await client.users.updateNotificationPreferences({
   SignerDeclined: false,
   DocumentExpired: false,
+  ContractExpiring: true,
 });
 // Updates merge: omitted keys keep their current value. Both methods return
-// the complete nine-key notification preference map.
+// the complete thirteen-key notification preference map.
 ```
 
 #### Two-factor authentication

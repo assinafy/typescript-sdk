@@ -27,6 +27,7 @@ import { OAuthResource } from './resources/oauth';
 import { FieldsResource } from './resources/fields';
 import { SignerDocumentsResource } from './resources/signer-documents';
 import { UserResource } from './resources/users';
+import { ContractResource } from './resources/contracts';
 import { WebhookVerifier } from './support/webhook-verifier';
 import { SDK_USER_AGENT, withoutCredentials } from './support/transport';
 
@@ -84,6 +85,7 @@ export class AssinafyClient {
     public readonly fields: FieldsResource;
     public readonly signerDocuments: SignerDocumentsResource;
     public readonly users: UserResource;
+    public readonly contracts: ContractResource;
     public readonly webhookVerifier: WebhookVerifier;
 
     /**
@@ -213,6 +215,11 @@ export class AssinafyClient {
             this.publicAxiosInstance,
         );
         this.users = new UserResource(this.axiosInstance, undefined, this.logger);
+        this.contracts = new ContractResource(
+            this.axiosInstance,
+            this.defaultAccountId,
+            this.logger,
+        );
         this.webhookVerifier = new WebhookVerifier(this.webhookSecret);
     }
 

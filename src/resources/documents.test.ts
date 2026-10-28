@@ -501,6 +501,21 @@ describe('DocumentResource.createFromTemplate', () => {
         expect(called).toBe(false);
     });
 
+    test('rejects malformed template signers before requesting', async () => {
+        const resource = new DocumentResource({} as AxiosInstance, 'acc');
+        const invalid = [
+            [],
+            [null],
+            [{ role_id: '', id: 'signer1' }],
+            [{ role_id: 'role1', id: '' }],
+        ];
+        for (const signers of invalid) {
+            await expect(
+                resource.createFromTemplate('tmpl1', signers as never),
+            ).rejects.toBeInstanceOf(ValidationError);
+        }
+    });
+
     test('rejects invalid template signer channels before requesting', async () => {
         let called = false;
         const ax = {
@@ -549,6 +564,19 @@ describe('DocumentResource.createFromTemplate', () => {
                 { editor_fields: [null] } as never,
             ),
         ).rejects.toBeInstanceOf(ValidationError);
+        for (const editor_fields of [
+            null,
+            [{}],
+            [{ field_id: 'field-1', value: 1 }],
+        ]) {
+            await expect(
+                resource.createFromTemplate(
+                    'tmpl1',
+                    [{ role_id: 'role1', id: 'signer1' }],
+                    { editor_fields } as never,
+                ),
+            ).rejects.toBeInstanceOf(ValidationError);
+        }
         await expect(
             resource.createFromTemplate(
                 'tmpl1',
@@ -615,6 +643,9 @@ describe('DocumentResource.estimateCostFromTemplate', () => {
         await expect(
             resource.estimateCostFromTemplate('tmpl1', [{ role_id: '' }]),
         ).rejects.toThrow(ValidationError);
+        await expect(
+            resource.estimateCostFromTemplate('tmpl1', [null] as never),
+        ).rejects.toThrow(ValidationError);
     });
 });
 
@@ -632,6 +663,9 @@ describe('DocumentResource public request contracts', () => {
             account_id: 'acc',
             name: 'Agreement.pdf',
             status: 'metadata_ready',
+            verification_code: null,
+            verification_url: null,
+            has_contract: true,
             assignment: null,
             pages: [],
             created_at: '2026-08-06T12:00:00Z',
@@ -646,7 +680,11 @@ describe('DocumentResource public request contracts', () => {
         } as unknown as AxiosInstance;
         const resource = new DocumentResource(http, 'acc');
 
-        expect(await resource.details('doc-1')).toEqual(document as never);
+        const details = await resource.details('doc-1');
+        expect(details).toEqual(document as never);
+        expect(details.has_contract).toBe(true);
+        expect(details.verification_code).toBeNull();
+        expect(details.verification_url).toBeNull();
         expect(await resource.get('doc-1')).toEqual(document as never);
         expect(urls).toEqual(['/documents/doc-1', '/documents/doc-1']);
     });

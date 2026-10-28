@@ -124,6 +124,10 @@ describe('UserResource', () => {
             DocumentProcessingFailed: true,
             TemplateProcessingFailed: true,
             SignerWhatsappFailed: true,
+            ContractRenewalNotice: true,
+            ContractExpiring: true,
+            ContractExpired: true,
+            ContractRenewed: true,
         };
         const response = { status: 200, data: { status: 200, message: '', data: preferences } };
         const http = {

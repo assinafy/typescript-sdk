@@ -38,7 +38,7 @@ GET /v1/login-callback
 
 They map to `auth.getSocialLoginUrl()` and
 `auth.getSocialLoginCallbackUrl()` and are not part of the official
-112-operation total.
+118-operation total.
 
 The SDK also includes the production contract additions for:
 
@@ -55,6 +55,30 @@ The SDK also includes the production contract additions for:
 Older signer-self responses can omit `has_signature`, `has_initial`, and
 `is_signature_reusable`; assignment signers can omit `notification_history`.
 Those fields are optional in the SDK response types.
+
+## Contract lifecycle management (CLM)
+
+Production exposes the six contract lifecycle operations under
+`/v1/accounts/{accountId}` through `client.contracts`. They track terms on an
+existing document, link signed amendment/renewal/termination instruments, run
+the hourly renewal and expiration lifecycle, and expose portfolio filters.
+OAuth reads require `documents:read`; writes require `documents:write` plus a
+workspace plan with contract tracking.
+
+A sandbox may return the generic `404` while these routes are not deployed, or
+`403` while its workspace plan does not include contract tracking. The SDK does
+not reinterpret either response or route a sandbox request to production.
+Read operations remain available after a production plan lapses; writes are
+plan-gated. Signed amendments wait and the lifecycle catches up after the plan
+returns, as defined by the production integration guide.
+
+`documents.details()` can expose `has_contract` only in a workspace context and
+only when contract tracking is available. A missing key means unknown, not
+false. The thirteen notification preferences include
+`ContractRenewalNotice`, `ContractExpiring`, `ContractExpired`, and
+`ContractRenewed`. Contract changes also use the typed
+`document_contract_*` webhook event names; obtain the current subscribable
+catalog with `webhooks.listEventTypes()`.
 
 `DocumentStatsRow` separates notification-channel counters from verification
 method counters. Notification counters are not mutually exclusive.

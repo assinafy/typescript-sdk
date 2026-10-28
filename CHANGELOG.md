@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.9.0] - 2026-10-28
+
+### Added
+
+- Contract lifecycle management (CLM) through `client.contracts`: list tracked
+  contracts, read terms and related instruments, create or update terms, renew
+  a term, and terminate a contract. Request and response types include contract
+  status, counterparties, dates, values, owners, metadata, external references,
+  amendments, optimistic concurrency, filters, and pagination.
+- Known webhook event types for contract updates, notices, expiration, renewal,
+  termination, and signed amendments.
+
+### Changed
+
+- User notification preferences include the four contract lifecycle settings:
+  `ContractRenewalNotice`, `ContractExpiring`, `ContractExpired`, and
+  `ContractRenewed`.
+- Document details expose `has_contract`, `verification_code`, and
+  `verification_url`; assignment signing URLs use the exported `ISigningUrl`
+  shape.
+- The runtime dependency baseline is Axios 1.21.0.
+- Development and CI use Bun 1.4.4.
+
+### Fixed
+
+- Updated `follow-redirects` to 1.16.2 so sensitive headers remain protected
+  across redirects, including array-form and regular-expression edge cases.
+
 ## [2.8.1] - 2026-10-19
 
 ### Fixed

@@ -68,6 +68,7 @@ describe('WebhookVerifier', () => {
         const event = verifier.extractEvent(payload);
         expect(verifier.getEventType(event)).toBe('document_ready');
         expect(verifier.getEventData(event)).toEqual({ document_id: 'doc-1' });
+        expect(verifier.getEventData({})).toEqual({});
     });
 });
 

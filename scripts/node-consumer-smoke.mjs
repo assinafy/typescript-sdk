@@ -8,6 +8,7 @@ import { URLSearchParams } from 'node:url';
 import {
     ApiError,
     AssinafyClient,
+    ContractResource,
     OAuthError,
     SDK_USER_AGENT,
     ValidationError,
@@ -17,15 +18,33 @@ import {
 const require = createRequire(import.meta.url);
 const commonJsSdk = require('@assinafy/sdk');
 
-for (const exported of [AssinafyClient, WebhookVerifier, ApiError, OAuthError, ValidationError]) {
+for (const exported of [
+    AssinafyClient,
+    ContractResource,
+    WebhookVerifier,
+    ApiError,
+    OAuthError,
+    ValidationError,
+]) {
     assert.equal(typeof exported, 'function');
 }
-for (const name of ['AssinafyClient', 'WebhookVerifier', 'ApiError', 'OAuthError', 'ValidationError']) {
+for (const name of [
+    'AssinafyClient',
+    'ContractResource',
+    'WebhookVerifier',
+    'ApiError',
+    'OAuthError',
+    'ValidationError',
+]) {
     assert.equal(typeof commonJsSdk[name], 'function', `CommonJS export ${name} is missing`);
 }
 assert.ok(new OAuthError('invalid_grant') instanceof ApiError);
 assert.equal(SDK_USER_AGENT, commonJsSdk.SDK_USER_AGENT);
-new commonJsSdk.AssinafyClient({ apiKey: 'commonjs-key', accountId: 'commonjs-account' });
+const commonJsClient = new commonJsSdk.AssinafyClient({
+    apiKey: 'commonjs-key',
+    accountId: 'commonjs-account',
+});
+assert.ok(commonJsClient.contracts instanceof commonJsSdk.ContractResource);
 
 const requests = [];
 const server = createServer(async (request, response) => {

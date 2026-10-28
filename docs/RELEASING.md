@@ -9,7 +9,7 @@ event, and the workflow intentionally does not depend on one.
 
 | Runtime | Release responsibility |
 | --- | --- |
-| Bun 1.4.0 | Locked install, tests, build, contract checks, and packaging |
+| Bun 1.4.4 | Locked install, tests, build, contract checks, and packaging |
 | Node.js 22 | Minimum supported consumer runtime |
 | Node.js 24 LTS | Packaging and registry publishing runtime |
 | Node.js 26 Current | Forward-compatibility consumer test |

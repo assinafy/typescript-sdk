@@ -2,6 +2,7 @@ import { describe, test, expect } from 'bun:test';
 import type { AxiosInstance } from 'axios';
 import { BaseResource } from './base';
 import { ApiError, AssinafyError } from '../errors';
+import type { DocumentUploadSource } from './upload';
 
 /** Concrete subclass exposing the protected helpers for direct testing. */
 class TestResource extends BaseResource {
@@ -22,6 +23,12 @@ class TestResource extends BaseResource {
     }
     list$<T>(fn: () => Promise<{ status: number; data: unknown; headers?: unknown }>) {
         return this.callList<T>('list failed', fn as never);
+    }
+    upload$(source: DocumentUploadSource) {
+        return this.uploadPdf('/upload', source, {}, {
+            errorLabel: 'upload failed',
+            missingId: 'missing upload id',
+        });
     }
 }
 
@@ -119,6 +126,24 @@ describe('BaseResource helpers', () => {
             headers: { 'x-pagination-current-page': '3', 'x-pagination-total-count': '50' },
         }));
         expect(withMeta.meta).toEqual({ current_page: 3, total: 50 });
+
+        const nested = await res().list$(async () => ({
+            status: 200,
+            data: { status: 200, data: { data: ['nested'] } },
+            headers: {},
+        }));
+        expect(nested.data).toEqual(['nested'] as never);
+    });
+
+    test('uploadPdf rejects a successful response without an id', async () => {
+        const http = {
+            post: async () => ({ status: 200, data: { status: 200, data: {} } }),
+        } as unknown as AxiosInstance;
+        const resource = new TestResource(http, 'acc');
+        await expect(resource.upload$({
+            buffer: Buffer.from('%PDF-1.4 minimal'),
+            fileName: 'document.pdf',
+        })).rejects.toMatchObject({ message: 'missing upload id' });
     });
 
     test('pagination accepts only complete, non-negative safe integers', async () => {

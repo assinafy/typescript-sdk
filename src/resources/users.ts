@@ -115,7 +115,7 @@ export class UserResource extends BaseResource {
      *
      * Request body: none. Authentication: `X-Api-Key` or Bearer token.
      *
-     * @returns The complete nine-key preference map:
+     * @returns The complete thirteen-key preference map:
      * ```json
      * {
      *   "DocumentCompleted": true,
@@ -126,7 +126,11 @@ export class UserResource extends BaseResource {
      *   "DocumentExpirationReset": true,
      *   "DocumentProcessingFailed": true,
      *   "TemplateProcessingFailed": true,
-     *   "SignerWhatsappFailed": true
+     *   "SignerWhatsappFailed": true,
+     *   "ContractRenewalNotice": true,
+     *   "ContractExpiring": true,
+     *   "ContractExpired": true,
+     *   "ContractRenewed": true
      * }
      * ```
      * @throws {ApiError} `401` when credentials are missing/invalid, or `500`
@@ -159,16 +163,33 @@ export class UserResource extends BaseResource {
      *   "DocumentExpirationReset": true,
      *   "DocumentProcessingFailed": true,
      *   "TemplateProcessingFailed": true,
-     *   "SignerWhatsappFailed": true
+     *   "SignerWhatsappFailed": true,
+     *   "ContractRenewalNotice": true,
+     *   "ContractExpiring": true,
+     *   "ContractExpired": true,
+     *   "ContractRenewed": true
      * }
      * ```
      *
-     * @param preferences - One or more of the nine documented keys, each with
+     * @param preferences - One or more of the thirteen documented keys, each with
      * a boolean value. Request example:
      * ```json
      * { "DocumentCompleted": true, "SignerDeclined": false }
      * ```
-     * @returns The complete updated nine-key preference map:
+     * @param preferences.DocumentCompleted - Notify when a document completes.
+     * @param preferences.SignerDeclined - Notify when a signer declines.
+     * @param preferences.DocumentCancelled - Notify when a document is cancelled.
+     * @param preferences.DocumentAboutToExpire - Notify before signature expiry.
+     * @param preferences.DocumentExpired - Notify after signature expiry.
+     * @param preferences.DocumentExpirationReset - Notify after resetting expiry.
+     * @param preferences.DocumentProcessingFailed - Notify after document processing fails.
+     * @param preferences.TemplateProcessingFailed - Notify after template processing fails.
+     * @param preferences.SignerWhatsappFailed - Notify after WhatsApp delivery fails.
+     * @param preferences.ContractRenewalNotice - Notify when the contract notice period starts.
+     * @param preferences.ContractExpiring - Notify before a tracked contract ends.
+     * @param preferences.ContractExpired - Notify when a tracked contract expires.
+     * @param preferences.ContractRenewed - Notify when a tracked contract renews.
+     * @returns The complete updated thirteen-key preference map:
      * ```json
      * {
      *   "DocumentCompleted": true,
@@ -179,7 +200,11 @@ export class UserResource extends BaseResource {
      *   "DocumentExpirationReset": true,
      *   "DocumentProcessingFailed": true,
      *   "TemplateProcessingFailed": true,
-     *   "SignerWhatsappFailed": true
+     *   "SignerWhatsappFailed": true,
+     *   "ContractRenewalNotice": true,
+     *   "ContractExpiring": true,
+     *   "ContractExpired": true,
+     *   "ContractRenewed": true
      * }
      * ```
      * @throws {ValidationError} Before requesting when the map is empty, has an
@@ -398,6 +423,10 @@ const NOTIFICATION_PREFERENCE_KEYS = new Set<keyof INotificationPreferences>([
     'DocumentProcessingFailed',
     'TemplateProcessingFailed',
     'SignerWhatsappFailed',
+    'ContractRenewalNotice',
+    'ContractExpiring',
+    'ContractExpired',
+    'ContractRenewed',
 ]);
 
 function validateNotificationPreferences(preferences: IUpdateNotificationPreferences): void {

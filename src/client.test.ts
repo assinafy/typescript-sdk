@@ -36,6 +36,7 @@ describe('AssinafyClient', () => {
         expect(client.signers).toBeDefined();
         expect(client.workspaces).toBeDefined();
         expect(client.assignments).toBeDefined();
+        expect(client.contracts).toBeDefined();
         expect(client.webhooks).toBeDefined();
         expect(client.users).toBeDefined();
         expect(client.oauth).toBeDefined();
@@ -741,6 +742,20 @@ describe('AssinafyClient', () => {
                 {
                     source: pdf,
                     signers: [{ name: 'Signer', email: 'signer@example.com' }],
+                    message: false,
+                },
+                {
+                    source: pdf,
+                    signers: [{ name: 'Signer', email: 'signer@example.com' }],
+                    metadata: null,
+                },
+                {
+                    source: pdf,
+                    signers: [{ name: 'Signer' }],
+                },
+                {
+                    source: pdf,
+                    signers: [{ name: 'Signer', email: 'signer@example.com' }],
                     copyReceivers: [''],
                 },
                 {
@@ -966,6 +981,7 @@ describe('AssinafyClient', () => {
                     { name: 'Bruno Lima', email: 'bruno@example.com' },
                 ],
                 message: 'Please sign',
+                copyReceivers: ['copy-1'],
             });
 
             // Flow: one upload, two signer creations, one immediate assignment,
@@ -979,10 +995,15 @@ describe('AssinafyClient', () => {
             // Assignment was posted as a virtual method carrying both created signer IDs.
             const body = (typeof assignmentBody === 'string'
                 ? JSON.parse(assignmentBody)
-                : assignmentBody) as { method: string; signers: Array<{ id: string }> };
+                : assignmentBody) as {
+                    method: string;
+                    signers: Array<{ id: string }>;
+                    copy_receivers?: string[];
+                };
             expect(body.method).toBe('virtual');
             expect(body.signers).toHaveLength(2);
             expect(body.signers.map((s) => s.id)).toEqual(['signer-1', 'signer-2']);
+            expect(body.copy_receivers).toEqual(['copy-1']);
 
             // Result shape: { document, assignment, signer_ids }.
             expect(result.signer_ids).toEqual(['signer-1', 'signer-2']);

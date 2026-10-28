@@ -24,6 +24,7 @@ export { OAuthResource } from './resources/oauth';
 export { FieldsResource } from './resources/fields';
 export { SignerDocumentsResource } from './resources/signer-documents';
 export { UserResource } from './resources/users';
+export { ContractResource } from './resources/contracts';
 export { WebhookVerifier } from './support/webhook-verifier';
 export type { WebhookHeaders } from './support/webhook-verifier';
 /** Parsed `WWW-Authenticate` challenge exposed on {@link ApiError.challenge}. */

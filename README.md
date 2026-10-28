@@ -5,8 +5,9 @@
 SDK oficial em TypeScript para a [API Assinafy](https://api.assinafy.com.br/v1/docs) — plataforma
 brasileira de assinatura eletrônica de documentos.
 
-Cobre as 112 operações do documento OpenAPI oficial: contas, autenticação, aplicações OAuth 2.1,
-usuários, documentos, assignments, signatários, fluxos do lado do signatário, templates, tags,
+Cobre as 118 operações do documento OpenAPI oficial: contas, autenticação, aplicações OAuth 2.1,
+usuários, documentos, assignments, signatários, fluxos do lado do signatário, gestão do ciclo de
+vida de contratos (CLM), templates, tags,
 campos, webhooks, identidade visual, estatísticas e o fluxo de alto nível
 `uploadAndRequestSignatures`. Cinco rotas adicionais de gestão de templates usadas por integrações
 existentes e dois helpers de URL de navegador são mantidos por compatibilidade.
@@ -34,6 +35,7 @@ recurso. Leia na ordem na primeira vez; use como referência depois.
 
 **Detalhe por recurso** — [Referência de recursos](#referência-de-recursos):
 [documentos](#documentos) · [signatários](#signatários) · [assignments](#assignments) ·
+[gestão do ciclo de vida de contratos](#gestão-do-ciclo-de-vida-de-contratos-clm) ·
 [ramos pagos de assinatura](#ramos-pagos-de-assinatura) · [templates](#templates) · [tags](#tags) ·
 [workspaces](#workspaces) · [definições de campo](#definições-de-campo) ·
 [autenticação e chaves de API](#autenticação--gestão-de-chaves-de-api) ·
@@ -47,9 +49,9 @@ recurso. Leia na ordem na primeira vez; use como referência depois.
 ## Requisitos
 
 - Node.js 22+ (usa as APIs nativas `FormData` / `Blob` para upload). Os imports CJS e ESM
-  empacotados são testados no 22 (LTS de manutenção), 24 (LTS ativo) e 26 (Current). O Node 20
+  empacotados são testados no 22 e 24 (LTS de manutenção) e 26 (LTS ativo). O Node 20
   chegou ao fim da vida em abril de 2026 e não é suportado.
-- ou Bun 1.4.0 (versão fixada no desenvolvimento e na CI)
+- ou Bun 1.4.4 (versão fixada no desenvolvimento e na CI)
 - HTTPS com TLS 1.2 ou superior, exigido pela API; o Node.js 22+ e o Bun já negociam isso por padrão
 
 ## Instalação
@@ -324,7 +326,7 @@ O objeto aceito por `fromConfig` tem o tipo exportado `ClientConfigInput`.
 
 ## Cobertura de endpoints
 
-As 112 operações documentadas em https://api.assinafy.com.br/v1/docs estão cobertas. A tabela abaixo
+As 118 operações documentadas em https://api.assinafy.com.br/v1/docs estão cobertas. A tabela abaixo
 é o resumo por recurso; o mapa detalhado por operação está em
 [docs/API_COVERAGE.md](docs/API_COVERAGE.md).
 
@@ -333,6 +335,7 @@ As 112 operações documentadas em https://api.assinafy.com.br/v1/docs estão co
 | `client.documents` | list, search, upload, details, get, rename, activities, waitUntilReady, download, thumbnail, downloadPage, statuses, delete, verify, createFromTemplate, estimateCostFromTemplate, getPublic, sendToken, listTags, replaceTags, addTags, detachTag, isFullySigned, getSigningProgress |
 | `client.signers` | create, get, list, update, delete, findByEmail |
 | `client.assignments` | list, create, estimateCost, resetExpiration, resendNotification, estimateResendCost, listWhatsAppNotifications, getIdentityVerification, downloadIdentityVerificationImage, reviewIdentityVerification |
+| `client.contracts` | list, get, set, listRelated, renew, terminate |
 | `client.templates` | create, list, get, update, delete, downloadPage |
 | `client.tags` | list, create, update, delete |
 | `client.workspaces` | create, list, get, update, delete, getTheme, downloadLogo, uploadLogo, deleteLogo, getStats |
@@ -740,6 +743,105 @@ As listagens devolvem `{ data, meta }`, com `meta` preenchido a partir dos heade
 - `per-page` é limitado a **50**. Pedir 100 devolve 50 linhas com `200`. A constante exportada
   `MAX_LIST_PAGE_SIZE` é esse teto; pagine com `page` em vez de pedir páginas maiores, e confie no
   `meta.per_page` mais do que no valor pedido.
+
+### Gestão do ciclo de vida de contratos (CLM)
+
+A gestão do ciclo de vida de contratos (CLM) acompanha os termos comerciais ligados a um documento
+existente sem mudar como ele é enviado ou assinado. A API de produção suporta o fluxo completo
+abaixo; o sandbox pode demorar a disponibilizar uma rota nova de CLM ou o recurso do plano (veja as
+[notas de compatibilidade](docs/COMPATIBILITY.md#contract-lifecycle-management-clm)).
+
+```ts
+// 1. Envie ou selecione o documento do contrato e registre seus termos.
+const documento = await client.documents.upload({ filePath: './contrato.pdf' });
+const contrato = await client.contracts.set(documento.id, {
+  status: 'active',
+  counterparty_name: 'Empresa Exemplo Ltda',
+  counterparty_taxpayer_id: '11.222.333/0001-81',
+  value: 120000.50,
+  currency: 'BRL',
+  start_date: '2026-11-01',
+  end_date: '2027-10-31',
+  auto_renew: true,
+  renewal_term_months: 12,
+  notice_period_days: 30,
+  metadata: { etapa_crm: 'ganho' },
+  external_references: [{ system: 'crm', id: '98765' }],
+});
+
+// 2. Leia ou sincronize a carteira. `updated_at` muda após toda alteração.
+const atual = await client.contracts.get(documento.id);
+const vencendo = await client.contracts.list({
+  status: ['active'],
+  ending_within_days: 30,
+  sort: 'end_date',
+  expand: 'document',
+});
+
+// 3. Envie o valor lido para rejeitar uma edição concorrente com HTTP 409.
+if (atual.resource === 'document_contract') {
+  await client.contracts.set(documento.id, {
+    notice_period_days: 60,
+    updated_at: atual.updated_at,
+  });
+}
+
+// 4. Um aditivo assinado é outro documento ligado ao contrato raiz.
+const aditivo = await client.documents.upload({ filePath: './aditivo.pdf' });
+await client.contracts.set(aditivo.id, {
+  parent_document_id: documento.id,
+  relation_type: 'amendment',
+  value: 130000,
+  end_date: '2028-06-30',
+});
+// Envie e assine `aditivo` pelo fluxo normal de assignment. O delta é aplicado
+// ao contrato raiz depois da certificação; consulte a família completa assim:
+const familia = await client.contracts.listRelated(aditivo.id);
+
+// 5. Inicie um novo termo diretamente ou encerre o ciclo de vida.
+const renovado = await client.contracts.renew(documento.id, {
+  term: familia.term,
+  value: 135000,
+  updated_at: familia.updated_at,
+});
+await client.contracts.terminate(documento.id, {
+  reason: 'Substituído por um novo contrato',
+  updated_at: renovado.updated_at,
+});
+```
+
+As escritas exigem `documents:write` no OAuth e um plano com gestão de contratos. As leituras
+exigem `documents:read` e continuam disponíveis se o plano deixar de incluir o recurso. O ciclo
+horário emite notificações de aviso de renovação, proximidade do vencimento, vencimento e renovação;
+configure as preferências do responsável e assine os eventos de webhook correspondentes:
+
+```ts
+await client.users.updateNotificationPreferences({
+  ContractRenewalNotice: true,
+  ContractExpiring: true,
+  ContractExpired: true,
+  ContractRenewed: true,
+});
+
+await client.webhooks.createEndpoint({
+  url: 'https://exemplo.com.br/webhooks/assinafy',
+  email: 'operacoes@exemplo.com.br',
+  events: [
+    'document_contract_updated',
+    'document_contract_renewal_notice',
+    'document_contract_expiring',
+    'document_contract_expired',
+    'document_contract_renewed',
+    'document_contract_terminated',
+    'document_contract_amended',
+    'document_contract_amendment_updated',
+  ],
+});
+```
+
+`set()`, `renew()` e `terminate()` não são repetidos automaticamente. Se a resposta se perder,
+leia o contrato de novo: `updated_at`, o `term` atual e a data explícita de renovação fornecem as
+proteções de concorrência e repetição documentadas pela API.
 
 ### Signatários
 
@@ -1183,9 +1285,10 @@ const preferencias = await client.users.getNotificationPreferences();
 await client.users.updateNotificationPreferences({
   SignerDeclined: false,
   DocumentExpired: false,
+  ContractExpiring: true,
 });
 // A atualização é um merge: chaves omitidas mantêm o valor atual. Os dois
-// métodos devolvem o mapa completo de nove preferências.
+// métodos devolvem o mapa completo de treze preferências.
 ```
 
 #### Autenticação em dois fatores

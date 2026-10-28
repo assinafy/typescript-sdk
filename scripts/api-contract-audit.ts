@@ -14,7 +14,7 @@ import { SDK_USER_AGENT } from '../src/support/transport';
 const DEFAULT_SPEC_URL = 'https://api.assinafy.com.br/v1/docs/openapi.json';
 const COVERAGE_FILE = new URL('../docs/API_COVERAGE.md', import.meta.url);
 const HTTP_METHODS = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']);
-const EXPECTED_CONTRACT_FINGERPRINT = 'b4eb78f9c91268a2a46fa3f134d8470e7faf75d33712a16466488592c7599e5e';
+const EXPECTED_CONTRACT_FINGERPRINT = '014ad8040c0a611e470872f88bf9c7aef536c8aa7fd6f332d16f4a066d87f790';
 const NON_CONTRACT_KEYS = new Set([
     'description',
     'summary',
@@ -221,8 +221,90 @@ function validateProductionStructure(spec: OpenApiDocument): number {
         'properties',
     );
     requireValue(
-        isRecord(preferenceProperties) && Object.keys(preferenceProperties).length === 9,
-        'NotificationPreferences must expose nine keys',
+        isRecord(preferenceProperties)
+            && sameMembers(Object.keys(preferenceProperties), [
+                'DocumentCompleted',
+                'SignerDeclined',
+                'DocumentCancelled',
+                'DocumentAboutToExpire',
+                'DocumentExpired',
+                'DocumentExpirationReset',
+                'DocumentProcessingFailed',
+                'TemplateProcessingFailed',
+                'SignerWhatsappFailed',
+                'ContractRenewalNotice',
+                'ContractExpiring',
+                'ContractExpired',
+                'ContractRenewed',
+            ]),
+        'NotificationPreferences keys changed',
+    );
+    const contractStatuses = ['draft', 'active', 'expired', 'terminated'];
+    const relationTypes = ['amendment', 'renewal', 'termination'];
+    requireValue(
+        sameMembers(
+            at(spec, 'components', 'schemas', 'DocumentContract', 'properties', 'status', 'enum'),
+            contractStatuses,
+        )
+            && at(spec, 'components', 'schemas', 'Document', 'properties', 'has_contract', 'type') === 'boolean',
+        'contract status or document has_contract changed',
+    );
+    requireValue(
+        sameMembers(
+            at(spec, 'components', 'schemas', 'DocumentContractAmendment', 'properties',
+                'relation_type', 'enum'),
+            relationTypes,
+        )
+            && sameMembers(
+                at(spec, 'components', 'schemas', 'DocumentContractAmendment', 'properties',
+                    'status', 'enum'),
+                ['pending', 'applied'],
+            ),
+        'contract amendment relation or lifecycle states changed',
+    );
+    const contractInputProperties = at(
+        spec, 'components', 'schemas', 'DocumentContractInput', 'properties',
+    );
+    requireValue(
+        isRecord(contractInputProperties)
+            && sameMembers(Object.keys(contractInputProperties), [
+                'status',
+                'counterparty_name',
+                'counterparty_taxpayer_id',
+                'value',
+                'currency',
+                'start_date',
+                'end_date',
+                'auto_renew',
+                'renewal_term_months',
+                'notice_period_days',
+                'owner_id',
+                'metadata',
+                'external_references',
+                'parent_document_id',
+                'relation_type',
+                'updated_at',
+            ])
+            && sameMembers(at(contractInputProperties, 'status', 'enum'), contractStatuses)
+            && sameMembers(at(contractInputProperties, 'relation_type', 'enum'), relationTypes),
+        'DocumentContractInput fields changed',
+    );
+    requireValue(
+        sameMembers(
+            at(parameter(spec, '/v1/accounts/{accountId}/contracts', 'get', 'status'),
+                'schema', 'items', 'enum'),
+            contractStatuses,
+        )
+            && at(parameter(spec, '/v1/accounts/{accountId}/contracts', 'get', 'ending_within_days'),
+                'schema', 'maximum') === 3650,
+        'contract list filters changed',
+    );
+    requireValue(
+        at(spec, 'components', 'schemas', 'Assignment', 'properties', 'signing_urls', 'items', '$ref')
+            === '#/components/schemas/SigningUrl'
+            && at(spec, 'components', 'schemas', 'SigningUrl', 'properties', 'signer_id', 'type') === 'string'
+            && at(spec, 'components', 'schemas', 'SigningUrl', 'properties', 'url', 'type') === 'string',
+        'assignment signing URL shape changed',
     );
     requireValue(
         isRecord(at(

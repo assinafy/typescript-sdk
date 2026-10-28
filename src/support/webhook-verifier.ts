@@ -128,11 +128,7 @@ export class WebhookVerifier {
 
         const expected = createHmac('sha256', this.webhookSecret).update(buf).digest();
         const actual = Buffer.from(provided, 'hex');
-        try {
-            return timingSafeEqual(expected, actual);
-        } catch {
-            return false;
-        }
+        return timingSafeEqual(expected, actual);
     }
 
     /**

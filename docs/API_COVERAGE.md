@@ -2,7 +2,7 @@
 
 This ledger maps the official
 [`GET /v1/docs/openapi.json`](https://api.assinafy.com.br/v1/docs/openapi.json)
-contract to the public SDK API: 85 paths, 112 HTTP operations, and 45 component
+contract to the public SDK API: 90 paths, 118 HTTP operations, and 49 component
 schemas.
 
 All paths below include the `/v1` prefix shown by the OpenAPI document, except
@@ -14,7 +14,7 @@ Status meanings:
 
 - **Covered** — a public, typed SDK method sends the operation.
 - **Compatibility extension** — route retained for existing integrations but
-  absent from the current OpenAPI path set and excluded from the 112-operation
+  absent from the current OpenAPI path set and excluded from the 118-operation
   total.
 
 ## Accounts — 10/10
@@ -61,6 +61,17 @@ Status meanings:
 | `GET` | `/v1/users/api-keys` | `client.auth.getApiKey()` | Covered |
 | `POST` | `/v1/users/api-keys` | `client.auth.createApiKey(password)` | Covered |
 | `DELETE` | `/v1/users/api-keys` | `client.auth.deleteApiKey()` | Covered |
+
+## Contract lifecycle management (CLM) — 6/6
+
+| Method | Path | SDK method | Status |
+| --- | --- | --- | --- |
+| `GET` | `/v1/accounts/{accountId}/contracts` | `client.contracts.list(params?, accountId?)` | Covered |
+| `GET` | `/v1/accounts/{accountId}/documents/{documentId}/contract` | `client.contracts.get(documentId, accountId?)` | Covered |
+| `PUT` | `/v1/accounts/{accountId}/documents/{documentId}/contract` | `client.contracts.set(documentId, payload, accountId?)` | Covered |
+| `GET` | `/v1/accounts/{accountId}/documents/{documentId}/contract/related` | `client.contracts.listRelated(documentId, accountId?)` | Covered |
+| `POST` | `/v1/accounts/{accountId}/documents/{documentId}/contract/renew` | `client.contracts.renew(documentId, payload, accountId?)` | Covered |
+| `POST` | `/v1/accounts/{accountId}/documents/{documentId}/contract/terminate` | `client.contracts.terminate(documentId, payload?, accountId?)` | Covered |
 
 ## Documents — 18/18
 
@@ -210,7 +221,7 @@ Five additional routes are documented separately under
 ## Template compatibility routes
 
 These routes are available to existing integrations but do not appear in the
-current OpenAPI path set. They are excluded from the official 112-operation
+current OpenAPI path set. They are excluded from the official 118-operation
 coverage count.
 
 | Method | Path | SDK method | Status |
@@ -225,7 +236,7 @@ coverage count.
 
 Two browser URL helpers used by older deployments are live but absent from the
 current OpenAPI path set, so they are likewise excluded from the official
-112-operation coverage count.
+118-operation coverage count.
 
 | Method | Path | SDK method | Status |
 | --- | --- | --- | --- |

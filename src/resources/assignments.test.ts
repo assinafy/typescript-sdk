@@ -587,6 +587,8 @@ describe('AssignmentResource', () => {
         const liveShape = {
             resource: 'assignment',
             id: 'asg-1',
+            document_id: 'doc-1',
+            created_at: '2026-10-28T12:00:00Z',
             method: 'virtual',
             expires_at: null,
             signers: [
@@ -615,6 +617,8 @@ describe('AssignmentResource', () => {
         expect(asg.signers[0]?.notified).toBe(true);
         expect(asg.items?.[0]?.field?.type).toBe('virtual');
         expect(asg.signing_urls?.[0]).toEqual({ signer_id: 's1', url: 'https://app/sign/abc' });
+        expect(asg.document_id).toBe('doc-1');
+        expect(asg.created_at).toBe('2026-10-28T12:00:00Z');
     });
 
     test('keeps future server-side signer channel values representable', () => {
