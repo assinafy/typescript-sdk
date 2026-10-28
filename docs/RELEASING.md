@@ -3,7 +3,8 @@
 GitLab is the canonical repository and push-mirrors branches and tags to
 GitHub. Publishing is performed by `.github/workflows/release.yml` when GitHub
 receives a tag matching `v*`; a mirrored tag does not create a GitHub `release`
-event, and the workflow intentionally does not depend on one.
+event, so the workflow creates the GitHub Release page after both registries
+accept the package.
 
 ## Release support matrix
 
@@ -116,9 +117,11 @@ The workflow serializes releases repository-wide and performs these steps:
    and build once;
 3. create one `.tgz` with lifecycle scripts disabled and record its SHA-256;
 4. upload that archive and checksum as a seven-day workflow artifact;
-5. verify and publish the archive to npm through trusted-publisher OIDC; and
+5. verify and publish the archive to npm through trusted-publisher OIDC;
 6. verify and publish the **same bytes** to GitHub Packages using
-   `GITHUB_TOKEN`.
+   `GITHUB_TOKEN`; and
+7. create the GitHub Release page with generated notes, the same `.tgz`, and
+   `SHA256SUMS` after both registries succeed.
 
 The GitHub Packages job depends on npm publishing, preventing a GitHub-only
 release when npm fails. Both registry jobs validate `SHA256SUMS`; neither
@@ -128,8 +131,9 @@ contract and must be preserved when editing the workflow.
 ## Verification and recovery
 
 After publishing, confirm that the expected version appears on npm and GitHub
-Packages, that a clean Node.js consumer can import both the ESM and CommonJS
-entrypoints, and that registry downloads have the expected checksum.
+Packages, the GitHub Release is marked latest with both verified assets, a
+clean Node.js consumer can import both the ESM and CommonJS entrypoints, and
+registry downloads have the expected checksum.
 
 If packaging or npm publishing fails, fix the source, increment or retain the
 version as registry state allows, and create a new tag only after review. Never
@@ -144,6 +148,9 @@ original seven-day workflow artifact is retained. This preserves the exact
 archive already published to npm. Do not repack an approximation or unpublish a
 released npm version. If the artifact has expired, stop and review recovery with
 the maintainers before changing workflow dependencies or registry state.
+
+If both registries succeed and GitHub Release creation fails, rerun only the
+failed release job while the workflow artifact is retained.
 
 For a defective published release, prefer deprecating the affected version and
 shipping a reviewed patch. Record the incident and remediation in the

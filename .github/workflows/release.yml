@@ -121,3 +121,26 @@ jobs:
       - run: npm publish ./*.tgz
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  release-github:
+    name: Create GitHub release
+    needs: publish-gh
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: npm-package
+      - run: shasum -a 256 -c SHA256SUMS
+      - name: Publish the release page and verified artifact
+        run: >-
+          gh release create "$GITHUB_REF_NAME" ./*.tgz SHA256SUMS
+          --repo "$GITHUB_REPOSITORY"
+          --verify-tag
+          --latest
+          --title "$GITHUB_REF_NAME"
+          --generate-notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
