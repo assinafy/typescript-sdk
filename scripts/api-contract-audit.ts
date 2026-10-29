@@ -117,6 +117,26 @@ function validateProductionStructure(spec: OpenApiDocument): number {
         checked++;
     };
 
+    const activitiesPath = '/v1/documents/{documentId}/activities';
+    const activitiesParameters = at(spec, 'paths', activitiesPath, 'get', 'parameters');
+    for (const name of ['Page', 'PerPage']) {
+        requireValue(
+            Array.isArray(activitiesParameters) && activitiesParameters.some(
+                (entry: unknown) => at(entry, '$ref') === `#/components/parameters/${name}`,
+            ),
+            `document activities must accept ${name}`,
+        );
+    }
+    requireValue(
+        at(parameter(spec, activitiesPath, 'get', 'sort'), 'in') === 'query'
+            && at(parameter(spec, activitiesPath, 'get', 'sort'), 'schema', 'type') === 'string',
+        'document activities must accept sort',
+    );
+    requireValue(
+        at(spec, 'components', 'parameters', 'PerPage', 'schema', 'maximum') === 100,
+        'document activities must allow per-page up to 100',
+    );
+
     for (const path of [
         '/v1/documents/{documentId}/download/{artifactName}',
         '/v1/signers/{signerId}/documents/{documentId}/download/{artifactName}',

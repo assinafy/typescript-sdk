@@ -65,12 +65,26 @@ the hourly renewal and expiration lifecycle, and expose portfolio filters.
 OAuth reads require `documents:read`; writes require `documents:write` plus a
 workspace plan with contract tracking.
 
+The published API currently provides no OAuth member-list operation for choosing
+`owner_id`. Integrations must obtain a known active workspace member ID outside
+this SDK; it cannot populate an owner picker from `account:read` today.
+
+An amendment's `apply_error` is human-readable text, not a stable code. Do not
+parse it to select localized guidance. The published causes are a missing
+contract-tracking plan, a parent that cannot accept the delta, an earlier signed
+instrument still pending, a later signed instrument already applied, and an
+unexpected failure. A machine-readable error code requires an API contract
+addition before the SDK can expose it.
+
 A sandbox may return the generic `404` while these routes are not deployed, or
 `403` while its workspace plan does not include contract tracking. The SDK does
 not reinterpret either response or route a sandbox request to production.
 Read operations remain available after a production plan lapses; writes are
 plan-gated. Signed amendments wait and the lifecycle catches up after the plan
 returns, as defined by the production integration guide.
+The current sandbox specification publishes neither the six CLM operations nor
+activity paging. The SDK's `audit:api` checks the production contract; passing
+sandbox smoke tests does not verify either capability.
 
 `documents.details()` can expose `has_contract` only in a workspace context and
 only when contract tracking is available. A missing key means unknown, not
@@ -146,8 +160,8 @@ identifier.
 
 ## List pagination
 
-Two behaviours of the list endpoints are silent rather than loud, so neither
-surfaces as an error a caller could react to:
+Two behaviours observed on document and signer lists are silent rather than
+loud, so neither surfaces as an error a caller could react to:
 
 - Only the hyphenated `per-page` is read. `per_page` is accepted and discarded,
   and the response falls back to the default of 20 rows. The SDK normalizes
@@ -165,7 +179,49 @@ const { data, meta } = await client.documents.list({ 'per-page': MAX_LIST_PAGE_S
 // page size the server actually applied — prefer it over the requested value.
 ```
 
-`signers.findByEmail()` pins this maximum for its single lookup request.
+`signers.findByEmail()` pins this maximum when scanning matching signer pages.
+
+### Document activities
+
+Production `GET /v1/documents/{documentId}/activities` is paginated: 20 entries
+per page by default, with `page`, `per-page` (documented maximum 100), and `sort`
+(`-id` for newest first, the default; `id` for oldest first). A page beyond the
+end returns an empty `data` array. Its documented limit differs from the observed
+50-row cap above; the SDK forwards the requested size without clamping it.
+
+`documents.activities(documentId, params?)` continues to return
+`IDocumentActivity[]`, normalizing an absent body to `[]`. It accepts `per_page`
+as an alias for `per-page`, with the hyphenated form taking precedence. It makes
+one request. Use `documents.listActivities()` to receive `{ data, meta }`, with
+`current_page`, `per_page`, `total` and `last_page` parsed from the production
+`X-Pagination-*` headers. `meta` is absent when the server sends no pagination
+headers.
+
+```ts
+import type { IDocumentActivity } from '@assinafy/sdk';
+
+const events: IDocumentActivity[] = [];
+for (let page = 1; ; page++) {
+  const { data, meta } = await client.documents.listActivities('document-id', {
+    page, 'per-page': 100, sort: 'id',
+  });
+  events.push(...data);
+  // Unpaged sandbox responses have no meta and must be consumed only once.
+  if (!meta?.last_page || page >= meta.last_page || data.length === 0) break;
+}
+```
+
+Production's change from an unpaged history to a default page of 20 affects
+existing clients even without an SDK upgrade: a successful request no longer
+implies a complete activity log. SDK 2.9.1 and earlier cannot request later
+pages through `activities()`. Integrations that need the full history must
+upgrade to a release containing pagination support and explicitly traverse
+pages. This SDK change does not automatically fetch the entire history.
+
+Sandbox still serves an unpaged activity log and may ignore these parameters.
+Do not use a loop that waits for an empty page on that deployment: it can keep
+returning the same full log. A successful sandbox call does not verify production
+pagination.
 
 ## Assignment list account context
 

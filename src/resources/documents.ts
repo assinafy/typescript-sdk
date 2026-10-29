@@ -14,6 +14,7 @@ import type {
     IDocumentStatusInfo,
     IDocumentUploadResponse,
     IDocumentVerification,
+    IListParams,
     IPublicDocumentInfo,
     IRenameDocumentResponse,
     ISigningProgress,
@@ -21,6 +22,7 @@ import type {
     ITemplateCostSigner,
     ITemplateSigner,
     Logger,
+    PaginatedResult,
     ISendTokenResult,
     SendTokenChannel,
 } from '../types';
@@ -623,14 +625,22 @@ export class DocumentResource extends BaseResource {
     }
 
     /**
-     * Fetch the document activity log
+     * Fetch a page of the document activity log
      * (`GET /documents/{documentId}/activities`).
      *
-     * Returns a chronological history of lifecycle events. Normalises an
-     * absent body to `[]`.
+     * Production returns 20 entries per page by default, newest first. Request
+     * later pages explicitly; a page past the end returns `[]`. Sandbox still
+     * returns the full, unpaged log and may ignore these parameters. This method
+     * preserves its array return type; use {@link DocumentResource.listActivities}
+     * for pagination metadata. Normalises an absent body to `[]`.
      *
      * @param documentId - The document whose activity log to fetch.
-     * @returns The activity entries (newest first), or `[]`:
+     * @param params - Optional pagination and sorting parameters.
+     * @param params.page - Page number, starting at 1.
+     * @param params.per-page - Entries per page (production default 20, documented max 100).
+     * @param params.per_page - Alias for `per-page`; explicit `per-page` wins.
+     * @param params.sort - `-id` (default, newest first) or `id` (oldest first).
+     * @returns The requested page of activity entries, or `[]`:
      * ```jsonc
      * [
      *   {
@@ -651,22 +661,70 @@ export class DocumentResource extends BaseResource {
      *   }
      * ]
      * ```
-     * @throws {ValidationError} If `documentId` is missing.
-     * @throws {ApiError} If the API rejects the request.
+     * @throws {ValidationError} If `documentId` is missing or invalid, or `params` is not an object.
+     * @throws {ApiError} If the API rejects the request (`401` for invalid credentials, `500` for a server error).
      *
      * @example
      * ```ts
-     * const events = await client.documents.activities('doc-1');
+     * const events = await client.documents.activities('doc-1', {
+     *   page: 2, 'per-page': 100, sort: 'id',
+     * });
      * console.log(events.map((e) => e.event));
      * ```
      */
-    async activities(documentId: string): Promise<IDocumentActivity[]> {
+    async activities(documentId: string, params: IListParams = {}): Promise<IDocumentActivity[]> {
+        return (await this.listActivities(documentId, params)).data;
+    }
+
+    /**
+     * Fetch document activities with pagination metadata
+     * (`GET /documents/{documentId}/activities`).
+     *
+     * Production defaults to 20 entries, newest first. `meta` comes from the
+     * `X-Pagination-*` headers; use `last_page` to request the remaining pages.
+     * Sandbox returns the full unpaged log without `meta`: process it once.
+     * Normalises an absent body to an empty list. Makes exactly one request.
+     *
+     * @param documentId - The document whose activity log to fetch.
+     * @param params - Optional pagination and sorting parameters.
+     * @param params.page - Page number, starting at 1.
+     * @param params.per-page - Entries per page (production default 20, documented max 100).
+     * @param params.per_page - Alias for `per-page`; explicit `per-page` wins.
+     * @param params.sort - `-id` (default, newest first) or `id` (oldest first).
+     * @returns Activity entries and pagination metadata when the server supplies it:
+     * ```jsonc
+     * {
+     *   "data": [{
+     *     "id": 15271,
+     *     "event": "document_uploaded",
+     *     "message": "Documento criado.",
+     *     "payload": [],
+     *     "origin": null,
+     *     "created_at": "2026-07-19T14:56:55Z"
+     *   }],
+     *   "meta": { "current_page": 2, "per_page": 20, "total": 21, "last_page": 2 }
+     * }
+     * ```
+     * @throws {ValidationError} If `documentId` is missing or invalid, or `params` is not an object.
+     * @throws {ApiError} If the API rejects the request (`401` for invalid credentials, `500` for a server error).
+     * @example
+     * ```ts
+     * const { data, meta } = await client.documents.listActivities('doc-1', { page: 2 });
+     * console.log(data, meta?.total);
+     * ```
+     */
+    async listActivities(
+        documentId: string,
+        params: IListParams = {},
+    ): Promise<PaginatedResult<IDocumentActivity>> {
         const id = this.requireId(documentId, 'Document ID');
-        const result = await this.call<IDocumentActivity[] | null>(
+        return this.callList<IDocumentActivity>(
             'Failed to fetch document activities',
-            () => this.http.get(`/documents/${this.pathSegment(id, 'Document ID')}/activities`),
+            () => this.http.get(`/documents/${this.pathSegment(id, 'Document ID')}/activities`, {
+                params: cleanListParams(params),
+            }),
+            true,
         );
-        return result ?? [];
     }
 
     /**

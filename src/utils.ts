@@ -240,11 +240,12 @@ export function isE164PhoneNumber(value: unknown): value is string {
 }
 
 /**
- * Largest page the list endpoints actually return.
+ * Observed page-size cap for document and signer lists on older deployments.
  *
  * The API silently clamps `per-page` to this value rather than rejecting a
  * larger one, so a caller asking for 100 receives 50 and no error. Methods that
  * need "as many rows as one request can give" pin this instead of guessing.
+ * Production document activities have a documented maximum of 100 instead.
  */
 export const MAX_LIST_PAGE_SIZE = 50;
 

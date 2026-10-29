@@ -161,13 +161,15 @@ describe('BaseResource helpers', () => {
     });
 
     test('callList rejects a malformed success payload instead of masking it as an empty list', async () => {
-        await expect(
-            res().list$(async () => ({
-                status: 200,
-                data: { status: 200, data: { not: 'a list' } },
-                headers: {},
-            })),
-        ).rejects.toBeInstanceOf(AssinafyError);
+        for (const data of [{ not: 'a list' }, null, undefined]) {
+            await expect(
+                res().list$(async () => ({
+                    status: 200,
+                    data: { status: 200, data },
+                    headers: {},
+                })),
+            ).rejects.toBeInstanceOf(AssinafyError);
+        }
     });
 
     test('non-Axios failures are wrapped as AssinafyError', async () => {

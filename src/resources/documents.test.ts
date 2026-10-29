@@ -739,6 +739,111 @@ describe('DocumentResource public request contracts', () => {
         expect(calls).toBe(0);
     });
 
+    test('activities requests older pages and normalises pagination parameters', async () => {
+        const calls: Array<{ url: string; config: unknown }> = [];
+        const activity = {
+            id: 1,
+            event: 'document_uploaded',
+            message: 'Documento criado.',
+            payload: [],
+            origin: null,
+            created_at: '2026-07-19T14:56:55Z',
+        };
+        const http = {
+            get: async (url: string, config?: { params: Record<string, unknown> }) => {
+                calls.push({ url, config });
+                return envelope(config?.params['page'] === 2 ? [activity] : []);
+            },
+        } as unknown as AxiosInstance;
+        const resource = new DocumentResource(http, 'acc');
+
+        for (const params of [
+            { page: 2, 'per-page': 100, sort: 'id' },
+            { page: 2, per_page: 100, sort: 'id' },
+            { page: 2, per_page: 10, 'per-page': 100, sort: 'id' },
+        ]) {
+            expect(await resource.activities('doc/1', params)).toEqual([activity]);
+        }
+        expect(calls).toEqual(Array.from({ length: 3 }, () => ({
+            url: '/documents/doc%2F1/activities',
+            config: { params: { page: 2, 'per-page': 100, sort: 'id' } },
+        })));
+        expect(await resource.activities('doc/1', { page: 3, sort: '-id' })).toEqual([]);
+        expect(calls[3]).toEqual({
+            url: '/documents/doc%2F1/activities',
+            config: { params: { page: 3, sort: '-id' } },
+        });
+    });
+
+    test('listActivities exposes pagination headers and forwards page parameters', async () => {
+        let request: unknown;
+        const activity = {
+            id: 1,
+            event: 'document_uploaded',
+            message: 'Documento criado.',
+            payload: [],
+            origin: null,
+            created_at: '2026-07-19T14:56:55Z',
+        };
+        const http = {
+            get: async (url: string, config: unknown) => {
+                request = { url, config };
+                return {
+                    ...envelope([activity]),
+                    headers: {
+                        'X-Pagination-Current-Page': '2',
+                        'X-Pagination-Per-Page': '20',
+                        'X-Pagination-Total-Count': '21',
+                        'X-Pagination-Page-Count': '2',
+                    },
+                };
+            },
+        } as unknown as AxiosInstance;
+        const result = await new DocumentResource(http, 'acc').listActivities('doc/1', {
+            page: 2, per_page: 20, sort: '-id',
+        });
+        expect(result).toEqual({
+            data: [activity],
+            meta: { current_page: 2, per_page: 20, total: 21, last_page: 2 },
+        });
+        expect(request).toEqual({
+            url: '/documents/doc%2F1/activities',
+            config: { params: { page: 2, 'per-page': 20, sort: '-id' } },
+        });
+    });
+
+    test('listActivities supports unpaged and absent activity bodies without inventing metadata', async () => {
+        for (const body of [[], null, undefined]) {
+            const http = {
+                get: async () => envelope(body),
+            } as unknown as AxiosInstance;
+            expect(await new DocumentResource(http, 'acc').listActivities('doc-1')).toEqual({ data: [] });
+        }
+    });
+
+    test('activities rejects missing IDs and invalid parameter bags before requesting', async () => {
+        let calls = 0;
+        const http = {
+            get: async () => {
+                calls++;
+                return envelope([]);
+            },
+        } as unknown as AxiosInstance;
+        const resource = new DocumentResource(http, 'acc');
+        const requests = [
+            () => resource.activities(''),
+            () => resource.activities('  '),
+            () => resource.activities('..'),
+            () => resource.activities('doc-1', null as never),
+            () => resource.activities('doc-1', [] as never),
+            () => resource.activities('doc-1', 'page=2' as never),
+        ];
+        for (const request of requests) {
+            await expect(request()).rejects.toBeInstanceOf(ValidationError);
+        }
+        expect(calls).toBe(0);
+    });
+
     test('activities unwraps entries and normalises null to an empty array', async () => {
         const urls: string[] = [];
         let requestCount = 0;

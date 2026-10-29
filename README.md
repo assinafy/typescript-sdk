@@ -332,7 +332,7 @@ As 118 operações documentadas em https://api.assinafy.com.br/v1/docs estão co
 
 | Recurso | Endpoints |
 | --- | --- |
-| `client.documents` | list, search, upload, details, get, rename, activities, waitUntilReady, download, thumbnail, downloadPage, statuses, delete, verify, createFromTemplate, estimateCostFromTemplate, getPublic, sendToken, listTags, replaceTags, addTags, detachTag, isFullySigned, getSigningProgress |
+| `client.documents` | list, search, upload, details, get, rename, activities, listActivities, waitUntilReady, download, thumbnail, downloadPage, statuses, delete, verify, createFromTemplate, estimateCostFromTemplate, getPublic, sendToken, listTags, replaceTags, addTags, detachTag, isFullySigned, getSigningProgress |
 | `client.signers` | create, get, list, update, delete, findByEmail |
 | `client.assignments` | list, create, estimateCost, resetExpiration, resendNotification, estimateResendCost, listWhatsAppNotifications, getIdentityVerification, downloadIdentityVerificationImage, reviewIdentityVerification |
 | `client.contracts` | list, get, set, listRelated, renew, terminate |
@@ -687,7 +687,10 @@ const { data, meta } = await client.documents.list({ page: 1, 'per-page': 20, so
 const achados = await client.documents.search({ search: 'contrato', status: 'pending_signature', 'per-page': 20 });
 
 await client.documents.details(doc.id);
-await client.documents.activities(doc.id);
+// Produção: página 2 de atividades, mais antigas primeiro; retorna um array.
+await client.documents.activities(doc.id, { page: 2, 'per-page': 100, sort: 'id' });
+// Use listActivities para { data, meta }, incluindo total e last_page.
+await client.documents.listActivities(doc.id, { page: 2, 'per-page': 100, sort: 'id' });
 await client.documents.waitUntilReady(doc.id, { maxWaitMs: 30_000 });
 
 // Renomear. A API responde 400 enquanto o documento está em
@@ -740,9 +743,20 @@ As listagens devolvem `{ data, meta }`, com `meta` preenchido a partir dos heade
 - Só o `per-page` com hífen é lido. `per_page` é aceito e ignorado, caindo para 20 linhas — por isso
   o SDK reescreve `per_page` como `per-page` em toda listagem, e um `per-page` explícito vence
   quando os dois são enviados.
-- `per-page` é limitado a **50**. Pedir 100 devolve 50 linhas com `200`. A constante exportada
-  `MAX_LIST_PAGE_SIZE` é esse teto; pagine com `page` em vez de pedir páginas maiores, e confie no
+- Nas listagens de documentos e signatários, observou-se um limite de **50** para `per-page`.
+  Nesses ambientes, pedir 100 devolve 50 linhas com `200`. A constante exportada
+  `MAX_LIST_PAGE_SIZE` é esse teto observado; pagine com `page` em vez de pedir páginas maiores, e confie no
   `meta.per_page` mais do que no valor pedido.
+
+`documents.activities(documentId, params?)` mantém o retorno como array; use
+`documents.listActivities()` para obter `{ data, meta }` com os metadados de paginação.
+Em produção, esses métodos retornam **20 entradas por página** por padrão, com
+máximo documentado de **100** para `per-page`. Use `page` para buscar as próximas entradas;
+um array vazio indica o fim. `sort: 'id'` retorna as mais antigas primeiro, e `sort: '-id'`
+(padrão), as mais recentes. O sandbox ainda retorna o histórico completo, sem paginação,
+e pode ignorar esses parâmetros; por isso, não percorra páginas em loop nesse ambiente.
+Integrações que liam o histórico completo em uma requisição precisam agora buscar
+as páginas seguintes. Veja o [exemplo de migração](docs/COMPATIBILITY.md#document-activities).
 
 ### Gestão do ciclo de vida de contratos (CLM)
 

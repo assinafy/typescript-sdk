@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `documents.listActivities(documentId, params?)` returns activity entries
+  with pagination metadata from the response headers. Use it to read the full
+  production history; sandbox responses omit metadata while still unpaged.
+
+### Fixed
+
+- `documents.activities(documentId, params?)` accepts `page`, `per-page`
+  (or `per_page`), and `sort`, allowing callers to fetch beyond production's
+  default 20 activity entries. Existing calls still return an array; sandbox
+  responses remain compatible with its unpaged activity log.
+
 ## [2.9.1] - 2026-10-28
 
 ### Fixed

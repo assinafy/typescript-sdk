@@ -148,15 +148,22 @@ export abstract class BaseResource {
     }
 
     /** Execute a paginated list call and attach meta from `X-Pagination-*` headers. */
-    protected async callList<T>(label: string, request: RequestFn): Promise<PaginatedResult<T>> {
+    protected async callList<T>(
+        label: string,
+        request: RequestFn,
+        allowEmptyBody = false,
+    ): Promise<PaginatedResult<T>> {
         try {
             const response = assertSuccessful(await request());
-            const unwrapped = handleAssinafyResponse<T[] | { data?: T[] }>(response.data);
+            const unwrapped = handleAssinafyResponse<T[] | { data?: T[] } | null | undefined>(response.data);
             let data: T[];
             if (Array.isArray(unwrapped)) {
                 data = unwrapped;
             } else if (Array.isArray(unwrapped?.data)) {
                 data = (unwrapped as { data: T[] }).data;
+            } else if (allowEmptyBody && unwrapped == null) {
+                // Activities historically allow an absent body; other lists remain strict.
+                data = [];
             } else {
                 throw new AssinafyError(`${label}: API returned a malformed list payload`, {
                     responseData: unwrapped,

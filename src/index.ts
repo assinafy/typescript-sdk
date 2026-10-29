@@ -6,7 +6,7 @@ export { DocumentResource } from './resources/documents';
 export type { DocumentUploadSource, IDocumentUploadOptions } from './resources/documents';
 /** The API's hard 25 MB upload limit — check a file against it before uploading. */
 export { MAX_UPLOAD_BYTES } from './resources/upload';
-/** Largest page any list endpoint returns; larger `per-page` values are clamped. */
+/** Observed cap for document and signer lists; production activities have a documented limit of 100. */
 export { MAX_LIST_PAGE_SIZE } from './utils';
 export { SignerResource } from './resources/signers';
 export { WorkspaceResource } from './resources/workspaces';

@@ -84,7 +84,7 @@ Status meanings:
 | `GET` | `/v1/documents/{documentId}` | `client.documents.details(documentId)` / `get(documentId)` | Covered |
 | `DELETE` | `/v1/documents/{documentId}` | `client.documents.delete(documentId)` | Covered |
 | `PATCH` | `/v1/documents/{documentId}` | `client.documents.rename(documentId, name)` | Covered |
-| `GET` | `/v1/documents/{documentId}/activities` | `client.documents.activities(documentId)` | Covered |
+| `GET` | `/v1/documents/{documentId}/activities` | `client.documents.activities(documentId, params?)` / `client.documents.listActivities(documentId, params?)` | Covered |
 | `GET` | `/v1/documents/{documentId}/download/{artifactName}` | `client.documents.download(documentId, artifactName)` | Covered |
 | `GET` | `/v1/documents/{documentSignatureHash}/verify` | `client.documents.verify(documentSignatureHash)` | Covered |
 | `GET` | `/v1/documents/{documentId}/thumbnail` | `client.documents.thumbnail(documentId)` | Covered |

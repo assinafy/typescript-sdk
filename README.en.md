@@ -347,7 +347,7 @@ ledger is in [docs/API_COVERAGE.md](docs/API_COVERAGE.md).
 
 | Resource              | Endpoints                                                                                                                                                                                                                                          |
 | --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `client.documents`    | list, **search**, upload, details, get, **rename**, activities, waitUntilReady, download, thumbnail, downloadPage, statuses, delete, verify, createFromTemplate, estimateCostFromTemplate, getPublic, sendToken, listTags, replaceTags, addTags, detachTag, isFullySigned, getSigningProgress |
+| `client.documents`    | list, **search**, upload, details, get, **rename**, activities, listActivities, waitUntilReady, download, thumbnail, downloadPage, statuses, delete, verify, createFromTemplate, estimateCostFromTemplate, getPublic, sendToken, listTags, replaceTags, addTags, detachTag, isFullySigned, getSigningProgress |
 | `client.signers`      | create, get, list, update, delete, findByEmail                                                                                                                                                                                                     |
 | `client.assignments`  | list, create, estimateCost, resetExpiration, resendNotification, estimateResendCost, listWhatsAppNotifications, getIdentityVerification, downloadIdentityVerificationImage, reviewIdentityVerification                                                                                                                                  |
 | `client.contracts`    | list, get, set, listRelated, renew, terminate |
@@ -718,7 +718,10 @@ const { data, meta } = await client.documents.list({ page: 1, 'per-page': 20, so
 const hits = await client.documents.search({ search: 'agreement', status: 'pending_signature', 'per-page': 20 });
 
 await client.documents.details(doc.id);
-await client.documents.activities(doc.id);
+// Production: page 2 of activities, oldest first; returns an array.
+await client.documents.activities(doc.id, { page: 2, 'per-page': 100, sort: 'id' });
+// Use listActivities for { data, meta }, including total and last_page.
+await client.documents.listActivities(doc.id, { page: 2, 'per-page': 100, sort: 'id' });
 await client.documents.waitUntilReady(doc.id, { maxWaitMs: 30_000 });
 
 // Rename. The API rejects this with 400 while the document is still in
@@ -774,10 +777,21 @@ both are silent rather than errors:
 - Only the hyphenated `per-page` is read. `per_page` is accepted and ignored,
   falling back to 20 rows — so the SDK rewrites `per_page` to `per-page` on
   every list method, and an explicit `per-page` wins when both are given.
-- `per-page` is clamped to **50**. Asking for 100 returns 50 rows with a `200`.
-  The exported `MAX_LIST_PAGE_SIZE` constant is that ceiling; page through with
+- Document and signer lists have been observed to clamp `per-page` to **50**.
+  Asking for 100 returns 50 rows with a `200` on those deployments.
+  The exported `MAX_LIST_PAGE_SIZE` constant is that observed ceiling; page through with
   `page` rather than requesting a larger page, and trust `meta.per_page` over
   the value you asked for.
+
+`documents.activities(documentId, params?)` keeps its array return type and does
+not expose pagination metadata; use `documents.listActivities()` for `{ data, meta }`.
+In production, these methods return **20 entries per page**
+by default and documents a maximum `per-page` of **100**. Use `page` to fetch later
+entries; an empty array marks the end. `sort: 'id'` returns oldest first, and
+`sort: '-id'` (the default) returns newest first. Sandbox still returns the full,
+unpaged log and may ignore these parameters, so do not loop through pages there.
+Existing integrations that read the entire history in one request must now
+request subsequent pages. See the [migration example](docs/COMPATIBILITY.md#document-activities).
 
 ### Contract lifecycle management (CLM)
 
