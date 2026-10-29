@@ -3,7 +3,7 @@ import { Buffer } from 'node:buffer';
 import { once } from 'node:events';
 import { createServer } from 'node:http';
 import { createRequire } from 'node:module';
-import { URLSearchParams } from 'node:url';
+import { URL, URLSearchParams } from 'node:url';
 
 import {
     ApiError,
@@ -45,6 +45,16 @@ const commonJsClient = new commonJsSdk.AssinafyClient({
     accountId: 'commonjs-account',
 });
 assert.ok(commonJsClient.contracts instanceof commonJsSdk.ContractResource);
+assert.equal(typeof commonJsClient.documents.listActivities, 'function');
+
+const activity = {
+    id: 1,
+    event: 'document_uploaded',
+    message: 'Documento criado.',
+    payload: [],
+    origin: null,
+    created_at: '2026-07-19T14:56:55Z',
+};
 
 const requests = [];
 const server = createServer(async (request, response) => {
@@ -58,6 +68,18 @@ const server = createServer(async (request, response) => {
         headers: request.headers,
         body: Buffer.concat(chunks),
     });
+
+    if (request.url?.startsWith('/v1/documents/consumer-document/activities')) {
+        response.writeHead(200, {
+            'content-type': 'application/json',
+            'X-Pagination-Current-Page': '2',
+            'X-Pagination-Per-Page': '20',
+            'X-Pagination-Total-Count': '21',
+            'X-Pagination-Page-Count': '2',
+        });
+        response.end(JSON.stringify({ status: 200, data: [activity] }));
+        return;
+    }
 
     // The OAuth token endpoint answers with a flat RFC 6749 body, outside the
     // `{ status, message, data }` envelope used by every other route.
@@ -116,14 +138,30 @@ try {
         clientSecret: 'consumer-secret',
     });
     assert.equal(tokens.access_token, 'consumer-access-token');
+
+    const activities = await client.documents.listActivities('consumer-document', {
+        page: 2, per_page: 20, sort: 'id',
+    });
+    assert.deepEqual(activities, {
+        data: [activity],
+        meta: { current_page: 2, per_page: 20, total: 21, last_page: 2 },
+    });
+    assert.deepEqual(await client.documents.activities('consumer-document', { page: 2 }), [activity]);
 } finally {
     await new Promise((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));
     });
 }
 
-assert.equal(requests.length, 4);
-const [protectedRequest, publicRequest, uploadRequest, tokenRequest] = requests;
+assert.equal(requests.length, 6);
+const [protectedRequest, publicRequest, uploadRequest, tokenRequest, activitiesRequest, legacyActivitiesRequest] = requests;
+
+assert.equal(activitiesRequest.method, 'GET');
+const activitiesUrl = new URL(activitiesRequest.path, 'http://127.0.0.1');
+assert.equal(activitiesUrl.pathname, '/v1/documents/consumer-document/activities');
+assert.deepEqual(Object.fromEntries(activitiesUrl.searchParams), { page: '2', 'per-page': '20', sort: 'id' });
+assert.equal(activitiesRequest.headers['x-api-key'], 'consumer-key');
+assert.equal(legacyActivitiesRequest.path, '/v1/documents/consumer-document/activities?page=2');
 
 assert.equal(protectedRequest.method, 'POST');
 assert.equal(protectedRequest.path, '/v1/consumer-json');

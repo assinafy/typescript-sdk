@@ -67,6 +67,15 @@ workspace plan with contract tracking.
 
 Owner assignment is optional. Integrations that do not manage ownership can
 omit `owner_id` without discovering or supplying workspace member IDs.
+Workspace membership is never available to OAuth tokens, including those with
+`account:read`: the member directory includes other members' and pending
+invitees' emails, roles, and session-only data. Adding it to that scope would
+expand existing grants without renewed consent.
+
+For an explicit "assign to me" action, `client.oauth.getUserInfo()` calls
+`GET /v1/oauth/userinfo` with the `openid` scope. Its `sub` is the signed-in
+user's ID in the format accepted by `owner_id`; this does not enumerate other
+members. Assignment to someone else by email is not a supported contract field.
 
 An amendment's `apply_error` is human-readable text, not a stable code. Do not
 parse it to select localized guidance. The published causes are a missing
@@ -214,7 +223,7 @@ Production's change from an unpaged history to a default page of 20 affects
 existing clients even without an SDK upgrade: a successful request no longer
 implies a complete activity log. SDK 2.9.1 and earlier cannot request later
 pages through `activities()`. Integrations that need the full history must
-upgrade to a release containing pagination support and explicitly traverse
+upgrade to SDK 2.10.0 or later and explicitly traverse
 pages. This SDK change does not automatically fetch the entire history.
 
 Sandbox still serves an unpaged activity log and may ignore these parameters.

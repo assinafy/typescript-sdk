@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.10.0] - 2026-10-29
+
 ### Added
 
 - `documents.listActivities(documentId, params?)` returns activity entries
@@ -893,7 +895,10 @@ signer fields with `cpf` and `whatsapp_phone_number`.
 - High-level `uploadAndRequestSignatures` helper on `AssinafyClient`.
 - `PaginatedResult<T>` with parsed `X-Pagination-*` header meta.
 
-[Unreleased]: https://github.com/assinafy/typescript-sdk/compare/v2.8.1...HEAD
+[Unreleased]: https://github.com/assinafy/typescript-sdk/compare/v2.10.0...HEAD
+[2.10.0]: https://github.com/assinafy/typescript-sdk/compare/v2.9.1...v2.10.0
+[2.9.1]: https://github.com/assinafy/typescript-sdk/compare/v2.9.0...v2.9.1
+[2.9.0]: https://github.com/assinafy/typescript-sdk/compare/v2.8.1...v2.9.0
 [2.8.1]: https://github.com/assinafy/typescript-sdk/compare/v2.8.0...v2.8.1
 [2.8.0]: https://github.com/assinafy/typescript-sdk/releases/tag/v2.8.0
 [2.7.1]: https://github.com/assinafy/typescript-sdk/compare/v2.7.0...v2.7.1
