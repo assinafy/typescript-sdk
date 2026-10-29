@@ -65,9 +65,8 @@ the hourly renewal and expiration lifecycle, and expose portfolio filters.
 OAuth reads require `documents:read`; writes require `documents:write` plus a
 workspace plan with contract tracking.
 
-The published API currently provides no OAuth member-list operation for choosing
-`owner_id`. Integrations must obtain a known active workspace member ID outside
-this SDK; it cannot populate an owner picker from `account:read` today.
+Owner assignment is optional. Integrations that do not manage ownership can
+omit `owner_id` without discovering or supplying workspace member IDs.
 
 An amendment's `apply_error` is human-readable text, not a stable code. Do not
 parse it to select localized guidance. The published causes are a missing
