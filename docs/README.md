@@ -1,0 +1,1692 @@
+# @assinafy/sdk — Manual completo
+
+*Português · [Read in English](README.en.md) · [Visão geral](../README.md)*
+
+SDK oficial em TypeScript para a [API Assinafy](https://api.assinafy.com.br/v1/docs) — plataforma
+brasileira de assinatura eletrônica de documentos.
+
+Cobre as 118 operações do documento OpenAPI oficial: contas, autenticação, aplicações OAuth 2.1,
+usuários, documentos, assignments, signatários, fluxos do lado do signatário, gestão do ciclo de
+vida de contratos (CLM), templates, tags,
+campos, webhooks, identidade visual, estatísticas e o fluxo de alto nível
+`uploadAndRequestSignatures`. Cinco rotas adicionais de gestão de templates usadas por integrações
+existentes e dois helpers de URL de navegador são mantidos por compatibilidade.
+
+O mapa operação a operação está em [API_COVERAGE.md](API_COVERAGE.md); as variações por
+deploy, em [COMPATIBILITY.md](COMPATIBILITY.md).
+
+## Sumário
+
+Este documento vai da instalação ao fluxo completo de assinatura e, depois, ao detalhe de cada
+recurso. Leia na ordem na primeira vez; use como referência depois.
+
+**Preparação** — [Requisitos](#requisitos) · [Instalação](#instalação) ·
+[Início rápido](#início-rápido) · [Autenticação](#autenticação) ·
+[Aplicações OAuth](#aplicações-oauth) · [Configuração](#configuração)
+([limite de requisições](#limite-de-requisições), [fábricas](#fábricas)) ·
+[Cobertura de endpoints](#cobertura-de-endpoints)
+
+**O fluxo ponta a ponta** — [Ciclo de vida do documento](#ciclo-de-vida-do-documento):
+[seleção do workspace](#1-selecione-o-workspace) → [envio do PDF](#2-envie-o-pdf) →
+[signatários](#3-crie-ou-reaproveite-os-signatários-por-e-mail) →
+[orçamento e pedido de assinatura](#4-orce-depois-peça-as-assinaturas) →
+[o lado do signatário](#5-conclua-o-fluxo-do-signatário-por-e-mail) →
+[conclusão e artefatos](#6-acompanhe-a-conclusão-e-baixe-os-artefatos)
+
+**Detalhe por recurso** — [Referência de recursos](#referência-de-recursos):
+[documentos](#documentos) · [signatários](#signatários) · [assignments](#assignments) ·
+[gestão do ciclo de vida de contratos](#gestão-do-ciclo-de-vida-de-contratos-clm) ·
+[ramos pagos de assinatura](#ramos-pagos-de-assinatura) · [templates](#templates) · [tags](#tags) ·
+[workspaces](#workspaces) · [definições de campo](#definições-de-campo) ·
+[autenticação e chaves de API](#autenticação--gestão-de-chaves-de-api) ·
+[usuário autenticado](#usuário-autenticado) · [webhooks](#webhooks)
+([verificação](#verificação-de-webhooks)) ·
+[endpoints do signatário](#endpoints-do-signatário)
+
+**O restante** — [Helper de alto nível](#helper-de-alto-nível) · [Erros](#erros) ·
+[Ambientes](#ambientes) · [Desenvolvimento](#desenvolvimento) · [Licença](#licença)
+
+## Requisitos
+
+- Node.js 22+ (usa as APIs nativas `FormData` / `Blob` para upload). Os imports CJS e ESM
+  empacotados são testados no 22 e 24 (LTS de manutenção) e 26 (LTS ativo). O Node 20
+  chegou ao fim da vida em abril de 2026 e não é suportado.
+- ou Bun 1.4.4 (versão fixada no desenvolvimento e na CI)
+- HTTPS com TLS 1.2 ou superior, exigido pela API; o Node.js 22+ e o Bun já negociam isso por padrão
+
+## Instalação
+
+```bash
+npm install @assinafy/sdk
+# ou
+bun add @assinafy/sdk
+```
+
+O pacote é publicado no [npmjs.com](https://www.npmjs.com/package/@assinafy/sdk) e no
+[GitHub Packages](https://github.com/assinafy/typescript-sdk/packages). Para instalar do GitHub
+Packages, adicione ao seu `.npmrc`:
+
+```
+@assinafy:registry=https://npm.pkg.github.com
+//npm.pkg.github.com/:_authToken=${GITHUB_TOKEN}
+```
+
+## Início rápido
+
+```ts
+import { AssinafyClient } from '@assinafy/sdk';
+
+const baseUrl = process.env.ASSINAFY_BASE_URL ?? 'https://api.assinafy.com.br/v1';
+const client = new AssinafyClient({
+  apiKey: process.env.ASSINAFY_API_KEY!,
+  accountId: process.env.ASSINAFY_ACCOUNT_ID!,
+  baseUrl,
+});
+
+const resultado = await client.uploadAndRequestSignatures({
+  source: { filePath: './contrato.pdf' },
+  signers: [
+    { name: 'Signatário Exemplo A', email: 'signatario-a@exemplo.com.br' },
+    { name: 'Signatário Exemplo B', email: 'signatario-b@exemplo.com.br' },
+  ],
+  message: 'Por favor, assine este contrato',
+});
+
+console.log('ID do documento:', resultado.document.id);
+console.log('ID do assignment:', resultado.assignment.id);
+```
+
+Esse caminho usa verificação e notificação por e-mail para todos os signatários. WhatsApp e
+certificado digital ICP-Brasil têm pré-requisitos e custos próprios — veja
+[Ramos pagos de assinatura](#ramos-pagos-de-assinatura) antes de habilitar qualquer um dos dois.
+
+## Autenticação
+
+A API aceita três credenciais. A escolha depende de **em qual workspace** você está agindo.
+
+| Credencial | Age sobre | Use quando |
+| --- | --- | --- |
+| `apiKey` (`X-Api-Key`) | **Seu próprio** workspace | Você automatiza a sua conta. Recomendada para serviços de back-end. |
+| `token` (`Authorization: Bearer`) | O usuário autenticado | Você obteve uma sessão com `auth.login()`. |
+| Token de acesso OAuth (`Authorization: Bearer`) | O workspace **de outra pessoa**, com autorização dela | Você constrói um app que outras pessoas conectam. Veja [Aplicações OAuth](#aplicações-oauth). |
+
+Prefira `apiKey` para integração servidor a servidor — corresponde ao header `X-Api-Key`
+recomendado pela Assinafy.
+
+```ts
+// Preferido: header X-Api-Key
+new AssinafyClient({ apiKey: 'k_xxx', accountId: 'acc_xxx' });
+
+// Token de acesso: Authorization: Bearer <token>
+new AssinafyClient({ token: 'jwt_xxx', accountId: 'acc_xxx' });
+```
+
+As credenciais são opcionais na construção. Um cliente sem credenciais usa um transporte separado,
+sem autenticação, para as operações públicas e as que usam código de acesso do signatário — assim
+uma chave de API ou token Bearer nunca é anexada por acidente:
+
+```ts
+const clientePublico = new AssinafyClient({
+  baseUrl: 'https://api.assinafy.com.br/v1',
+});
+
+await clientePublico.auth.login('eu@exemplo.com.br', 'senha');
+await clientePublico.documents.getPublic(documentId);
+await clientePublico.signerDocuments.self(signerAccessCode);
+```
+
+Métodos protegidos continuam exigindo `apiKey` ou `token`; sem credencial, a API devolve o `401`
+normal.
+
+Todos os transportes do SDK — inclusive os públicos e os por código de acesso — enviam
+`User-Agent: Assinafy-Typescript-SDK/v<VERSÃO>`, onde `<VERSÃO>` é a versão instalada do pacote. O
+valor exato também é exportado como `SDK_USER_AGENT`.
+
+## Aplicações OAuth
+
+Use OAuth quando o seu produto for conectado **pelos usuários dele** aos workspaces **deles** na
+Assinafy, sem que você jamais tenha a senha ou a chave de API dessas pessoas. Para automatizar o seu
+próprio workspace nada disso é necessário — continue com a chave de API.
+
+Registre a aplicação no app da Assinafy em **Configurações → Aplicações OAuth → Nova aplicação**.
+Você define as URIs de redirecionamento (`https://`, sem fragmento, comparadas caractere a
+caractere), as permissões máximas que a aplicação poderá pedir, e se ela é **confidencial** (roda no
+seu servidor e recebe um `client_secret`) ou **pública** (roda no dispositivo do usuário, só PKCE).
+Aplicações não são criadas pela API.
+
+O fluxo passa por dois hosts de propósito: a tela de consentimento fica no servidor de autorização
+(`https://auth.assinafy.com.br`), enquanto os endpoints de token, revogação e userinfo ficam nesta
+API. Leia os dois da descoberta em vez de fixá-los no código.
+
+```ts
+import { AssinafyClient, ApiError, OAuthError } from '@assinafy/sdk';
+
+const client = new AssinafyClient();                  // nenhuma credencial necessária
+
+// 1 — antes de redirecionar o usuário. Guarde a requisição inteira na sessão dele:
+//     `state` e `issuer` provam que o callback é seu, `codeVerifier` completa o
+//     PKCE e `nonce` valida o id_token.
+const requisicao = await client.oauth.createAuthorizationUrl({
+  clientId: process.env.ASSINAFY_CLIENT_ID!,
+  redirectUri: 'https://meuapp.exemplo.com.br/oauth/callback',
+  scopes: ['documents:read', 'documents:write', 'offline_access'],
+});
+sessao.oauth = requisicao;
+resposta.redirect(requisicao.url);                    // navegação de página inteira
+
+// 2 — em https://meuapp.exemplo.com.br/oauth/callback
+const { code } = client.oauth.readAuthorizationCallback(query, sessao.oauth);
+const tokens = await client.oauth.exchangeCode({
+  code,
+  codeVerifier: sessao.oauth.codeVerifier,
+  redirectUri: 'https://meuapp.exemplo.com.br/oauth/callback',
+  clientId: process.env.ASSINAFY_CLIENT_ID!,
+  clientSecret: process.env.ASSINAFY_CLIENT_SECRET!,   // só aplicações confidenciais
+});
+// → { access_token, token_type: 'Bearer', expires_in: 3600,
+//     scope: 'documents:read documents:write',
+//     refresh_token?, id_token? }
+
+// 3 — um token vale para EXATAMENTE UM workspace: o que o usuário escolheu.
+const conectado = new AssinafyClient({ token: tokens.access_token });
+const { data } = await conectado.workspaces.list();
+const accountId = data[0]?.id;                        // guarde junto com os tokens
+
+// 4 — renove antes de completar uma hora (exige `offline_access`)
+const renovado = await client.oauth.refreshToken({
+  refreshToken: conexao.refreshToken,
+  clientId: process.env.ASSINAFY_CLIENT_ID!,
+  clientSecret: process.env.ASSINAFY_CLIENT_SECRET!,
+});
+await conexao.save({ refreshToken: renovado.refresh_token });  // ANTES de usar
+
+// 5 — quando o usuário desconectar: revogue o token salvo mais recentemente
+const atual = await conexao.load();                   // nunca uma cópia aposentada
+await client.oauth.revokeToken({
+  token: atual.refreshToken,
+  tokenTypeHint: 'refresh_token',
+  clientId: process.env.ASSINAFY_CLIENT_ID!,
+  clientSecret: process.env.ASSINAFY_CLIENT_SECRET!,
+});
+```
+
+Descoberta e identidade, quando precisar:
+
+```ts
+await client.oauth.getProtectedResourceMetadata();    // RFC 9728, na raiz do host da API
+await client.oauth.getAuthorizationServerMetadata();  // RFC 8414, em auth.assinafy.com.br
+await client.oauth.getUserInfo(tokens.access_token);  // claims OIDC; exige `openid`
+```
+
+### Permissões (escopos)
+
+| Escopo | Permite ao seu app |
+| --- | --- |
+| `documents:read` | Ler documentos, seus signatários, assignments e atividades |
+| `documents:write` | Criar documentos e enviá-los para assinatura |
+| `templates:read` | Ler templates |
+| `templates:write` | Criar e alterar templates |
+| `account:read` | Ler perfil, tema e logotipo do workspace |
+| `webhooks:write` | Criar, alterar, inativar e excluir endpoints de webhook do workspace |
+| `openid` | Receber um `id_token` identificando o usuário |
+| `profile` | Ler o nome do usuário |
+| `email` | Ler o e-mail do usuário e se está verificado |
+| `offline_access` | Receber um refresh token |
+
+Peça o mínimo: o usuário aprova todos ou nenhum. Leia o `scope` devolvido pelo endpoint de token em
+vez de supor que o pedido foi atendido por inteiro — `offline_access` nunca aparece ali, porque é um
+sinal de requisição, não uma permissão. Faturamento, membros do workspace, credenciais e
+administração nunca são alcançáveis por um token OAuth, quaisquer que sejam seus escopos.
+
+### O que o SDK garante para você
+
+- Um verificador RFC 7636 (S256) e um `state` novos a cada tentativa.
+- `state` comparado em tempo constante e `iss` conferido (RFC 9207) **antes** de qualquer confiança
+  na resposta.
+- O `issuer` do documento RFC 8414 conferido contra a URL de onde ele veio.
+- `redirect_uri` obrigatoriamente `https://` absoluta e sem fragmento.
+- O indicador de recurso RFC 8707 preenchido com a origem da API configurada e mantido idêntico
+  entre a etapa de autorização e a de token.
+
+### Tratamento de falhas
+
+```ts
+try {
+  await conectado.documents.upload({ filePath: './contrato.pdf' });
+} catch (erro) {
+  if (erro instanceof ApiError && erro.challenge?.error === 'insufficient_scope') {
+    // Reconecte pedindo erro.challenge.scope — por exemplo 'documents:write'.
+  }
+}
+```
+
+| Situação | O que você vê | O que fazer |
+| --- | --- | --- |
+| O usuário recusou | `OAuthError` com `error: 'access_denied'` em `readAuthorizationCallback` | Nada; avise o usuário |
+| Código usado, expirado (60 s) ou divergente | `OAuthError` `invalid_grant` | Recomece o fluxo de autorização |
+| Refresh token reutilizado ou expirado | `OAuthError` `invalid_grant` | A conexão inteira acabou; peça para reconectar |
+| `client_id`/segredo errado, app desativado | `OAuthError` `invalid_client` | Corrija a configuração; repetir não resolve |
+| Token expirado ou revogado | `ApiError` `401` | Renove; se falhar, peça para reconectar |
+| Falta de permissão | `ApiError` `403` com `challenge.error === 'insufficient_scope'` | Reconecte pedindo `challenge.scope` |
+| `403` sem challenge | `ApiError` `403` | Outro workspace, ou área que OAuth não alcança |
+
+Refresh tokens **rotacionam**: cada renovação devolve um novo e aposenta o anterior, e reutilizar um
+token aposentado encerra a conexão inteira. Persista o novo valor antes de usar a resposta, trate um
+timeout como "talvez tenha funcionado" e nunca renove a mesma conexão duas vezes em paralelo. Após
+um timeout, releia o token guardado; se ainda for o enviado, nunca o envie de novo — peça ao
+usuário para reconectar. Só uma falha que comprovadamente ocorreu antes do envio (DNS, conexão
+recusada, handshake TLS) pode ser repetida. Um refresh token vale 30 dias, e cada renovação
+devolve um novo com mais 30 dias: a conexão só expira se o seu app passar 30 dias sem renová-la, e
+aí o usuário precisa conectar de novo. Os endpoints de autorização e token aceitam 50 requisições
+por minuto por IP.
+
+Assistentes de IA como Claude, Claude Code e ChatGPT se conectam à Assinafy pelas próprias
+configurações de conector; seus usuários não precisam que você registre nada para eles.
+
+## Configuração
+
+| Opção           | Tipo     | Padrão                           | Descrição |
+| --------------- | -------- | -------------------------------- | --------- |
+| `apiKey`        | string   | —                                | Credencial preferida (enviada como `X-Api-Key`). |
+| `token`         | string   | —                                | Token de acesso (enviado como `Authorization: Bearer`). Serve também para tokens OAuth. |
+| `accountId`     | string   | —                                | ID padrão da conta / workspace. |
+| `baseUrl`       | string   | `https://api.assinafy.com.br/v1` | Base absoluta da API, sem credenciais, query ou fragmento. Precisa ser `https`, salvo em loopback. |
+| `webhookSecret` | string   | —                                | Segredo `whsec_…` do endpoint de webhook; habilita `webhookVerifier.verifySignature()`. |
+| `timeout`       | number   | `30000`                          | Timeout da requisição, em milissegundos. |
+| `maxRetries`    | number   | `2`                              | Retenta automaticamente respostas `429` elegíveis, respeitando `Retry-After`. `0` desativa. |
+| `logger`        | `Logger` | no-op                            | Logger opcional `{debug,info,warn,error}`. |
+
+### Limite de requisições
+
+Quando as tentativas se esgotam, o `ApiError` traz `err.rateLimit` com `limit`, `remaining`,
+`reset` (de `X-Rate-Limit-*`) e `retryAfter` (`Retry-After`, em segundos).
+
+Em um HTTP `429` o cliente retenta até `maxRetries` vezes, aguardando o `Retry-After` (ou
+`X-Rate-Limit-Reset`) devolvido pelo servidor antes de cada tentativa. A repetição automática vale
+apenas para `GET`, `HEAD`, `OPTIONS` e `DELETE`, que são seguros de repetir. `GET /sign` fica de
+fora porque registra que o signatário visualizou o assignment. Escritas não são repetidas por
+padrão. Um `Idempotency-Key` não vazio inscreve uma requisição customizada na repetição do SDK, mas
+ele **não** faz parte do contrato OpenAPI atual: confirme antes que a rota alvo de fato deduplica
+essa chave no servidor. Nenhum outro status é retentado.
+
+### Fábricas
+
+```ts
+// Fábrica posicional
+const client = AssinafyClient.create('chave-de-api', 'id-da-conta');
+
+// A partir de um objeto simples (aceita chaves snake_case ou camelCase)
+const client = AssinafyClient.fromConfig({
+  api_key: process.env.ASSINAFY_API_KEY!,
+  account_id: process.env.ASSINAFY_ACCOUNT_ID!,
+});
+```
+
+O objeto aceito por `fromConfig` tem o tipo exportado `ClientConfigInput`.
+
+## Cobertura de endpoints
+
+As 118 operações documentadas em https://api.assinafy.com.br/v1/docs estão cobertas. A tabela abaixo
+é o resumo por recurso; o mapa detalhado por operação está em
+[API_COVERAGE.md](API_COVERAGE.md).
+
+| Recurso | Endpoints |
+| --- | --- |
+| `client.documents` | list, search, upload, details, get, rename, activities, listActivities, waitUntilReady, download, thumbnail, downloadPage, statuses, delete, verify, createFromTemplate, estimateCostFromTemplate, getPublic, sendToken, listTags, replaceTags, addTags, detachTag, isFullySigned, getSigningProgress |
+| `client.signers` | create, get, list, update, delete, findByEmail |
+| `client.assignments` | list, create, estimateCost, resetExpiration, resendNotification, estimateResendCost, listWhatsAppNotifications, getIdentityVerification, downloadIdentityVerificationImage, reviewIdentityVerification |
+| `client.contracts` | list, get, set, listRelated, renew, terminate |
+| `client.templates` | create, list, get, update, delete, downloadPage |
+| `client.tags` | list, create, update, delete |
+| `client.workspaces` | create, list, get, update, delete, getTheme, downloadLogo, uploadLogo, deleteLogo, getStats |
+| `client.webhooks` | listEndpoints, createEndpoint, getEndpoint, updateEndpoint, deleteEndpoint, deleteEndpointByUrl, getEndpointSecret, rotateEndpointSecret, register, get, inactivate, listEventTypes, listDispatches, retryDispatch |
+| `client.fields` | create, list, get, update, delete, validate, validateMultiple, listTypes |
+| `client.oauth` | **getProtectedResourceMetadata**, **getAuthorizationServerMetadata**, **createAuthorizationUrl**, **readAuthorizationCallback**, **exchangeCode**, **refreshToken**, **revokeToken**, **getUserInfo** |
+| `client.auth` | getSocialLoginUrl, getSocialLoginCallbackUrl, login, verifyMfa, socialLogin, linkSocialLogin, createApiKey, getApiKey, deleteApiKey, changePassword, requestPasswordReset, resetPassword |
+| `client.users` | getCurrent, getStats, getNotificationPreferences, updateNotificationPreferences, getMfa, startTotpEnrollment, confirmTotpEnrollment, regenerateRecoveryCodes, deleteMfaMethod |
+| `client.signerDocuments` | getCurrent, list, search, listAsWorkspace, searchAsWorkspace, download, signMultiple, declineMultiple, self, getIdentityVerification, startIdentityVerification, acceptTerms, verifyEmail, confirmData, uploadSignature, downloadSignature, getAssignment, sign, decline |
+| `client.webhookVerifier` | verifySignature, extractEvent, getEventType, getEventData |
+
+Todo wrapper HTTP tem tipos de requisição e resposta verificados pelo TypeScript e JSDoc por método,
+cobrindo o payload de rede, o formato de retorno, validação, erros relevantes da API e um exemplo
+copiável. As declarações acompanham o pacote.
+
+## Ciclo de vida do documento
+
+A integração normal tem uma fase do dono da conta, uma fase do signatário e uma fase final de
+artefatos. O exemplo abaixo mantém todos os signatários no e-mail e usa um assignment `virtual`,
+então não exige coordenadas de página nem canal pago de notificação.
+
+### 1. Selecione o workspace
+
+Toda operação com escopo de conta acontece dentro de um workspace. Com chave de API, informe o
+`accountId` ao construir o cliente (ou como último argumento de cada método com escopo de conta).
+Com OAuth, liste os workspaces do usuário e guarde o `id` do escolhido junto com os tokens — um
+token vale para exatamente um workspace (veja [Aplicações OAuth](#aplicações-oauth)):
+
+```ts
+const { data: workspaces } = await client.workspaces.list();
+const accountId = workspaces[0]?.id;      // ex.: new AssinafyClient({ apiKey, accountId })
+```
+
+Os exemplos abaixo assumem um `client` já apontando para o workspace escolhido.
+
+### 2. Envie o PDF
+
+```ts
+const enviado = await client.documents.upload({ filePath: './contrato.pdf' });
+```
+
+O corpo multipart oficial contém a parte `file`. O SDK também aceita um nome de exibição (usado como
+nome de arquivo dessa parte) e uma parte JSON `metadata` opcional, para deploys que a aceitem. A
+resposta de sucesso é `IDocumentUploadResponse`:
+
+```ts
+type DocumentUploadShape = {
+  resource?: string;
+  id: string;
+  account_id: string;
+  template_id: string | null;
+  name: string;
+  status: DocumentStatus;
+  assignment?: IAssignment | null;
+  artifacts: {
+    original: string;
+    certificated?: string;
+    'certificate-page'?: string;
+    pades?: string;
+    bundle?: string;
+    thumbnail?: string;
+  };
+  signing_url?: string;
+  pages: Array<{ id: string; number: number; height: number; width: number; download_url: string }>;
+  tags?: Array<{ id: string; name: string; color?: string | null }>;
+  created_at: string;
+  updated_at: string;
+  is_closed: boolean;
+  decline_reason: string | null;
+  declined_by: ISigner | null;
+};
+```
+
+`DocumentStatus` cobre `uploading`, `uploaded`, `metadata_processing`, `metadata_ready`,
+`pending_signature`, `pending_identity_review`, `expired`, `certificating`, `certificated`, `rejected_by_signer`,
+`rejected_by_user` e `failed`.
+
+O envio precisa ser um PDF de no máximo 25 MB e 2.000 páginas (o limite em bytes está exportado
+como `MAX_UPLOAD_BYTES`). O SDK confere extensão, tamanho e o
+cabeçalho `%PDF-` antes de enviar. Um upload novo pode ter `pages` vazio até o processamento de
+metadados terminar. Espere antes de criar um assignment `collect`, porque seus campos referenciam
+IDs de páginas renderizadas; um assignment `virtual` pode ser criado imediatamente.
+
+```ts
+const preparado = await client.documents.waitUntilReady(enviado.id, {
+  maxWaitMs: 30_000,
+  pollIntervalMs: 2_000,
+});
+```
+
+### 3. Crie ou reaproveite os signatários por e-mail
+
+```ts
+const signatarioA = await client.signers.create({
+  full_name: 'Signatário Exemplo A',
+  email: 'signatario-a@exemplo.com.br',
+});
+const signatarioB = await client.signers.create({
+  full_name: 'Signatário Exemplo B',
+  email: 'signatario-b@exemplo.com.br',
+});
+```
+
+O corpo de rede é `{ full_name, email }`. Cada resposta é um `ISigner`:
+
+```ts
+type SignerShape = {
+  resource?: string;
+  id: string;
+  full_name: string;
+  email: string | null;
+  whatsapp_phone_number?: string | null;
+  cpf?: string | null;                // tipo de compatibilidade; a API não devolve
+  has_accepted_terms?: boolean;
+  has_signature?: boolean;            // só na resposta de signers/self
+  has_initial?: boolean;              // só na resposta de signers/self
+  is_signature_reusable?: boolean;    // só na resposta de signers/self
+  metadata?: Record<string, unknown>;
+};
+```
+
+Quando há e-mail, `signers.create()` primeiro procura esse endereço no workspace e reaproveita o
+signatário correspondente; uma requisição só com nome ou só com telefone sempre cria um novo.
+
+### 4. Orce, depois peça as assinaturas
+
+A estimativa de custo recebe descritores de canal, não IDs de signatário:
+
+```ts
+const estimativa = await client.assignments.estimateCost(enviado.id, {
+  method: 'virtual',
+  signers: [{}, {}], // `{}` seleciona Email para cada signatário
+});
+
+if (!estimativa.has_sufficient_resources) {
+  throw new Error(estimativa.blocking_reason ?? estimativa.message ?? 'Recursos insuficientes');
+}
+```
+
+A resposta é `ICostEstimate`:
+
+```ts
+{
+  documents: number;
+  credits: number;
+  needs_extra_document: boolean;
+  extra_document_cost: number;
+  total_credits: number;
+  breakdown: Array<{ code: string; name: string; cost: number; quantity?: number; unit_cost?: number }>;
+  document_balance: number;
+  credit_balance: number;
+  has_sufficient_resources: boolean;
+  blocking_reason: 'PendingPayment' | 'InsufficientDocuments' | 'InsufficientCredits' | null;
+  message: string | null;
+}
+```
+
+Crie o assignment por e-mail só depois de aceitar essa estimativa:
+
+```ts
+const assignment = await client.assignments.create(enviado.id, {
+  method: 'virtual',
+  signers: [
+    { id: signatarioA.id, verification_method: 'Email', notification_methods: ['Email'] },
+    { id: signatarioB.id, verification_method: 'Email', notification_methods: ['Email'] },
+  ],
+  message: 'Por favor, revise e assine',
+  expires_at: '2027-12-31T23:59:00Z',
+});
+```
+
+A requisição devolve um `IAssignment`:
+
+```ts
+type AssignmentShape = {
+  resource?: string;
+  id: string;
+  sender_email?: string;
+  method: 'virtual' | 'collect';
+  expires_at?: string | null;
+  expiration?: string;
+  message?: string | null;
+  signers: IAssignmentSigner[];
+  copy_receivers?: Array<Record<string, unknown>>;
+  items?: IAssignmentItem[];
+  summary?: {
+    signer_count: number;
+    completed_count: number;
+    signers: Array<ISigner & { completed?: boolean }>;
+  };
+  signing_urls?: Array<{ signer_id: string; url: string }>;
+};
+```
+
+As URLs e as mensagens entregues contêm credenciais do signatário; trate-as como segredo.
+
+### 5. Conclua o fluxo do signatário por e-mail
+
+A Assinafy envia a cada signatário um link com o código de acesso dele e manda o código de
+verificação de uso único pelo canal escolhido. Nenhum dos dois valores é devolvido como campo
+autônomo do lado do dono da conta. Um portal de assinatura próprio precisa obter os dois pelo fluxo
+de entrega ao signatário; não os fabrique nem os registre em log.
+
+```ts
+// Cliente do signatário: nenhuma credencial da conta é necessária nem enviada.
+const clienteSignatario = new AssinafyClient({ baseUrl });
+
+const self = await clienteSignatario.signerDocuments.self(accessCode); // ISignerSelf
+
+// Query: signer-access-code=<accessCode>
+// Corpo: { 'verification-code': '<código de seis dígitos>' }
+await clienteSignatario.signerDocuments.verifyEmail({
+  signerAccessCode: accessCode,
+  verificationCode,
+}); // Promise<void>
+
+const confirmado = await clienteSignatario.signerDocuments.confirmData(
+  enviado.id,
+  accessCode,
+  { full_name: self.full_name, ...(self.email === null ? {} : { email: self.email }) },
+); // ISigner
+
+const assinavel = await clienteSignatario.signerDocuments.getAssignment(accessCode, true);
+// `getAssignment` devolve IDocumentDetailsResponse e registra que o signatário
+// visualizou o assignment. Não use como simples healthcheck.
+
+await clienteSignatario.signerDocuments.signMultiple([assinavel.id], accessCode);
+// Corpo de rede: { document_ids: [assinavel.id] }; o reconhecimento não traz dados.
+```
+
+Repita esta fase separadamente para cada signatário, com o código de acesso e o código de uso único
+dele. Os dois signatários deste exemplo compartilham o passo padrão e podem assinar em paralelo.
+
+`signMultiple` serve apenas a assignments `virtual`. Para `collect`, leia `assinavel.assignment.items`
+e chame `sign(documentId, assignmentId, accessCode, entries)` com um array não vazio de
+`{ itemId, fieldId, pageId, value }`. Um signatário virtual precisa confirmar os dados antes de
+assinar. Um signatário `DigitalCertificate` não pode usar `sign`; esse ramo passa pelo fluxo de
+certificado da Assinafy, descrito em
+[Certificado digital ICP-Brasil](#certificado-digital-icp-brasil).
+
+#### Ramo de verificação do documento de identidade
+
+Para um assignment separado com `verification_method:
+'IdDocumentFaceMatchBasic'`, habilite **ID Document + Face Match** e cadastre
+um CPF válido no `government_id` do signatário. Os dois canais de notificação
+são aceitos; estime o custo antes de criar o assignment.
+`self.verification_method` informa ao portal que deve usar este ramo em vez
+da etapa de código de uso único por e-mail/WhatsApp.
+
+```ts
+const estado = await clienteSignatario.signerDocuments.getIdentityVerification(accessCode);
+// Somente após consentimento explícito do signatário para o tratamento biométrico:
+if (estado.can_start && signatarioConsentiu) {
+  const captura = await clienteSignatario.signerDocuments.startIdentityVerification(
+    accessCode, { consent: true },
+  );
+  response.redirect(captura.url); // preserve o fragmento; não registre nem armazene esta URL credencial
+}
+```
+
+Uma sessão `Pending` existente expõe o link de captura em `estado.url`.
+Só a ausência de sessão ou `Expired` permite iniciar outra; `Declined` e
+`Abandoned` exigem novo documento/assignment. O simples vencimento de
+`expires_at` não autoriza reinício. Em `Approved` ou `InReview`, continue
+com confirmação dos dados/termos e assinatura. `InReview` segura a
+certificação; depois que todos assinam, o documento fica
+`pending_identity_review`.
+
+```ts
+// Lado da conta, com credenciais do workspace:
+const revisao = await client.assignments.getIdentityVerification(documentId, assignmentId, signerId);
+const imagem = revisao.images[0];
+if (imagem) {
+  const bytes = await client.assignments.downloadIdentityVerificationImage(documentId, assignmentId, signerId, imagem);
+  // Exiba ao revisor autorizado sem cache nem log das evidências.
+}
+// Envie somente a decisão explícita do revisor da conta:
+await client.assignments.reviewIdentityVerification(documentId, assignmentId, signerId, {
+  decision: 'Approved', note: 'Identidade conferida independentemente.',
+});
+```
+
+A aprovação permite certificar depois de todas as assinaturas e aprovações.
+`Rejected` cancela o documento e notifica signatários e destinatários de cópia;
+a nota opcional (até 2000 caracteres, ou null) não é mostrada a eles.
+As imagens só ficam disponíveis em `InReview`.
+
+### 6. Acompanhe a conclusão e baixe os artefatos
+
+Assine o evento `document_ready` para saber da conclusão por evento — em um endpoint com
+`signing_enabled`, [verifique a assinatura](#verificação-de-webhooks) de cada entrega antes de
+processá-la — ou consulte `documents.details(documentId)` até `status === 'certificated'`. As
+entregas de webhook podem se repetir — use o cabeçalho `webhook-id` como chave de idempotência.
+Concluído:
+
+```ts
+const documentoFinal = await client.documents.details(enviado.id);
+const pdfAssinado = await client.documents.download(enviado.id, 'certificated');
+const paginaCertificado = await client.documents.download(enviado.id, 'certificate-page');
+const pacoteZip = await client.documents.download(enviado.id, 'bundle');
+
+// Valide um hash de assinatura Assinafy que o seu fluxo tenha extraído.
+const validacao = await client.documents.verify(documentSignatureHash);
+```
+
+`original`, `certificated` e `certificate-page` são PDFs. `bundle` é um ZIP com esses três artefatos
+e também o `pades` quando o documento teve signatário por certificado ICP-Brasil. O PDF `pades`
+existe apenas nesses documentos. Um artefato pode devolver `404` antes de terminar de ser gerado.
+`decline_reason` só aparece nos detalhes do documento quando o token pertence a quem criou o
+documento.
+
+## Referência de recursos
+
+A maioria dos métodos com escopo de conta aceita um `accountId` opcional que sobrepõe o padrão do
+cliente. Os métodos de workspace `get`, `update`, `delete`, identidade visual e estatísticas sempre
+exigem um ID de conta explícito.
+
+### Documentos
+
+```ts
+// Envio a partir de um caminho de arquivo (recomendado)
+const doc = await client.documents.upload(
+  { filePath: './contrato.pdf' },
+  { name: 'Contrato de prestação', metadata: { tipo: 'servico' } },
+);
+// `metadata` é uma parte multipart de compatibilidade fora do schema oficial.
+// `name` define o nome do arquivo na parte multipart; não é enviado como campo
+// separado. Se omitido, usa o nome do arquivo original. A API acrescenta
+// `.pdf` quando falta, então o documento acima é salvo como
+// 'Contrato de prestação.pdf'. A API translitera acentos
+// ('Contrato de Serviço' → 'Contrato de Servico.pdf').
+// → {
+//   resource: 'document', id: '1031…', account_id: '102d…', template_id: null,
+//   name: 'Contrato de prestacao.pdf', status: 'uploaded',
+//   artifacts: { original: 'https://…/download/original' },
+//   signing_url: 'https://app…/sign/1031…',
+//   pages: [],                 // preenchido quando o status chega a `metadata_ready`
+//   tags: [], is_closed: false, created_at: '2026-…', updated_at: '2026-…'
+// }
+
+// …ou a partir de um Buffer já em memória
+await client.documents.upload({ buffer, fileName: 'contrato.pdf' });
+
+// Listagem → { data: IDocumentListItem[], meta?: { current_page, per_page, total, last_page } }
+const { data, meta } = await client.documents.list({ page: 1, 'per-page': 20, sort: 'updated_at' });
+
+// `search` é a alternativa leve a `list`: mesmo formato de item, mas a API não
+// expande `assignment`/`pages`. Prefira-a para buscar por nome.
+const achados = await client.documents.search({ search: 'contrato', status: 'pending_signature', 'per-page': 20 });
+
+await client.documents.details(doc.id);
+// Produção: página 2 de atividades, mais antigas primeiro; retorna um array.
+await client.documents.activities(doc.id, { page: 2, 'per-page': 100, sort: 'id' });
+// Use listActivities para { data, meta }, incluindo total e last_page.
+await client.documents.listActivities(doc.id, { page: 2, 'per-page': 100, sort: 'id' });
+await client.documents.waitUntilReady(doc.id, { maxWaitMs: 30_000 });
+
+// Renomear. A API responde 400 enquanto o documento está em
+// `metadata_processing`, então chame waitUntilReady() antes em um upload novo.
+// (Passar `name` ao upload() evita tanto a ida extra quanto a corrida.)
+await client.documents.rename(doc.id, 'Contrato assinado.pdf');
+
+await client.documents.download(doc.id, 'certificated');    // PDF assinado
+await client.documents.download(doc.id, 'certificate-page');
+await client.documents.download(doc.id, 'bundle');          // ZIP
+// `pades` existe apenas quando algum signatário usou DigitalCertificate.
+await client.documents.download(doc.id, 'pades');
+await client.documents.thumbnail(doc.id);
+await client.documents.downloadPage(doc.id, pageId);
+
+await client.documents.statuses();                          // todos os códigos de status + flag deletable
+await client.documents.isFullySigned(doc.id);
+await client.documents.getSigningProgress(doc.id);
+await client.documents.delete(doc.id);
+
+// Verifique um documento assinado pelo hash de assinatura Assinafy
+await client.documents.verify('FE32EDDADE7CBDDCBB934E7402047450B0E59C02');
+
+// Endpoints públicos (sem autenticação)
+await client.documents.getPublic(doc.id);
+// Corpo: { channel: 'email', recipient: 'signer@example.com' } (só e-mail)
+await client.documents.sendToken(doc.id, 'signer@example.com');
+
+// O contrato OpenAPI atual exige IDs de tags já existentes.
+const tagContratos = await client.tags.create({ name: 'Contratos' });
+const tagTrimestre = await client.tags.create({ name: '2026-T1' });
+const tagUrgente = await client.tags.create({ name: 'Urgente' });
+await client.documents.listTags(doc.id);
+await client.documents.replaceTags(doc.id, [tagContratos.id, tagTrimestre.id]); // [] desanexa tudo
+await client.documents.addTags(doc.id, [tagUrgente.id]);                          // acrescenta
+await client.documents.detachTag(doc.id, tagUrgente.id); // → { detached: true }
+```
+
+Os uploads são validados localmente: só arquivos `.pdf` de até 25 MB cujos bytes começam com o
+cabeçalho mágico (`%PDF-`) são aceitos. A API também limita o documento a 2.000 páginas.
+
+As URLs de página e de artefato embutidas nas respostas JSON continuam exigindo a mesma autenticação
+de conta das operações de download. Prefira `documents.downloadPage()` e `documents.download()`,
+que aplicam a credencial e devolvem um `Buffer`. `bundle` contém `original`, `certificated` e
+`certificate-page`, mais o `pades` quando existir.
+
+As listagens devolvem `{ data, meta }`, com `meta` preenchido a partir dos headers
+`X-Pagination-*`. Dois comportamentos da API merecem atenção porque são silenciosos, não erros:
+
+- Só o `per-page` com hífen é lido. `per_page` é aceito e ignorado, caindo para 20 linhas — por isso
+  o SDK reescreve `per_page` como `per-page` em toda listagem, e um `per-page` explícito vence
+  quando os dois são enviados.
+- Nas listagens de documentos e signatários, observou-se um limite de **50** para `per-page`.
+  Nesses ambientes, pedir 100 devolve 50 linhas com `200`. A constante exportada
+  `MAX_LIST_PAGE_SIZE` é esse teto observado; pagine com `page` em vez de pedir páginas maiores, e confie no
+  `meta.per_page` mais do que no valor pedido.
+
+`documents.activities(documentId, params?)` mantém o retorno como array; use
+`documents.listActivities()` para obter `{ data, meta }` com os metadados de paginação.
+Em produção, esses métodos retornam **20 entradas por página** por padrão, com
+máximo documentado de **100** para `per-page`. Use `page` para buscar as próximas entradas;
+um array vazio indica o fim. `sort: 'id'` retorna as mais antigas primeiro, e `sort: '-id'`
+(padrão), as mais recentes. O sandbox ainda retorna o histórico completo, sem paginação,
+e pode ignorar esses parâmetros; por isso, não percorra páginas em loop nesse ambiente.
+Integrações que liam o histórico completo em uma requisição precisam agora buscar
+as páginas seguintes. Veja o [exemplo de migração](COMPATIBILITY.md#document-activities).
+
+### Gestão do ciclo de vida de contratos (CLM)
+
+A gestão do ciclo de vida de contratos (CLM) acompanha os termos comerciais ligados a um documento
+existente sem mudar como ele é enviado ou assinado. A API de produção suporta o fluxo completo
+abaixo; o sandbox pode demorar a disponibilizar uma rota nova de CLM ou o recurso do plano (veja as
+[notas de compatibilidade](COMPATIBILITY.md#contract-lifecycle-management-clm)).
+
+```ts
+// 1. Envie ou selecione o documento do contrato e registre seus termos.
+const documento = await client.documents.upload({ filePath: './contrato.pdf' });
+const contrato = await client.contracts.set(documento.id, {
+  status: 'active',
+  counterparty_name: 'Empresa Exemplo Ltda',
+  counterparty_taxpayer_id: '11.222.333/0001-81',
+  value: 120000.50,
+  currency: 'BRL',
+  start_date: '2026-11-01',
+  end_date: '2027-10-31',
+  auto_renew: true,
+  renewal_term_months: 12,
+  notice_period_days: 30,
+  metadata: { etapa_crm: 'ganho' },
+  external_references: [{ system: 'crm', id: '98765' }],
+});
+
+// 2. Leia ou sincronize a carteira. `updated_at` muda após toda alteração.
+const atual = await client.contracts.get(documento.id);
+const vencendo = await client.contracts.list({
+  status: ['active'],
+  ending_within_days: 30,
+  sort: 'end_date',
+  expand: 'document',
+});
+
+// 3. Envie o valor lido para rejeitar uma edição concorrente com HTTP 409.
+if (atual.resource === 'document_contract') {
+  await client.contracts.set(documento.id, {
+    notice_period_days: 60,
+    updated_at: atual.updated_at,
+  });
+}
+
+// 4. Um aditivo assinado é outro documento ligado ao contrato raiz.
+const aditivo = await client.documents.upload({ filePath: './aditivo.pdf' });
+await client.contracts.set(aditivo.id, {
+  parent_document_id: documento.id,
+  relation_type: 'amendment',
+  value: 130000,
+  end_date: '2028-06-30',
+});
+// Envie e assine `aditivo` pelo fluxo normal de assignment. O delta é aplicado
+// ao contrato raiz depois da certificação; consulte a família completa assim:
+const familia = await client.contracts.listRelated(aditivo.id);
+
+// 5. Inicie um novo termo diretamente ou encerre o ciclo de vida.
+const renovado = await client.contracts.renew(documento.id, {
+  term: familia.term,
+  value: 135000,
+  updated_at: familia.updated_at,
+});
+await client.contracts.terminate(documento.id, {
+  reason: 'Substituído por um novo contrato',
+  updated_at: renovado.updated_at,
+});
+```
+
+As escritas exigem `documents:write` no OAuth e um plano com gestão de contratos. As leituras
+exigem `documents:read` e continuam disponíveis se o plano deixar de incluir o recurso. O ciclo
+horário emite notificações de aviso de renovação, proximidade do vencimento, vencimento e renovação;
+configure as preferências do responsável e assine os eventos de webhook correspondentes:
+
+```ts
+await client.users.updateNotificationPreferences({
+  ContractRenewalNotice: true,
+  ContractExpiring: true,
+  ContractExpired: true,
+  ContractRenewed: true,
+});
+
+await client.webhooks.createEndpoint({
+  url: 'https://exemplo.com.br/webhooks/assinafy',
+  email: 'operacoes@exemplo.com.br',
+  events: [
+    'document_contract_updated',
+    'document_contract_renewal_notice',
+    'document_contract_expiring',
+    'document_contract_expired',
+    'document_contract_renewed',
+    'document_contract_terminated',
+    'document_contract_amended',
+    'document_contract_amendment_updated',
+  ],
+});
+```
+
+`set()`, `renew()` e `terminate()` não são repetidos automaticamente. Se a resposta se perder,
+leia o contrato de novo: `updated_at`, o `term` atual e a data explícita de renovação fornecem as
+proteções de concorrência e repetição documentadas pela API.
+
+### Signatários
+
+```ts
+await client.signers.create({
+  full_name: 'Signatário Exemplo',
+  email: 'signatario@exemplo.com.br',
+  cpf: '123.456.789-00', // entrada de compatibilidade; não dígitos são removidos
+});
+// → { id: '19e6…', full_name: 'Signatário Exemplo', email: 'signatario@exemplo.com.br',
+//     whatsapp_phone_number: null, has_accepted_terms: false }
+// (observação: `cpf` é aceito na entrada, mas a API nunca o devolve)
+
+// Ambos os contatos são opcionais. Um signatário só com nome não pode ser
+// notificado até que um contato seja adicionado.
+await client.signers.create({ full_name: 'Contato Pendente' });
+
+await client.signers.get(signerId);
+await client.signers.list({ page: 1, 'per-page': 50, search: 'signatario' });
+await client.signers.update(signerId, {
+  full_name: 'Signatário Atualizado',
+  government_id: '390.533.447-05', // campo oficial de atualização; enviado só com dígitos
+});
+await client.signers.delete(signerId);
+
+const existente = await client.signers.findByEmail('signatario@exemplo.com.br');
+```
+
+Quando um `email` é informado, `signers.create()` é idempotente por e-mail: reaproveita o signatário
+existente com o mesmo endereço no workspace. Signatários sem e-mail são sempre criados do zero. Veja
+[Ramos pagos de assinatura](#ramos-pagos-de-assinatura) para signatários só com telefone.
+
+### Assignments
+
+```ts
+// Lista todos os assignments do workspace.
+// → { data: IAssignment[], meta?: { current_page, per_page, total, last_page } }
+const { data, meta } = await client.assignments.list({ page: 1, 'per-page': 20 });
+
+// Signatários podem ser ids ou objetos — o SDK normaliza para o formato da API.
+await client.assignments.create(documentId, {
+  method: 'virtual',
+  signers: ['signer-1', 'signer-2'],
+  message: 'Por favor, revise e assine',
+  expires_at: '2027-12-31T23:59:00Z',
+  copy_receivers: ['id-do-signatario-em-copia'],
+});
+
+// Assinatura sequencial: `step` controla a ordem (paralelo dentro de um passo).
+await client.assignments.create(documentId, {
+  method: 'virtual',
+  signers: [
+    { id: 'signer-1', step: 1 },
+    { id: 'signer-2', step: 2 }, // notificado só depois que o passo 1 terminar
+  ],
+});
+
+// Campos de `collect` usam pixels da imagem de página a 150 DPI, medidos do canto superior esquerdo.
+await client.assignments.create(documentId, {
+  method: 'collect',
+  signers: [{ id: signerId }],
+  entries: [{
+    page_id: pageId,
+    fields: [{
+      signer_id: signerId,
+      field_id: fieldId,
+      display_settings: {
+        left: 69, top: 282, width: 421, height: 45.86, fontSize: 22,
+        fontFamily: 'Arial', backgroundColor: '#D5EBFF',
+      },
+    }],
+  }],
+});
+```
+
+Para montar o corpo de um assignment fora do cliente — por exemplo, para inspecioná-lo antes do
+envio — use o helper exportado `buildAssignmentPayload()`, que aplica as mesmas validações e
+normalizações de `create()`.
+
+```ts
+// Estimativa de custo (o endpoint orça descritores de canal, não IDs) → ICostEstimate
+await client.assignments.estimateCost(documentId, { signers: [{}] }); // Email padrão
+// → {
+//   documents: 1, credits: 0, needs_extra_document: false, extra_document_cost: 0,
+//   total_credits: 0, breakdown: [], document_balance: 67, credit_balance: 0,
+//   has_sufficient_resources: true, blocking_reason: null, message: null
+// }
+
+await client.assignments.resetExpiration(documentId, assignmentId, '2027-06-30T00:00:00Z');
+// A chave `expires_at` é exigida pelo contrato; envie `null` para remover a expiração.
+// Valores só com data terminam às 23:59 UTC; data/hora sem offset é UTC.
+await client.assignments.resetExpiration(documentId, assignmentId, null);
+
+await client.assignments.resendNotification(documentId, assignmentId, signerId);
+// → { is_sent: true, document_id: '…', signer_id: '…' }
+
+const custoReenvio = await client.assignments.estimateResendCost(documentId, assignmentId, signerId);
+// Resposta oficial: ICostEstimate. Deploys antigos podem devolver o ramo compacto
+// IResendCostEstimate, com `total` e `has_sufficient_credits`; estreite com
+// `'total_credits' in custoReenvio` antes de ler campos específicos de um ramo.
+```
+
+A resposta de `create` é um `IAssignment`: `{ id, method, signers: [...],
+items: [{ display_settings, ... }], signing_urls: [{ signer_id, url }], … }`.
+
+Por compatibilidade, o SDK também aceita os payloads antigos `signer_ids` e `signerIds` e os
+reescreve no formato atual `signers: [{ id }]` esperado pela API.
+
+**Cancelar um pedido de assinatura.** A Assinafy não tem endpoint de cancelamento do lado do
+workspace. Para interromper um pedido pendente, apague o documento (quando o status permitir) ou
+peça que o signatário recuse:
+
+```ts
+await client.documents.delete(documentId);                                       // lado do workspace
+await client.signerDocuments.decline(documentId, assignmentId, accessCode, 'Não é mais necessário'); // lado do signatário
+```
+
+### Ramos pagos de assinatura
+
+Mantenha o fluxo por e-mail como padrão. Habilite os ramos abaixo apenas depois de confirmar que a
+conta tem o plano ou recurso necessário e que a estimativa de custo é aceitável.
+
+O método de verificação e o de notificação são **acoplados**: envie um, os dois ou nenhum — o lado
+que faltar é inferido. Sem nenhum dos dois, ambos assumem `Email`.
+
+| Verificação | Como o signatário prova quem é | Notificação permitida | Custo por signatário |
+| --- | --- | --- | --- |
+| `Email` *(padrão)* | Código de uso único (OTP) por e-mail | `Email` | Gratuito |
+| `Whatsapp` | Código de uso único (OTP) por WhatsApp | `Whatsapp` | 0,45 crédito (a notificação), só em planos pagos |
+| `DigitalCertificate` | O signatário assina com o **próprio certificado ICP-Brasil — A1 ou A3 —** pela extensão Web PKI, gerando uma assinatura **PAdES qualificada**; exige `method: 'virtual'` | `Email` **ou** `Whatsapp` | 0,5 crédito + a notificação |
+| `IdDocumentFaceMatchBasic` | Documento de identidade, foto e prova de vida em sessão hospedada | `Email` **ou** `Whatsapp` | Consulte `estimateCost()` |
+
+Apenas um método de notificação por signatário. O SDK recusa uma combinação inválida antes da
+requisição; a API responderia `400`.
+
+#### Verificação e notificação por WhatsApp
+
+Disponível apenas em assinaturas pagas, a 0,45 crédito por notificação. Crie um signatário só com
+telefone (ou adicione telefone a um existente) e peça o canal `Whatsapp` explicitamente:
+
+```ts
+const signatarioTelefone = await client.signers.create({
+  full_name: 'Signatário Mobile',
+  whatsapp_phone_number: '+5511999990000',
+});
+
+const custoWhatsapp = await client.assignments.estimateCost(documentId, {
+  method: 'virtual',
+  signers: [{ verification_method: 'Whatsapp', notification_methods: ['Whatsapp'] }],
+});
+
+const assignmentWhatsapp = await client.assignments.create(documentId, {
+  method: 'virtual',
+  signers: [{
+    id: signatarioTelefone.id,
+    verification_method: 'Whatsapp',
+    notification_methods: ['Whatsapp'],
+  }],
+});
+
+const avisos = await client.assignments.listWhatsAppNotifications(
+  documentId,
+  assignmentWhatsapp.id,
+);
+// IWhatsAppNotification[]:
+// [{ sent_at, header, body, buttons: [{ text, url? }], phone_number, signer_id }]
+```
+
+O helper de alto nível escolhe esse ramo pago automaticamente para um signatário que tenha telefone
+e não tenha e-mail. As URLs dos botões podem conter credenciais do signatário — não registre em log
+nem encaminhe fora do fluxo de assinatura.
+
+#### Certificado digital ICP-Brasil
+
+`DigitalCertificate` exige `method: 'virtual'`, o recurso **Certificado Digital** na conta (planos
+Standard e Pro), CPF ou CNPJ em `government_id` do signatário, e exatamente **um signatário por
+certificado naquele passo de assinatura**. Custa 0,5 crédito por signatário, além do custo da
+notificação escolhida. O fluxo por certificado conclui o item virtual do signatário; ele não consegue
+enviar campos posicionados pelo endpoint comum de assinatura `collect`.
+
+O SDK rejeita signatários por certificado em assignments `collect`, tanto em `create()` quanto em
+`estimateCost()`, antes de qualquer requisição. Ramifique por
+`ValidationError.errors.code === 'digital_certificate_requires_virtual_method'`, ou compare com a
+constante exportada `DIGITAL_CERTIFICATE_REQUIRES_VIRTUAL_METHOD`; não dependa da mensagem legível.
+
+**A1 e A3 são mídias de certificado**, escolhidas pelo próprio signatário no navegador na hora de
+assinar: A1 fica em software (um arquivo na máquina) e A3 em hardware (token ou cartão). A API
+modela as duas com o único valor `DigitalCertificate` — não existe campo `A1`/`A3` a enviar, e a
+assinatura PAdES resultante é qualificada nos dois casos.
+
+Um CPF exige o certificado daquela pessoa (e-CPF, ou e-CNPJ que a nomeie como representante legal);
+um CNPJ exige um e-CNPJ da empresa, de qualquer um dos seus representantes.
+
+```ts
+const signatarioCertificado = await client.signers.update(signerId, {
+  government_id: '390.533.447-05',
+});
+
+const custoCertificado = await client.assignments.estimateCost(documentId, {
+  method: 'virtual',
+  signers: [{ verification_method: 'DigitalCertificate', notification_methods: ['Email'] }],
+});
+
+await client.assignments.create(documentId, {
+  method: 'virtual',
+  signers: [{
+    id: signatarioCertificado.id,
+    step: 1,
+    verification_method: 'DigitalCertificate',
+    notification_methods: ['Email'],
+  }],
+});
+```
+
+Antes de abrir o assignment, o signatário precisa confirmar os dados de identidade e aceitar os
+termos, com `confirmData(..., { has_accepted_terms: true })` ou `acceptTerms()`.
+
+O endpoint comum `sign()` **rejeita** signatários por certificado: a assinatura deles é produzida por
+um handshake de dois passos com a extensão Web PKI, pela integração de navegador da Assinafy.
+
+```
+POST /v1/signers/certificate/start     → data.token   (token da operação Web PKI)
+        ↓  o navegador assina o token com o certificado do signatário
+POST /v1/signers/certificate/complete  → data.signerName
+```
+
+> Essas duas rotas são extensões implantadas **somente em produção**: o sandbox não as expõe e elas
+> não constam do documento OpenAPI publicado.
+
+Concluído o fluxo, `documents.download(documentId, 'pades')` devolve o artefato PAdES qualificado.
+
+### Templates
+
+`templates.list()` faz parte do documento OpenAPI atual. Integrações existentes também podem usar
+cinco rotas de gestão de templates — `create`, `get`, `update`, `delete` e `downloadPage` — ausentes
+daquele documento; veja as
+[notas de compatibilidade](COMPATIBILITY.md#template-management-extensions). A caixa do status
+de template varia por deploy; normalize com `template.status.toLowerCase()` antes de comparar.
+
+```ts
+// Cria um template enviando um PDF (multipart). O template começa enviado e
+// fica pronto quando suas páginas são processadas.
+const criado = await client.templates.create(
+  { filePath: './nda.pdf' },          // ou { buffer, fileName: 'nda.pdf' }
+  { name: 'Template de NDA' },
+);
+// →
+// {
+//   resource: 'template', id: '1032...', name: 'nda.pdf',
+//   document_name: 'nda.pdf', message: null, status: 'Uploaded',
+//   roles: [{ id: '1032...', name: 'TemplateEditor', assignment_type: 'Editor' }],
+//   pages: [], tags: [], created_at: '2026-…', updated_at: '2026-…'
+// }
+
+const { data, meta } = await client.templates.list({ search: 'NDA', 'per-page': 20 });
+const template = await client.templates.get(criado.id);   // inclui pages[] + default_document_tags
+await client.templates.update(criado.id, { name: 'NDA v2', message: 'Por favor, assine' });
+const primeiraPagina = template.pages?.[0];
+if (primeiraPagina) await client.templates.downloadPage(criado.id, primeiraPagina.id); // → Buffer (JPEG)
+await client.templates.delete(criado.id);
+
+// Cria um documento a partir de um template já configurado. Uploads novos têm
+// apenas o papel Editor; adicione papéis de signatário no editor da Assinafy antes.
+const configurado = await client.templates.get(templateId);
+const papelSignatario = configurado.roles?.find(
+  (papel) => typeof papel.assignment_type === 'string'
+    && papel.assignment_type.toLowerCase() !== 'editor',
+);
+if (!papelSignatario) throw new Error('O template não tem papel de signatário');
+const gerado = await client.documents.createFromTemplate(
+  templateId,
+  [{
+    role_id: papelSignatario.id,
+    email: 'signatario@exemplo.com.br',
+    name: 'Signatário Exemplo',
+    verification_method: 'Email',
+    notification_methods: ['Email'],
+  }],
+  { name: 'NDA - Exemplo', message: 'Por favor, assine assim que puder.' },
+);
+// A resposta começa com status: 'uploaded' e assignment: null. Acompanhe
+// documents.get(gerado.id) ou os webhooks até pending_signature / failed.
+
+// Estime o custo antes de criar → ICostEstimate
+await client.documents.estimateCostFromTemplate(templateId, [
+  { role_id: 'role_id', verification_method: 'Email', notification_methods: ['Email'] },
+]);
+// → { documents: 1, total_credits: 0, document_balance: 67, credit_balance: 0,
+//     has_sufficient_resources: true, blocking_reason: null, breakdown: [], … }
+```
+
+Cada signatário do template usa um `id` existente ou um `email`; `id` prevalece quando ambos são
+enviados. O email reutiliza o signatário correspondente da conta ou cria um com `name` e o
+`whatsapp_phone_number` E.164 opcional.
+
+O servidor deduz o método do assignment a partir do template. Um template sem campos posicionados
+para o signatário aceita `DigitalCertificate`; com campos posicionados, a API devolve `400` porque
+o assignment seria `collect`. `estimateCostFromTemplate()` aplica a mesma regra.
+
+Criar um template apenas envia o PDF e provisiona o papel de editor padrão — configure papéis e
+campos no editor da Assinafy depois. Os `download_url` dos objetos de página do template são URLs
+protegidas; prefira `templates.downloadPage()`, que anexa a credencial da API.
+
+### Tags
+
+Rótulos com escopo de workspace que podem ser anexados a documentos e templates. Os nomes são únicos
+por workspace (sem diferenciar maiúsculas).
+
+```ts
+await client.tags.list({ search: 'contrato' });           // ITag[]
+const tag = await client.tags.create({ name: 'Contratos', color: 'ff8800' });
+await client.tags.update(tag.id, { name: 'Contratos Comerciais' });
+await client.tags.update(tag.id, { color: null });        // limpa a cor
+await client.tags.delete(tag.id);                         // 409 se ainda estiver anexada
+await client.tags.delete(tag.id, { force: true });        // desanexa de tudo e apaga
+```
+
+Anexe/desanexe tags em um documento específico com `client.documents.listTags / replaceTags /
+addTags / detachTag` (veja [Documentos](#documentos)).
+
+O contrato publicado usa IDs para anexar tags. Sandboxes antigos interpretam
+essas strings como nomes e criam tags com o ID como nome; nesses ambientes,
+envie nomes existentes intencionalmente. Veja a [compatibilidade de tags](COMPATIBILITY.md#document-tags).
+
+### Workspaces
+
+Os schemas oficiais de criação/atualização definem `name` e `notification_sender_type`. O sandbox
+também aceita os campos de cor abaixo; eles ficam mantidos como extensão de compatibilidade
+documentada.
+
+```ts
+// As cores são hex de 6 caracteres SEM '#' inicial (ao contrário das tags, que o removem).
+// '#ff0066' é rejeitado — os endpoints de conta querem exatamente 6 caracteres.
+await client.workspaces.create({
+  name: 'Meu Workspace',
+  notification_sender_type: 'Account',
+  primary_color: 'ff0066',
+  secondary_color: '0066ff',
+});
+// → { id, name, primary_color: 'ff0066', secondary_color: '0066ff', created_at }
+await client.workspaces.list();
+await client.workspaces.get(accountId);
+await client.workspaces.update(accountId, {
+  name: 'Renomeado',
+  notification_sender_type: 'User',
+  primary_color: '112233',
+});
+
+// Identidade visual
+const tema = await client.workspaces.getTheme(accountId);
+const logo = await client.workspaces.downloadLogo(accountId); // Buffer
+await client.workspaces.uploadLogo(accountId, { filePath: './logo.png' });
+await client.workspaces.uploadLogo(accountId, {
+  buffer: logoBuffer,
+  fileName: 'logo.png',
+  contentType: 'image/png',
+});
+await client.workspaces.deleteLogo(accountId);
+
+// Últimos 12 meses por padrão; estatísticas diárias exigem um mês YYYY-MM.
+await client.workspaces.getStats(accountId);
+await client.workspaces.getStats(accountId, {
+  granularity: 'daily',
+  month: '2026-06',
+});
+
+await client.workspaces.delete(accountId);
+// `force` cancela uma assinatura paga ativa como parte da exclusão da conta. Não
+// é um atalho geral para outras restrições de exclusão.
+await client.workspaces.delete(contaRestrita, { force: true });
+```
+
+### Definições de campo
+
+Tipos de campo personalizados usados por assignments com método `collect`.
+
+```ts
+await client.fields.create({ type: 'text', name: 'Número do contrato' });
+await client.fields.list({ include_inactive: true, include_standard: true });
+await client.fields.get(fieldId);
+await client.fields.update(fieldId, { name: 'Nome atualizado' });
+await client.fields.delete(fieldId);
+
+// Usa credenciais do workspace; signerAccessCode é uma query legada opcional.
+await client.fields.validate(fieldId, '400.676.228-36', { signerAccessCode });
+
+// Valida vários valores de uma vez
+await client.fields.validateMultiple(
+  [
+    { field_id: 'f1', value: '1111111111111' },
+    { field_id: 'f2', value: 'valor@exemplo.com.br' },
+  ],
+  { signerAccessCode },
+);
+
+// Catálogo de todos os tipos de campo reconhecidos pela plataforma
+await client.fields.listTypes();
+```
+
+### Autenticação / gestão de chaves de API
+
+A maioria das integrações de servidor deve usar `X-Api-Key` diretamente. Use estes endpoints quando
+precisar abrir uma sessão para uma pessoa. Para apps conectados por terceiros, use
+[Aplicações OAuth](#aplicações-oauth).
+
+```ts
+// OAuth de navegador (rota de compatibilidade): redirecione o usuário para esta URL.
+// O helper de callback devolve a URL de retorno da Assinafy para configurar o
+// provedor; nenhum dos dois segue o redirecionamento.
+const inicioOauth = client.auth.getSocialLoginUrl('google');
+const callbackOauth = client.auth.getSocialLoginCallbackUrl();
+
+let sessao = await client.auth.login('eu@exemplo.com.br', 'senha');
+// Com autenticação em dois fatores ativa, o login devolve `mfa_token`; troque-o
+// em até 5 minutos pelo código do app autenticador ou por um código de recuperação.
+if (sessao.mfa_token) {
+  sessao = await client.auth.verifyMfa(sessao.mfa_token, '123456');
+}
+const { access_token, user, accounts } = sessao;
+await client.auth.socialLogin({ provider: 'google', token: 'google-id-token', has_accepted_terms: true });
+await client.auth.linkSocialLogin({ provider: 'google', token: 'google-id-token' });
+
+// Chave de API pessoal
+await client.auth.createApiKey('senha-atual');
+await client.auth.getApiKey();                     // → { api_key: '****...nBNr' } ou null
+await client.auth.deleteApiKey();
+
+// Ciclo de vida da senha
+await client.auth.changePassword({ email, password: 'atual', new_password: 'nova' });
+await client.auth.requestPasswordReset('eu@exemplo.com.br');
+await client.auth.resetPassword({ email, token: 'tk', new_password: 'nova' });
+```
+
+### Usuário autenticado
+
+```ts
+const usuario = await client.users.getCurrent();
+// → { id, name, email, telephone, government_id, is_email_verified,
+//     has_accepted_terms, created_at, to_be_deleted_at }
+
+// Funil de documentos entre contas, últimos 12 períodos mensais por padrão.
+const mensal = await client.users.getStats();
+const diario = await client.users.getStats({
+  granularity: 'daily',
+  month: '2026-06',
+});
+// Cada linha traz período, totais de envio/remessa/certificação, contagens de
+// notificação por e-mail/WhatsApp/bypass, contagens de verificação por
+// e-mail/WhatsApp/bypass/certificado digital, visualizados e concluídos.
+
+const preferencias = await client.users.getNotificationPreferences();
+await client.users.updateNotificationPreferences({
+  SignerDeclined: false,
+  DocumentExpired: false,
+  ContractExpiring: true,
+});
+// A atualização é um merge: chaves omitidas mantêm o valor atual. Os dois
+// métodos devolvem o mapa completo de treze preferências.
+```
+
+#### Autenticação em dois fatores
+
+Disponível em produção. O segredo TOTP e os códigos de recuperação aparecem uma única vez.
+
+```ts
+const inscricao = await client.users.startTotpEnrollment('Meu celular');
+// → { id, secret, provisioning_uri } — mostre provisioning_uri como QR code
+const { recovery_codes } = await client.users.confirmTotpEnrollment({
+  id: inscricao.id,
+  code: '123456', // código atual do novo dispositivo
+});
+// A partir daqui todo login exige o segundo fator.
+
+const { methods, recovery_codes_remaining } = await client.users.getMfa();
+await client.users.regenerateRecoveryCodes({ password: 'senha-atual' }); // ou { code }
+await client.users.deleteMfaMethod(methods[0]!.id, { code: '123456' });   // → { is_mfa_enabled }
+```
+
+Trocar um autenticador já confirmado exige também `password` ou `reauth_code` em
+`confirmTotpEnrollment()`; a primeira inscrição não exige.
+
+### Webhooks
+
+Uma conta tem 1 endpoint de webhook, ou até 3 nos planos pagos. Cada endpoint ativo inscrito em um
+evento o recebe, de forma independente. Tokens OAuth exigem `account:read` para ler endpoints e
+`webhooks:write` para alterá-los. Com assinatura ativa, a criação devolve `secret`: guarde-o também
+nas integrações OAuth. Ler o segredo depois exige chave de API; uma aplicação OAuth com
+`webhooks:write` pode rotacionar um segredo perdido.
+
+```ts
+const endpoint = await client.webhooks.createEndpoint({
+  name: 'ERP',
+  url: 'https://exemplo.com.br/webhooks/assinafy',
+  email: 'operacoes@exemplo.com.br',
+  events: ['document_ready', 'signer_signed_document', 'signer_rejected_document'],
+  signing_enabled: true, // assina as entregas no padrão Standard Webhooks
+});
+// → { id, name, url, email, events, is_active, is_held, held_since,
+//     signing_enabled, secret, created_at, updated_at }
+
+const secret = endpoint.secret; // 'whsec_…'; guarde em armazenamento seguro na criação
+await client.webhooks.listEndpoints();                                  // IWebhookEndpoint[]
+await client.webhooks.listEndpoints(undefined, { url: endpoint.url });   // filtro exato por URL
+await client.webhooks.getEndpoint(endpoint.id);
+await client.webhooks.updateEndpoint(endpoint.id, { is_active: false }); // só os campos enviados
+await client.webhooks.rotateEndpointSecret(endpoint.id); // o segredo antigo para na hora
+await client.webhooks.deleteEndpoint(endpoint.id);       // libera a vaga do plano
+// Alternativa quando a integração guardou somente a URL:
+// await client.webhooks.deleteEndpointByUrl(endpoint.url);
+
+await client.webhooks.listEventTypes();
+const historico = await client.webhooks.listDispatches({
+  endpoint_id: endpoint.id,
+  delivered: false,
+  page: 1,
+  'per-page': 20,
+}); // { data: IWebhookDispatch[], meta?: PaginationMeta }
+const reenviado = await client.webhooks.retryDispatch(dispatchId); // IWebhookDispatch
+```
+
+URLs novas ou alteradas de webhook devem usar HTTPS. `createEndpoint()` devolve `403` quando o
+limite do plano foi atingido e `400` quando outro endpoint
+do workspace já usa a mesma `url`. Quando `events` é omitido ou vazio, o SDK envia
+`DEFAULT_WEBHOOK_EVENTS` (exportado): `document_ready`, `document_prepared`,
+`signer_signed_document`, `signer_rejected_document` e `document_processing_failed`. Em
+`updateEndpoint()`, `signing_enabled: true` gera um segredo se ainda não houver e devolve esse novo
+segredo uma vez; `false` o descarta.
+
+As rotas anteriores continuam disponíveis e operam sobre o endpoint mais antigo da conta:
+`register()` (cria ou atualiza), `get()` (`IWebhookSubscription | null`) e `inactivate()`.
+
+A Assinafy entrega cada evento como um `POST` HTTP com `Content-Type: application/json`,
+`Connection: close` e os headers `webhook-id` (igual em todas as tentativas do mesmo evento para o
+mesmo endpoint — use-o para deduplicar), `webhook-timestamp` e, com assinatura ativa,
+`webhook-signature`. Qualquer `2xx` é sucesso. Erros de conexão, timeouts, `408`, `429` e `5xx`
+recebem até seis tentativas, separadas por cerca de dez minutos; outros status são finais. Depois
+de dez entregas falhas seguidas, `is_held` fica verdadeiro e o evento perdido mais antigo é testado
+após 3, 15 e 60 minutos, e depois a cada seis horas. O sucesso retoma as entregas e envia os eventos
+perdidos do mais antigo para o mais novo. `retryDispatch()` envia uma vez imediatamente, mesmo
+durante a pausa. O histórico guarda os primeiros 2.000 caracteres da resposta por sete dias.
+
+Cada item do histórico (ou resultado de reenvio) é um `IWebhookDispatch`:
+
+```ts
+type WebhookDispatchShape = {
+  resource?: string;
+  id: string;
+  event: string;
+  activity_id: number;
+  endpoint_id?: string | null; // null depois que o endpoint é excluído
+  endpoint: string | null;
+  payload: IWebhookPayload | Record<string, unknown> | null;
+  delivered: boolean;
+  webhook_id?: string | null;
+  attempt?: number | null;
+  kind?: 'scheduled' | 'probe' | 'manual' | string;
+  will_retry?: boolean;
+  http_status: number | null;
+  response_body: string | null;
+  error: string | null;
+  created_at: string;
+  updated_at?: string;
+};
+```
+
+Todo corpo de entrega usa este envelope:
+
+```ts
+type WebhookPayloadShape = {
+  id: number;                         // atividade interna; deduplique pelo webhook-id
+  event: string;
+  message: string | null;
+  payload: Record<string, unknown> | null;
+  origin: { ip?: string; 'user-agent'?: string } | null;
+  created_at: number;                 // segundos Unix
+  subject: { type: 'User' | 'Signer' | 'Account' | 'Document' | 'Template'; [key: string]: unknown };
+  object: { type: 'User' | 'Signer' | 'Account' | 'Document' | 'Template'; [key: string]: unknown };
+  account_id: string;
+};
+```
+
+Os valores por evento são:
+
+| `event` | `subject.type` | `object.type` | chaves de `payload` |
+| --- | --- | --- | --- |
+| `document_uploaded` | `User` | `Document` | — |
+| `document_metadata_ready` | `User` | `Document` | — |
+| `document_prepared` | `User` | `Document` | — |
+| `assignment_created` | `User` | `Document` | `user_name`, `user_email`, `user_telephone` |
+| `document_ready` | `Account` | `Document` | — |
+| `document_processing_failed` | `Account` | `Document` | `error_message` |
+| `signature_requested` | `User` | `Document` | `signer_email`, `signer_full_name` ou `signer_whatsapp_phone_number`, conforme o canal |
+| `signer_created` | `User` | `Signer` | `signer_full_name` |
+| `signer_email_verified` | `Signer` | `Document` | `signer_email` |
+| `signer_whatsapp_verified` | `Signer` | `Document` | `signer_whatsapp_phone_number` |
+| `signer_data_confirmed` | `Signer` | `Document` | `signer_email` |
+| `signer_viewed_document` | `Signer` | `Document` | `signer_full_name` |
+| `signer_identity_verified` | `Signer` | `Document` | `signer_full_name`, `evidence` quando disponível |
+| `signer_identity_verification_failed` | `Signer` | `Document` | `signer_full_name`, `reason` |
+| `signer_identity_review_required` | `Signer` | `Document` | `signer_full_name`, `reason_codes` |
+| `signer_identity_review_approved` | `Signer` | `Document` | `signer_full_name`, `reviewer_id`, `reviewer_name`, `reason_codes` |
+| `signer_identity_review_rejected` | `Signer` | `Document` | `signer_full_name`, `reviewer_id`, `reviewer_name`, `note` |
+| `signer_signed_document` | `Signer` | `Document` | `signer_full_name` |
+| `signer_rejected_document` | `Signer` | `Document` | `signer_full_name` |
+| `user_rejected_document` | `User` | `Document` | `user_name` |
+| `template_created` | `User` | `Template` | — |
+| `template_processed` | `User` | `Template` | — |
+| `template_processing_failed` | `Account` | `Template` | `error_message` |
+
+`payload`, `subject` e `object` dependem do evento. Aceite campos desconhecidos para compatibilidade
+futura e só confirme o recebimento depois de um processamento durável e idempotente. Respostas
+não-`2xx`, timeouts e falhas de conexão contam como entregas falhas. `assignment_created` e
+`document_metadata_ready` não têm ordem garantida. Para entidades de conta, a Assinafy remove a
+propriedade `integration` antes de entregar.
+
+### Verificação de webhooks
+
+Com `signing_enabled: true`, cada entrega é assinada no padrão
+[Standard Webhooks](https://www.standardwebhooks.com): HMAC-SHA256 sobre
+`{webhook-id}.{webhook-timestamp}.{corpo bruto}`, com a chave em base64 após o prefixo `whsec_`.
+`verifySignature()` confere a assinatura em tempo constante e rejeita `webhook-timestamp` a mais de
+5 minutos do relógio local. Passe o corpo **bruto**, nunca o JSON re-serializado.
+
+```ts
+import express from 'express';
+
+const webhookClient = new AssinafyClient({
+  webhookSecret: process.env.ASSINAFY_WEBHOOK_SECRET, // 'whsec_…' de getEndpointSecret()
+});
+
+app.post('/webhooks/assinafy', express.raw({ type: 'application/json' }), (req, res) => {
+  const corpoBruto = req.body as Buffer;
+  if (!webhookClient.webhookVerifier.verifySignature(corpoBruto, req.headers)) {
+    return res.status(401).send('Assinatura inválida');
+  }
+
+  const evento = webhookClient.webhookVerifier.extractEvent(corpoBruto);
+  const tipo = webhookClient.webhookVerifier.getEventType(evento);
+  const dados = webhookClient.webhookVerifier.getEventData(evento);
+  // Deduplique por req.headers['webhook-id'] antes de processar.
+
+  switch (tipo) {
+    case 'document_ready':             break;
+    case 'signer_signed_document':     break;
+    case 'signer_rejected_document':   break;
+    case 'document_processing_failed': break;
+  }
+  res.sendStatus(200);
+});
+```
+
+Em runtimes com Fetch (`Request`), passe `await request.text()` e `request.headers`. A tolerância
+de horário pode ser ajustada no terceiro argumento, em segundos. Depois de `rotateEndpointSecret()`,
+atualize o segredo do receptor imediatamente.
+
+### Endpoints do signatário
+
+Para construir portais de assinatura próprios. Quase todas as chamadas exigem o parâmetro de URL
+`signer-access-code` que a Assinafy envia ao signatário por e-mail/WhatsApp. O download de artefato
+é a exceção pública documentada; seu quarto argumento opcional de código de acesso existe apenas por
+compatibilidade com deploys que ainda esperam a query antiga.
+
+```ts
+await client.signerDocuments.self(accessCode);
+await client.signerDocuments.verifyEmail({ signerAccessCode: accessCode, verificationCode: '123456' });
+
+await client.signerDocuments.getCurrent(signerId, accessCode);
+const { data } = await client.signerDocuments.list(signerId, accessCode, { 'per-page': 20 });
+// Equivalente a documents.search() do lado do signatário, autorizado pelo código de acesso.
+const achados = await client.signerDocuments.search(signerId, accessCode, 'nota fiscal');
+await client.signerDocuments.download(signerId, documentId, 'original');
+// Disponível só depois que um signatário por certificado ICP-Brasil concluir a assinatura.
+await client.signerDocuments.download(signerId, documentId, 'pades');
+
+await client.signerDocuments.confirmData(documentId, accessCode, {
+  email: 'eu@exemplo.com.br',
+  full_name: 'Signatário Exemplo',
+  government_id: '123.456.789-00',
+  has_accepted_terms: true,
+});
+// Como alternativa, aceite os termos separadamente antes de getAssignment():
+// await client.signerDocuments.acceptTerms(accessCode);
+
+// Gestão da imagem de assinatura ({ reuse: true } guarda para documentos futuros)
+await client.signerDocuments.uploadSignature(accessCode, pngBuffer, { imageType: 'signature', reuse: true });
+await client.signerDocuments.downloadSignature(accessCode, 'signature');
+
+// Assinar / recusar
+const assinavel = await client.signerDocuments.getAssignment(accessCode);
+// `sign()` é para assignments collect e exige o valor de cada campo posicionado.
+await client.signerDocuments.sign(documentId, assignmentId, accessCode, [
+  { itemId, fieldId, pageId, value: 'Assinado pelo signatário' },
+]);
+await client.signerDocuments.decline(documentId, assignmentId, accessCode, 'Sem autorização');
+
+// `signMultiple()` é só para assignments virtual.
+await client.signerDocuments.signMultiple(['doc-1', 'doc-2'], accessCode);
+await client.signerDocuments.declineMultiple(['doc-1'], 'Condições desfavoráveis', accessCode);
+```
+
+`sign()` também exige que signatários virtuais já tenham confirmado os dados, mas assignments
+virtuais normalmente devem usar `signMultiple()`. Signatários por certificado não podem usar
+`sign()`; veja [Ramos pagos de assinatura](#ramos-pagos-de-assinatura).
+
+## Helper de alto nível
+
+Envia um PDF, reaproveita ou cria signatários por e-mail, cria um assignment virtual imediatamente e,
+opcionalmente, espera o processamento antes de retornar.
+
+```ts
+const resultado = await client.uploadAndRequestSignatures({
+  source: { filePath: './contrato.pdf' },
+  signers: [
+    { name: 'Signatário Exemplo A', email: 'signatario-a@exemplo.com.br' },
+    { name: 'Signatário Exemplo B', email: 'signatario-b@exemplo.com.br' },
+  ],
+  message: 'Por favor, assine',
+  metadata: { ano: 2026 }, // parte de compatibilidade; omita para o formato só-arquivo
+  waitForReady: true,
+  waitOptions: { maxWaitMs: 30_000, pollIntervalMs: 1_000 },
+  expiresAt: '2027-12-31T00:00:00Z',
+  copyReceivers: ['id-de-signatario-em-copia'],
+});
+
+resultado.document;   // IDocumentDetailsResponse já processado (waitForReady: true, o padrão);
+                      // o IDocumentUploadResponse cru quando waitForReady: false
+resultado.assignment; // IAssignment
+resultado.signer_ids; // string[]
+```
+
+`waitForReady: false` pula a espera pós-assignment e devolve a resposta inicial do upload. Com o
+padrão `true`, o helper cria o assignment primeiro e só então espera os detalhes atuais do
+documento. Produção e sandbox permitem assignments virtuais em `uploaded` e `metadata_processing` e
+os promovem automaticamente; só assignments `collect` exigem páginas renderizadas. Todos os
+signatários acima usam o canal de e-mail padrão. Um signatário só com telefone seleciona o ramo pago
+de WhatsApp descrito antes. `copyReceivers` aceita IDs de signatários existentes, não endereços de
+e-mail; confira o assignment devolvido antes de considerar uma cópia registrada.
+
+O helper não é transacional. Um erro depois do assignment inclui `documentId`, `assignmentId` e
+`signerIds` criados no `context` do erro (e em `ValidationError.errors` para timeouts); inspecione
+esses IDs antes de decidir se repete o fluxo.
+
+## Erros
+
+Os métodos HTTP rejeitam com uma subclasse de `AssinafyError`. Helpers síncronos como
+`getSocialLoginUrl()` e `readAuthorizationCallback()` podem lançar antes de qualquer requisição.
+
+| Classe | Quando | O que inspecionar |
+| --- | --- | --- |
+| `ValidationError` | O SDK recusou a entrada antes de enviar | `err.errors` |
+| `OAuthError` | Um endpoint OAuth devolveu `{ error, error_description }`, ou o callback trouxe `?error=` | `err.error`, `err.errorDescription` |
+| `ApiError` | A API respondeu com status de falha | `err.statusCode`, `err.responseData`, `err.challenge` |
+| `NetworkError` | DNS, conexão ou timeout | `err.message` (já sem credenciais) |
+| `AssinafyError` | Classe base de todas as acima | `err.context` |
+
+```ts
+import { ApiError, OAuthError, ValidationError, NetworkError, AssinafyError } from '@assinafy/sdk';
+
+try {
+  await client.documents.upload({ filePath: './x.pdf' });
+} catch (err) {
+  if (err instanceof ValidationError) {
+    console.error('Falha de validação:', err.errors);
+  } else if (err instanceof OAuthError) {
+    // OAuthError estende ApiError; ramifique pelo código RFC 6749, não pela mensagem.
+    console.error('Erro OAuth:', err.error, err.errorDescription);
+  } else if (err instanceof ApiError) {
+    console.error(`Erro da API ${err.statusCode}:`, err.responseData);
+    // `err.challenge` traz o header WWW-Authenticate já interpretado quando a API
+    // envia um — em um 403 ele nomeia o escopo OAuth que está faltando.
+  } else if (err instanceof NetworkError) {
+    console.error('Erro de rede:', err.message);
+  } else if (err instanceof AssinafyError) {
+    console.error('Erro do SDK:', err.message, err.context);
+  }
+}
+```
+
+`err.challenge` é um `IAuthenticateChallenge` já interpretado. O parser usado internamente está
+exportado como `parseWwwAuthenticate()`, para quem precisa ler o cabeçalho `WWW-Authenticate` de
+respostas recebidas fora do SDK.
+
+## Ambientes
+
+| | |
+| --- | --- |
+| Produção | `https://api.assinafy.com.br/v1` |
+| Sandbox | `https://sandbox.assinafy.com.br/v1` |
+
+O sandbox tem servidor de autorização próprio em `https://auth-sandbox.assinafy.com.br`, com a tela
+de consentimento em `/oauth/authorize`. A descoberta está disponível e seleciona esse servidor
+automaticamente a partir do `baseUrl`:
+
+```ts
+const client = new AssinafyClient({ baseUrl: 'https://sandbox.assinafy.com.br/v1' });
+const metadados = await client.oauth.getAuthorizationServerMetadata();
+const requisicao = await client.oauth.createAuthorizationUrl({
+  clientId: process.env.ASSINAFY_CLIENT_ID!,
+  redirectUri: 'https://meuapp.exemplo.com.br/oauth/callback',
+  scopes: ['documents:read', 'account:read', 'offline_access'],
+});
+```
+
+Cadastre o aplicativo no ambiente correspondente. Produção e sandbox têm emissores, client IDs,
+credenciais e workspaces próprios: mantenha cada conexão inteira no mesmo ambiente. Token,
+revogação e userinfo usam o `baseUrl` configurado. Para testar localmente, exponha somente o
+callback por um túnel HTTPS, registre a URL exata e revogue os tokens ao terminar. Veja
+[COMPATIBILITY.md](COMPATIBILITY.md).
+
+## Desenvolvimento
+
+```bash
+bun install --frozen-lockfile
+bun run typecheck    # tipos de src, scripts e testes
+bun run lint
+bun test             # suítes bun:test
+bun run test:coverage
+bun run build        # tsup → dist/ (CJS + ESM + .d.ts)
+bun run lint:pkg     # publint + arethetypeswrong
+bun run audit:api    # confere o SDK contra o OpenAPI publicado
+bun run verify       # portão completo de release local
+```
+
+## Documentação
+
+- **[README.en.md](README.en.md)** — a mesma referência completa, em inglês
+- [API_COVERAGE.md](API_COVERAGE.md) — mapa de operações
+- [COMPATIBILITY.md](COMPATIBILITY.md) — variações de requisição e resposta por deploy
+- [RELEASING.md](RELEASING.md) — processo de publicação
+- [Documentação da API](https://api.assinafy.com.br/v1/docs)
+
+## Licença
+
+Distribuído sob a licença [MIT](../LICENSE).
