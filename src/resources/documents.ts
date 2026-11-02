@@ -28,19 +28,17 @@ import type {
 } from '../types';
 import { ApiError, ValidationError } from '../errors';
 import {
-    assertDateTime,
+    assertExpirationDate,
     assertDocumentArtifactName,
     assertRecord,
     cleanListParams,
+    isE164PhoneNumber,
     isEmail,
 } from '../utils';
 import { BaseResource } from './base';
 import type { DocumentUploadSource } from './upload';
 import { withoutCredentials } from '../support/transport';
-import {
-    validateAssignmentSignerOptions,
-    validateDigitalCertificateMethod,
-} from './assignments';
+import { validateAssignmentSignerOptions } from './assignments';
 
 export type { DocumentUploadSource } from './upload';
 
@@ -248,7 +246,7 @@ export class DocumentResource extends BaseResource {
      * a compact representation with no expanded `assignment` or `pages`, so
      * prefer it for name lookups and pickers.
      *
-     * @param params - `search`, `status`, `page`, `per-page`.
+     * @param params - `search`, `status`, `page`, `per-page`, and `sort`.
      * @param accountId - Override the client's default account ID.
      * @returns Matching documents, with pagination in `meta`. Each item:
      * ```jsonc
@@ -947,9 +945,11 @@ export class DocumentResource extends BaseResource {
      *
      * Instantiates the template, binding each role to a signer, and returns the
      * new document. The request body is `{ signers, ...options }` — `signers`
-     * maps every template `role_id` to an existing account signer `id`, and
-     * `options` may add `name`, `message`, `expires_at`, `editor_fields`, and
-     * tag names in `tags` (unknown names are created automatically).
+     * maps every template `role_id` to an existing signer `id` or an `email`.
+     * An email reuses the matching account signer or creates one with `name`;
+     * `id` wins when both are present. Options may add `name`, `message`,
+     * `expires_at`, `editor_fields`, and tag names in `tags` (unknown names are
+     * created automatically).
      *
      * Request body (`application/json`):
      * ```jsonc
@@ -957,7 +957,9 @@ export class DocumentResource extends BaseResource {
      *   "signers": [
      *     {
      *       "role_id": "signing_role_example",
-     *       "id": "signer_example",
+     *       "email": "signer@example.com",
+     *       "name": "Example Signer",
+     *       "whatsapp_phone_number": "+15555550100",
      *       "verification_method": "Email",
      *       "notification_methods": [
      *         "Email"
@@ -981,27 +983,33 @@ export class DocumentResource extends BaseResource {
      * ```
      *
      * @param templateId - The template to instantiate.
-     * @param signers - Role-to-signer bindings (each with `role_id` and `id`,
-     * plus optional `verification_method`, `notification_methods`, `step`).
+     * @param signers - Role-to-signer bindings (each with `role_id` and either
+     * an existing `id` or an `email`; email creation also accepts `name` and
+     * `whatsapp_phone_number`). `verification_method`, `notification_methods`,
+     * and `step` are optional.
      * Only one notification method is allowed per signer; when only one of the
      * verification/notification fields is supplied, the API infers the other.
      * `DigitalCertificate` costs 0.5 credits, requires the feature plus a
      * signer `government_id`, and that signer must be alone in its step. The
-     * server derives the assignment method from placed template fields but
-     * does not yet reject unusable certificate/`collect` combinations, so the
-     * SDK temporarily refuses certificate signers on this template route.
+     * server derives the assignment method from placed template fields and
+     * rejects certificate signers when those fields produce a `collect`
+     * assignment. Use a template without placed signer fields for certificate
+     * signing.
      * `IdDocumentFaceMatchBasic` needs the ID Document + Face Match feature
      * and a valid CPF in `government_id`; estimate the per-signer fee first.
      * @param options - Optional `name`, `message`, `expires_at`,
      * `editor_fields`, `tags`.
      * @param options.name - Generated document display name.
      * @param options.message - Signing invitation message.
-     * @param options.expires_at - ISO-8601 signature deadline.
+     * @param options.expires_at - ISO-8601 deadline: date-only (ends at 23:59
+     * UTC), date-time without an offset (treated as UTC), or an offset-aware
+     * date-time.
      * @param options.editor_fields - Template editor values as `{ field_id, value }` entries.
      * @param options.tags - Tag names attached to the generated document.
      * @param accountId - Override the client's default account ID.
-     * @returns The created document (an {@link IDocumentDetailsResponse} with
-     * `template_id` set and its `assignment` populated):
+     * @returns The uploaded document. Assignment creation continues in the
+     * background; follow `GET /documents/{documentId}` or webhooks until the
+     * document becomes `pending_signature` or `failed`:
      * ```jsonc
      * {
      *   "resource": "document",
@@ -1009,22 +1017,21 @@ export class DocumentResource extends BaseResource {
      *   "account_id": "acc_example",
      *   "template_id": "103a0991a5cde83518e5672aa9aa",
      *   "name": "Service agreement from template",
-     *   "status": "pending_signature",
-     *   "artifacts": { "original": "https://…/download/original", "thumbnail": "https://…/thumbnail" },
+     *   "status": "uploaded",
+     *   "artifacts": { "original": "https://…/download/original" },
      *   "is_closed": false,
      *   "signing_url": "https://app.assinafy.com.br/sign/19f675b7…",
      *   "tags": [{ "id": "103a0992…", "name": "agreements", "color": null }],
-     *   "assignment": { "id": "103a09a1…", "method": "virtual", "summary": { "signer_count": 1, "completed_count": 0 } },
-     *   "pages": [{ "id": "103a0992…", "number": 1, "height": 1651, "width": 1275, "download_url": "https://…/download" }],
+     *   "assignment": null,
+     *   "pages": [],
      *   "created_at": "2026-07-15T19:57:55Z",
      *   "updated_at": "2026-07-15T19:59:33Z"
      * }
      * ```
-     * @throws {ValidationError} If `templateId` is missing, no account ID is
-     * available, or a signer uses `DigitalCertificate`. Certificate refusals
-     * have `errors.code === 'digital_certificate_requires_virtual_method'`.
-     * @throws {ApiError} `400` if the signers/roles are invalid or the template
-     * is not ready.
+     * @throws {ValidationError} If `templateId`, an account ID, signer identity,
+     * channel, order, deadline, editor field, or tag is invalid.
+     * @throws {ApiError} `400` if the signers/roles are invalid, the template
+     * is not ready, or placed signer fields conflict with `DigitalCertificate`.
      *
      * @example
      * ```ts
@@ -1046,7 +1053,7 @@ export class DocumentResource extends BaseResource {
         if (options.message !== undefined && typeof options.message !== 'string') {
             throw new ValidationError('message must be a string');
         }
-        if (options.expires_at !== undefined) assertDateTime(options.expires_at, 'expires_at');
+        if (options.expires_at !== undefined) assertExpirationDate(options.expires_at, 'expires_at');
         const editorFields = options.editor_fields === undefined
             ? undefined
             : normaliseTemplateEditorFields(options.editor_fields);
@@ -1082,10 +1089,8 @@ export class DocumentResource extends BaseResource {
      *
      * A dry run: sends only `{ signers }` and consumes nothing. Use it to check
      * balances before calling {@link DocumentResource.createFromTemplate}.
-     * `DigitalCertificate` requires a provably `virtual` assignment. Because
-     * this route leaves method detection to the server, the SDK temporarily
-     * refuses certificate signers instead of returning a price for an
-     * assignment that may charge credits but cannot be completed.
+     * `DigitalCertificate` adds 0.5 credits per signer plus notification cost;
+     * the API returns `400` when the template has placed signer fields.
      *
      * Request body (`application/json`):
      * ```jsonc
@@ -1127,10 +1132,10 @@ export class DocumentResource extends BaseResource {
      *   "message": null
      * }
      * ```
-     * @throws {ValidationError} If `templateId` is missing, no account ID is
-     * available, or a signer uses `DigitalCertificate`. Certificate refusals
-     * have `errors.code === 'digital_certificate_requires_virtual_method'`.
-     * @throws {ApiError} If the API rejects the request.
+     * @throws {ValidationError} If `templateId`, an account ID, role, or
+     * channel is invalid.
+     * @throws {ApiError} `400` if the role is invalid or placed signer fields
+     * conflict with `DigitalCertificate`; `403` when a feature is unavailable.
      *
      * @example
      * ```ts
@@ -1420,11 +1425,33 @@ function normaliseTemplateSigners(signers: ITemplateSigner[]): ITemplateSigner[]
         if (typeof signer.role_id !== 'string' || !signer.role_id.trim()) {
             throw new ValidationError(`Template signer ${index + 1} requires role_id`);
         }
-        if (typeof signer.id !== 'string' || !signer.id.trim()) {
-            throw new ValidationError(`Template signer ${index + 1} requires id`);
-        }
         validateAssignmentSignerOptions(signer, `Template signer ${index + 1}`);
-        const projected: ITemplateSigner = { role_id: signer.role_id, id: signer.id };
+        const projected: ITemplateSigner = { role_id: signer.role_id };
+        if (signer.id !== undefined) {
+            if (typeof signer.id !== 'string' || !signer.id.trim()) {
+                throw new ValidationError(`Template signer ${index + 1} id must be non-empty`);
+            }
+            projected.id = signer.id;
+        } else {
+            if (!isEmail(signer.email)) {
+                throw new ValidationError(`Template signer ${index + 1} requires a valid id or email`);
+            }
+            projected.email = signer.email;
+            if (signer.name !== undefined) {
+                if (typeof signer.name !== 'string' || !signer.name.trim()) {
+                    throw new ValidationError(`Template signer ${index + 1} name must be non-empty`);
+                }
+                projected.name = signer.name;
+            }
+            if (signer.whatsapp_phone_number !== undefined) {
+                if (!isE164PhoneNumber(signer.whatsapp_phone_number)) {
+                    throw new ValidationError(
+                        `Template signer ${index + 1} whatsapp_phone_number must be E.164`,
+                    );
+                }
+                projected.whatsapp_phone_number = signer.whatsapp_phone_number;
+            }
+        }
         if (signer.verification_method !== undefined) {
             projected.verification_method = signer.verification_method;
         }
@@ -1434,7 +1461,6 @@ function normaliseTemplateSigners(signers: ITemplateSigner[]): ITemplateSigner[]
         if (signer.step !== undefined) projected.step = signer.step;
         return projected;
     });
-    validateDigitalCertificateMethod(undefined, normalised);
     // Only the API knows which role IDs are signers versus editors or copy receivers.
     return normalised;
 }
@@ -1480,7 +1506,6 @@ function normaliseTemplateCostSigners(signers: ITemplateCostSigner[]): ITemplate
         }
         return descriptor;
     });
-    validateDigitalCertificateMethod(undefined, normalised);
     return normalised;
 }
 

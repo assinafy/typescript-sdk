@@ -1,7 +1,6 @@
 import { describe, test, expect, beforeEach } from 'bun:test';
 import { DocumentResource } from './documents';
 import { ApiError, ValidationError } from '../errors';
-import { DIGITAL_CERTIFICATE_REQUIRES_VIRTUAL_METHOD } from './assignments';
 import axios, { type AxiosInstance } from 'axios';
 
 describe('DocumentResource', () => {
@@ -392,35 +391,33 @@ describe('DocumentResource.isFullySigned', () => {
 });
 
 describe('DocumentResource.createFromTemplate', () => {
-    test('refuses certificate creation and estimation because templates derive the method', async () => {
-        let calls = 0;
+    test('sends certificate creation and estimation for server-side template validation', async () => {
+        const calls: unknown[] = [];
         const resource = new DocumentResource({
-            post: async () => {
-                calls++;
-                return { status: 200 };
+            post: async (url: string, body: unknown) => {
+                calls.push({ url, body });
+                return { status: 200, data: { status: 200, data: {} } };
             },
         } as unknown as AxiosInstance, 'acc');
-        const requests = [
-            () => resource.createFromTemplate('t', [{
-                role_id: 'signature-role',
-                id: 's',
-                verification_method: 'DigitalCertificate',
-            }]),
-            () => resource.estimateCostFromTemplate('t', [{
-                role_id: 'signature-role',
-                verification_method: 'DigitalCertificate',
-            }]),
-        ];
+        const descriptor = {
+            role_id: 'signature-role',
+            verification_method: 'DigitalCertificate' as const,
+            notification_methods: ['Email'] as ['Email'],
+        };
 
-        for (const request of requests) {
-            await expect(request()).rejects.toMatchObject({
-                errors: {
-                    code: DIGITAL_CERTIFICATE_REQUIRES_VIRTUAL_METHOD,
-                    method: null,
-                },
-            });
-        }
-        expect(calls).toBe(0);
+        await resource.createFromTemplate('t', [{ id: 's', ...descriptor }]);
+        await resource.estimateCostFromTemplate('t', [descriptor]);
+
+        expect(calls).toEqual([
+            {
+                url: '/accounts/acc/templates/t/documents',
+                body: { signers: [{ id: 's', ...descriptor }] },
+            },
+            {
+                url: '/accounts/acc/templates/t/documents/estimate-cost',
+                body: { signers: [descriptor] },
+            },
+        ]);
     });
     test('uses identity verification for template creation and estimation with either channel', async () => {
         const calls: unknown[] = [];
@@ -463,6 +460,7 @@ describe('DocumentResource.createFromTemplate', () => {
             {
                 name: 'My Contract',
                 message: 'Please sign',
+                expires_at: '2027-12-31',
                 editor_fields: [
                     { field_id: 'field-1', value: 'Approved', internal_secret: 'do-not-send' },
                 ],
@@ -482,9 +480,57 @@ describe('DocumentResource.createFromTemplate', () => {
             ],
             name: 'My Contract',
             message: 'Please sign',
+            expires_at: '2027-12-31',
             editor_fields: [{ field_id: 'field-1', value: 'Approved' }],
             tags: ['agreements'],
         });
+    });
+
+    test('creates or reuses a template signer by email and projects only published fields', async () => {
+        let body: unknown;
+        const ax = {
+            post: async (_url: string, value: unknown) => {
+                body = value;
+                return { status: 200, data: { status: 200, data: { id: 'doc-1' } } };
+            },
+        } as unknown as AxiosInstance;
+
+        await new DocumentResource(ax, 'acc').createFromTemplate('tmpl1', [{
+            role_id: 'role1',
+            email: 'signer@example.com',
+            name: 'Example Signer',
+            whatsapp_phone_number: '+15555550100',
+            internal_secret: 'do-not-send',
+        } as never]);
+
+        expect(body).toEqual({
+            signers: [{
+                role_id: 'role1',
+                email: 'signer@example.com',
+                name: 'Example Signer',
+                whatsapp_phone_number: '+15555550100',
+            }],
+        });
+    });
+
+    test('uses signer id when both id and email are supplied', async () => {
+        let body: unknown;
+        const ax = {
+            post: async (_url: string, value: unknown) => {
+                body = value;
+                return { status: 200, data: { status: 200, data: { id: 'doc-1' } } };
+            },
+        } as unknown as AxiosInstance;
+
+        await new DocumentResource(ax, 'acc').createFromTemplate('tmpl1', [{
+            role_id: 'role1',
+            id: 'signer1',
+            email: 'ignored',
+            name: '',
+            whatsapp_phone_number: 'ignored',
+        }]);
+
+        expect(body).toEqual({ signers: [{ role_id: 'role1', id: 'signer1' }] });
     });
 
     test('validates the template id before any request', async () => {
@@ -508,6 +554,10 @@ describe('DocumentResource.createFromTemplate', () => {
             [null],
             [{ role_id: '', id: 'signer1' }],
             [{ role_id: 'role1', id: '' }],
+            [{ role_id: 'role1' }],
+            [{ role_id: 'role1', email: 'invalid' }],
+            [{ role_id: 'role1', email: 'signer@example.com', name: '' }],
+            [{ role_id: 'role1', email: 'signer@example.com', whatsapp_phone_number: '555' }],
         ];
         for (const signers of invalid) {
             await expect(

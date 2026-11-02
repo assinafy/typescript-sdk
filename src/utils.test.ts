@@ -1,6 +1,7 @@
 import { describe, test, expect } from 'bun:test';
 import {
     assertEmail,
+    assertExpirationDate,
     assertRecord,
     assertDateTime,
     assertNonEmptyString,
@@ -53,6 +54,28 @@ describe('assertDateTime', () => {
             null,
         ]) {
             expect(() => assertDateTime(value, 'expires_at')).toThrow(ValidationError);
+        }
+    });
+});
+
+describe('assertExpirationDate', () => {
+    test('accepts the API deadline forms and rejects malformed or impossible values', () => {
+        for (const value of [
+            '2028-02-29',
+            '2027-12-31T23:59:59',
+            '2027-12-31T23:59:59Z',
+            '2027-12-31T20:59:00-03:00',
+        ]) {
+            expect(() => assertExpirationDate(value, 'expires_at')).not.toThrow();
+        }
+        for (const value of [
+            'not-a-date',
+            '2027-02-29',
+            '2027-13-01T00:00:00',
+            '2027-01-01T24:00:00',
+            null,
+        ]) {
+            expect(() => assertExpirationDate(value, 'expires_at')).toThrow(ValidationError);
         }
     });
 });

@@ -9,7 +9,7 @@ import type {
     Logger,
 } from './types';
 import { AssinafyError, ValidationError } from './errors';
-import { assertDateTime, assertRecord, createSafeLogger } from './utils';
+import { assertExpirationDate, assertRecord, createSafeLogger } from './utils';
 import { nextRetryDelayMs } from './support/retry';
 import {
     DocumentResource,
@@ -331,8 +331,9 @@ export class AssinafyClient {
      * the API; only `collect` assignments require pre-rendered pages.
      * @param options.waitOptions - Optional `maxWaitMs` / `pollIntervalMs`
      * forwarded to {@link DocumentResource.waitUntilReady}.
-     * @param options.expiresAt - Optional ISO-8601 assignment expiry, e.g.
-     * `'2026-08-01T00:00:00Z'`.
+     * @param options.expiresAt - Optional ISO-8601 assignment expiry. A date
+     * ends at 23:59 UTC; a date-time without an offset is interpreted as UTC;
+     * an explicit offset is honored.
      * @param options.copyReceivers - Optional existing signer IDs (not email
      * addresses) that receive a copy. See the caveat on
      * {@link ICreateAssignmentPayload.copy_receivers}; some plans silently drop
@@ -428,7 +429,7 @@ export class AssinafyClient {
         if (options.metadata !== undefined) {
             assertRecord(options.metadata, 'metadata');
         }
-        if (options.expiresAt !== undefined) assertDateTime(options.expiresAt, 'expiresAt');
+        if (options.expiresAt !== undefined) assertExpirationDate(options.expiresAt, 'expiresAt');
         if (
             options.copyReceivers !== undefined
             && (!Array.isArray(options.copyReceivers)

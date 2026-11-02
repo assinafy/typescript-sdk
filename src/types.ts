@@ -1074,7 +1074,7 @@ export interface IWebhookRegisterPayload {
 
 /**
  * The account's oldest webhook endpoint, as returned by the legacy
- * subscription routes: `{ events, is_active, url, email, updated_at }`
+ * subscription routes: `{ events, is_active, is_held, held_since, url, email, updated_at }`
  * (no `id` / `created_at`). Use {@link IWebhookEndpoint} for multi-endpoint
  * accounts.
  */
@@ -1083,6 +1083,10 @@ export interface IWebhookSubscription {
     email: string | null;
     events: string[];
     is_active: boolean;
+    /** Whether delivery is paused after repeated failures. */
+    is_held?: boolean;
+    /** Unix timestamp when delivery was paused; `null` while it is running. */
+    held_since?: number | null;
     updated_at?: string | null;
 }
 
@@ -1102,12 +1106,17 @@ export type IWebhookEndpointUpdatePayload = Partial<IWebhookEndpointCreatePayloa
  * 3 on paid plans; every active endpoint subscribed to an event receives it.
  */
 export interface IWebhookEndpoint {
+    resource?: string;
     id: string;
     name: string | null;
     url: string;
     email: string;
     events: (WebhookEventType | AnyString)[];
     is_active: boolean;
+    /** Whether delivery is paused after repeated failures. */
+    is_held?: boolean;
+    /** Unix timestamp when delivery was paused; `null` while it is running. */
+    held_since?: number | null;
     /** Whether deliveries carry a `webhook-signature` header. */
     signing_enabled: boolean;
     /** ISO-8601 UTC timestamp. */
@@ -1116,9 +1125,9 @@ export interface IWebhookEndpoint {
     updated_at: string;
 }
 
-/** Endpoint creation also returns the signing secret when signing is enabled. */
+/** Endpoint creation/update also returns a newly generated signing secret. */
 export interface IWebhookEndpointCreateResponse extends IWebhookEndpoint {
-    /** Store securely at creation: OAuth applications cannot read or rotate this later. */
+    /** Store securely when returned; OAuth applications cannot read it later. */
     secret?: string;
 }
 
@@ -1146,6 +1155,14 @@ export interface IWebhookDispatch {
     endpoint: string | null;
     payload: IWebhookPayload | Record<string, unknown> | null;
     delivered: boolean;
+    /** Stable `webhook-id` header across attempts for this event and endpoint. */
+    webhook_id?: string | null;
+    /** Attempt number for this event and endpoint, counted from 1. */
+    attempt?: number | null;
+    /** Whether the entry was scheduled, a recovery probe, or manually retried. */
+    kind?: 'scheduled' | 'probe' | 'manual' | AnyString;
+    /** Whether another automatic attempt follows this entry. */
+    will_retry?: boolean;
     http_status: number | null;
     /** Receiving endpoint body, truncated by Assinafy to 2,000 characters. */
     response_body: string | null;
@@ -1302,16 +1319,17 @@ export interface ITemplateDetailsResponse {
     [key: string]: unknown;
 }
 
-/**
- * Signer assignment for creating a document from a template.
- *
- * The SDK temporarily rejects `DigitalCertificate` because the server derives
- * the method from template fields and can create an unusable `collect`
- * assignment. Use a direct `virtual` assignment for certificate signers.
- */
+/** Signer assignment for creating a document from a template. */
 export interface ITemplateSigner {
     role_id: string;
-    id: string;
+    /** Existing signer ID. Takes precedence over the email fields when present. */
+    id?: string;
+    /** Reuses the matching signer or creates one when `id` is omitted. */
+    email?: string;
+    /** Full name used when the email does not match an existing signer. */
+    name?: string;
+    /** E.164 number used when the email does not match an existing signer. */
+    whatsapp_phone_number?: string;
     verification_method?: AssignmentVerificationMethod;
     notification_methods?: AssignmentNotificationMethod[];
     /** Positive integer controlling signing order (see {@link SignerReference}). */
@@ -1320,9 +1338,7 @@ export interface ITemplateSigner {
 
 /**
  * Role/channel descriptor used only for template cost estimation. The official
- * schema intentionally omits signer `id` and sequential-signing `step`. The SDK
- * temporarily rejects `DigitalCertificate`; use direct virtual-assignment cost
- * estimation instead.
+ * schema intentionally omits signer identity and sequential-signing fields.
  */
 export interface ITemplateCostSigner {
     role_id: string;

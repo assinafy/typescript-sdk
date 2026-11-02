@@ -172,6 +172,38 @@ function validateProductionStructure(spec: OpenApiDocument): number {
             `${path} verification methods changed`,
         );
     }
+    const templateSigner = at(
+        spec,
+        'paths',
+        '/v1/accounts/{accountId}/templates/{templateId}/documents',
+        'post',
+        'requestBody',
+        'content',
+        'application/json',
+        'schema',
+        'properties',
+        'signers',
+        'items',
+    );
+    const templateSignerProperties = at(templateSigner, 'properties');
+    requireValue(
+        sameMembers(at(templateSigner, 'required'), ['role_id'])
+            && isRecord(templateSignerProperties)
+            && sameMembers(
+                Object.keys(templateSignerProperties),
+                [
+                    'role_id',
+                    'id',
+                    'email',
+                    'name',
+                    'whatsapp_phone_number',
+                    'verification_method',
+                    'notification_methods',
+                    'step',
+                ],
+            ),
+        'template signer identity and channel fields changed',
+    );
 
     requireValue(
         at(
@@ -356,6 +388,26 @@ function validateProductionStructure(spec: OpenApiDocument): number {
             && at(spec, 'components', 'schemas', 'WebhookEndpointSecret', 'properties', 'secret', 'type') === 'string',
         'WebhookEndpoint must expose signing_enabled and WebhookEndpointSecret a string secret',
     );
+    const webhookDispatchProperties = at(
+        spec, 'components', 'schemas', 'WebhookDispatch', 'properties',
+    );
+    requireValue(
+        at(spec, 'components', 'schemas', 'WebhookEndpoint', 'properties', 'is_held', 'type') === 'boolean'
+            && sameMembers(
+                at(spec, 'components', 'schemas', 'WebhookEndpoint', 'properties', 'held_since', 'type'),
+                ['integer', 'null'],
+            )
+            && isRecord(webhookDispatchProperties)
+            && sameMembers(
+                Object.keys(webhookDispatchProperties),
+                [
+                    'resource', 'id', 'event', 'activity_id', 'endpoint_id', 'endpoint',
+                    'payload', 'delivered', 'webhook_id', 'attempt', 'kind', 'will_retry',
+                    'http_status', 'response_body', 'error', 'created_at', 'updated_at',
+                ],
+            ),
+        'webhook hold and delivery-attempt fields changed',
+    );
     const createEndpointBody = at(
         spec, 'paths', '/v1/accounts/{accountId}/webhooks/endpoints', 'post', 'requestBody',
         'content', 'application/json', 'schema',
@@ -370,6 +422,12 @@ function validateProductionStructure(spec: OpenApiDocument): number {
             '200', 'content', 'application/json', 'schema', 'allOf', 1, 'properties', 'data',
             'allOf', 1, 'properties', 'secret', 'type') === 'string',
         'Webhook endpoint creation must return its signing secret',
+    );
+    requireValue(
+        at(spec, 'paths', '/v1/accounts/{accountId}/webhooks/endpoints/{endpointId}', 'put',
+            'responses', '200', 'content', 'application/json', 'schema', 'allOf', 1,
+            'properties', 'data', 'allOf', 1, 'properties', 'secret', 'type') === 'string',
+        'Webhook endpoint update must return a newly generated signing secret',
     );
     requireValue(
         at(parameter(spec, '/v1/accounts/{accountId}/webhooks/endpoints', 'delete', 'url'), 'required') === true,

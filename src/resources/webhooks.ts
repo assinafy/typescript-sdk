@@ -70,6 +70,8 @@ export class WebhookResource extends BaseResource {
      *     "document_processing_failed"
      *   ],
      *   "is_active": true,
+     *   "is_held": false,
+     *   "held_since": null,
      *   "updated_at": "2026-07-18T02:36:02Z" // no `id` / `created_at` are returned
      * }
      * ```
@@ -244,11 +246,12 @@ export class WebhookResource extends BaseResource {
      * (`GET /accounts/{accountId}/webhooks`). Pagination info (if any) is
      * attached in `meta`.
      *
-     * Assinafy treats any `2xx` response as success. It makes at most two
-     * attempts per event with a three-second wait. After ten consecutive failed
-     * events, the circuit breaker pauses normal delivery and sends roughly 5%
-     * as recovery checks until one succeeds. The stored `response_body` is
-     * truncated to 2,000 characters.
+     * Assinafy treats any `2xx` response as success. Retriable failures get up
+     * to six attempts about ten minutes apart. After ten failed deliveries in
+     * a row, the endpoint is paused and probed after 3, 15 and 60 minutes, then
+     * every six hours. A successful delivery or probe resumes the endpoint and
+     * replays missed events oldest first. Response bodies are truncated to
+     * 2,000 characters and delivery entries are retained for seven days.
      *
      * @param params - Optional filters and pagination:
      *   - `endpoint_id` — only deliveries to this webhook endpoint.
@@ -275,6 +278,10 @@ export class WebhookResource extends BaseResource {
      *     //   subject: <User>, account_id, created_at }
      *   },
      *   "delivered": true,
+     *   "webhook_id": "9f86d081884c7d659a2feaa0c55ad015",
+     *   "attempt": 1,
+     *   "kind": "scheduled",
+     *   "will_retry": false,
      *   "http_status": 200,
      *   "response_body": "{ ... }", // receiving endpoint body, max 2,000 chars
      *   "error": null,
@@ -370,11 +377,14 @@ export class WebhookResource extends BaseResource {
      * [
      *   {
      *     "id": "65f1c2a9b3e4d5f60718293a4b5c6d7e",
+     *     "resource": "activity_event_subscription",
      *     "name": "ERP",
      *     "url": "https://example.com/webhooks/assinafy",
      *     "email": "ops@example.com",
      *     "events": ["document_ready", "signer_signed_document"],
      *     "is_active": true,
+     *     "is_held": false,
+     *     "held_since": null,
      *     "signing_enabled": true, // deliveries carry a `webhook-signature` header
      *     "created_at": "2026-10-01T12:00:00Z",
      *     "updated_at": "2026-10-01T12:00:00Z"
@@ -392,7 +402,7 @@ export class WebhookResource extends BaseResource {
      */
     async listEndpoints(accountId?: string, params: { url?: string } = {}): Promise<IWebhookEndpoint[]> {
         assertRecord(params, 'webhook endpoint filters');
-        if (params.url !== undefined) validateWebhookUrl(params.url);
+        if (params.url !== undefined) validateWebhookUrl(params.url, true);
         const path = this.endpointsPath(accountId);
         return this.call('Failed to list webhook endpoints', () =>
             this.http.get(path, params.url === undefined ? undefined : { params: { url: params.url } }),
@@ -406,8 +416,8 @@ export class WebhookResource extends BaseResource {
      * An account can have 1 endpoint, or up to 3 on paid plans. Each endpoint
      * of a workspace needs a different `url`. With `signing_enabled: true` the
      * API returns a signing `secret` in this creation response. Store it now:
-     * OAuth applications cannot call {@link WebhookResource.getEndpointSecret}
-     * or rotate it later. When `events` is omitted or
+     * OAuth applications cannot call {@link WebhookResource.getEndpointSecret},
+     * but they can rotate a lost secret. When `events` is omitted or
      * empty, {@link DEFAULT_WEBHOOK_EVENTS} is sent. OAuth tokens need the
      * `webhooks:write` scope.
      *
@@ -423,19 +433,22 @@ export class WebhookResource extends BaseResource {
      * }
      * ```
      *
-     * @param payload - Endpoint details. `url` (absolute HTTP(S)) and `email`
+     * @param payload - Endpoint details. `url` (absolute HTTPS) and `email`
      * are required; `events`, `name`, `is_active` and `signing_enabled` are
      * optional.
      * @param accountId - Override the client's default account ID.
      * @returns The created endpoint:
      * ```jsonc
      * {
+     *   "resource": "activity_event_subscription",
      *   "id": "65f1c2a9b3e4d5f60718293a4b5c6d7e",
      *   "name": "ERP",
      *   "url": "https://example.com/webhooks/assinafy",
      *   "email": "ops@example.com",
      *   "events": ["document_ready", "signer_signed_document"],
      *   "is_active": true,
+     *   "is_held": false,
+     *   "held_since": null,
      *   "signing_enabled": true, // deliveries carry a `webhook-signature` header
      *   "secret": "whsec_c2VjcmV0", // only in this response when signing is enabled
      *   "created_at": "2026-10-01T12:00:00Z",
@@ -482,12 +495,15 @@ export class WebhookResource extends BaseResource {
      * @returns The endpoint:
      * ```jsonc
      * {
+     *   "resource": "activity_event_subscription",
      *   "id": "65f1c2a9b3e4d5f60718293a4b5c6d7e",
      *   "name": "ERP",
      *   "url": "https://example.com/webhooks/assinafy",
      *   "email": "ops@example.com",
      *   "events": ["document_ready", "signer_signed_document"],
      *   "is_active": true,
+     *   "is_held": false,
+     *   "held_since": null,
      *   "signing_enabled": true, // deliveries carry a `webhook-signature` header
      *   "created_at": "2026-10-01T12:00:00Z",
      *   "updated_at": "2026-10-01T12:00:00Z"
@@ -510,12 +526,13 @@ export class WebhookResource extends BaseResource {
     /**
      * Change a webhook endpoint
      * (`PUT /accounts/{accountId}/webhooks/endpoints/{endpointId}`). Only the
-     * fields sent are updated; `url` cannot be one another endpoint of the
-     * workspace already uses.
+     * fields sent are updated; a changed `url` must be HTTPS, publicly
+     * routable, and different from every other endpoint in the workspace.
      *
      * `signing_enabled: true` generates a secret if the endpoint has none and
-     * keeps the current one otherwise; `false` discards the secret. OAuth
-     * tokens need the `webhooks:write` scope.
+     * keeps the current one otherwise; `false` discards the secret. When this
+     * request turns signing on, the response includes the new `secret` once.
+     * OAuth tokens need the `webhooks:write` scope.
      *
      * Request body (`application/json`, every field optional):
      * ```jsonc
@@ -535,13 +552,17 @@ export class WebhookResource extends BaseResource {
      * @returns The updated endpoint:
      * ```jsonc
      * {
+     *   "resource": "activity_event_subscription",
      *   "id": "65f1c2a9b3e4d5f60718293a4b5c6d7e",
      *   "name": "ERP",
      *   "url": "https://example.com/webhooks/assinafy",
      *   "email": "ops@example.com",
      *   "events": ["document_ready", "signer_signed_document"],
      *   "is_active": true,
+     *   "is_held": false,
+     *   "held_since": null,
      *   "signing_enabled": true, // deliveries carry a `webhook-signature` header
+     *   "secret": "whsec_c2VjcmV0", // only when this request turned signing on
      *   "created_at": "2026-10-01T12:00:00Z",
      *   "updated_at": "2026-10-01T12:00:00Z"
      * }
@@ -561,7 +582,7 @@ export class WebhookResource extends BaseResource {
         endpointId: string,
         payload: IWebhookEndpointUpdatePayload,
         accountId?: string,
-    ): Promise<IWebhookEndpoint> {
+    ): Promise<IWebhookEndpointCreateResponse> {
         validateWebhookFields(payload, false);
         const path = this.endpointPath(endpointId, accountId);
         this.logger.info('Updating webhook endpoint');
@@ -611,7 +632,7 @@ export class WebhookResource extends BaseResource {
      * ```
      */
     async deleteEndpointByUrl(url: string, accountId?: string): Promise<void> {
-        validateWebhookUrl(url);
+        validateWebhookUrl(url, true);
         const path = this.endpointsPath(accountId);
         return this.callVoid('Failed to delete webhook endpoint', () =>
             this.http.delete(path, { params: { url } }),
@@ -655,7 +676,7 @@ export class WebhookResource extends BaseResource {
      * (`POST /accounts/{accountId}/webhooks/endpoints/{endpointId}/secret/rotate`).
      * The old secret stops working immediately: deliveries sent after the
      * rotation are signed only with the new secret, so update the receiver at
-     * once. Not available to OAuth applications; use an API key.
+     * once. OAuth tokens need the `webhooks:write` scope.
      *
      * @param endpointId - The endpoint ID.
      * @param accountId - Override the client's default account ID.
@@ -736,14 +757,17 @@ function validateWebhookFields(
     }
 }
 
-function validateWebhookUrl(value: string | undefined): void {
+function validateWebhookUrl(value: string | undefined, allowStoredHttp = false): void {
     let url: URL;
     try {
         url = new URL(value ?? '');
     } catch {
-        throw new ValidationError('Webhook URL must be an absolute HTTP(S) URL', { url: value });
+        throw new ValidationError('Webhook URL must be an absolute HTTPS URL', { url: value });
     }
-    if ((url.protocol !== 'https:' && url.protocol !== 'http:') || !url.hostname) {
-        throw new ValidationError('Webhook URL must be an absolute HTTP(S) URL', { url: value });
+    if (
+        (url.protocol !== 'https:' && !(allowStoredHttp && url.protocol === 'http:'))
+        || !url.hostname
+    ) {
+        throw new ValidationError('Webhook URL must be an absolute HTTPS URL', { url: value });
     }
 }

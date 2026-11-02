@@ -13,9 +13,16 @@ describe('WebhookResource.deleteEndpointByUrl', () => {
         const resource = new WebhookResource(http, 'account-1');
         const url = 'https://example.com/hook?tenant=one&source=two';
         expect(await resource.listEndpoints(undefined, { url })).toEqual([]);
+        expect(await resource.listEndpoints(undefined, { url: 'http://example.com/legacy' })).toEqual([]);
         await expect(resource.listEndpoints(undefined, { url: 'invalid' })).rejects.toBeInstanceOf(ValidationError);
         await expect(resource.listEndpoints(undefined, null as never)).rejects.toBeInstanceOf(ValidationError);
-        expect(calls).toEqual([{ url: '/accounts/account-1/webhooks/endpoints', config: { params: { url } } }]);
+        expect(calls).toEqual([
+            { url: '/accounts/account-1/webhooks/endpoints', config: { params: { url } } },
+            {
+                url: '/accounts/account-1/webhooks/endpoints',
+                config: { params: { url: 'http://example.com/legacy' } },
+            },
+        ]);
     });
     test('sends the exact registered URL as a query parameter without a body', async () => {
         const calls: unknown[] = [];
@@ -35,7 +42,8 @@ describe('WebhookResource.deleteEndpointByUrl', () => {
             await expect(resource.deleteEndpointByUrl(url)).rejects.toBeInstanceOf(ValidationError);
         }
         await expect(new WebhookResource(http).deleteEndpointByUrl(url)).rejects.toBeInstanceOf(ValidationError);
-        expect(calls).toHaveLength(1);
+        await expect(resource.deleteEndpointByUrl('http://example.com/legacy')).resolves.toBeUndefined();
+        expect(calls).toHaveLength(2);
     });
 });
 
@@ -59,6 +67,8 @@ const SUBSCRIPTION = {
     email: 'ops@example.com',
     events: ['document_ready', 'signer_signed_document'],
     is_active: true,
+    is_held: false,
+    held_since: null,
     updated_at: '2026-07-18T02:36:02Z',
 };
 
@@ -80,6 +90,10 @@ const DISPATCH = {
     endpoint: 'https://example.com/webhook',
     payload: { document_id: 'document-1' },
     delivered: true,
+    webhook_id: 'webhook-1',
+    attempt: 1,
+    kind: 'scheduled',
+    will_retry: false,
     http_status: 200,
     response_body: 'ok',
     error: null,
@@ -142,6 +156,9 @@ describe('WebhookResource', () => {
         ).rejects.toThrow(ValidationError);
         await expect(
             resource.register({ url: 'javascript:alert(1)', email: 'ops@example.com' }),
+        ).rejects.toThrow(ValidationError);
+        await expect(
+            resource.register({ url: 'http://example.com/webhook', email: 'ops@example.com' }),
         ).rejects.toThrow(ValidationError);
         await expect(
             resource.register({ url: 'https://example.com/webhook', email: 'not-an-email' }),
@@ -405,12 +422,15 @@ describe('WebhookResource', () => {
 
     test('endpoint methods call the documented routes with the exact bodies', async () => {
         const ENDPOINT = {
+            resource: 'activity_event_subscription',
             id: 'endpoint-1',
             name: 'ERP',
             url: 'https://example.com/webhook',
             email: 'ops@example.com',
             events: ['document_ready'],
             is_active: true,
+            is_held: false,
+            held_since: null,
             signing_enabled: true,
             created_at: '2026-10-01T12:00:00Z',
             updated_at: '2026-10-01T12:00:00Z',
@@ -429,7 +449,10 @@ describe('WebhookResource', () => {
             },
             put: async (url: string, body?: unknown) => {
                 calls.push({ method: 'PUT', url, body });
-                return response(ENDPOINT);
+                return response({
+                    ...ENDPOINT,
+                    ...(body as { signing_enabled?: boolean }).signing_enabled ? SECRET : {},
+                });
             },
             delete: async (url: string) => {
                 calls.push({ method: 'DELETE', url });
@@ -449,7 +472,10 @@ describe('WebhookResource', () => {
             }),
         ).toEqual({ ...ENDPOINT, ...SECRET });
         expect(await resource.getEndpoint('endpoint-1')).toEqual(ENDPOINT);
-        expect(await resource.updateEndpoint('endpoint-1', { is_active: false })).toEqual(ENDPOINT);
+        expect(await resource.updateEndpoint('endpoint-1', { signing_enabled: true })).toEqual({
+            ...ENDPOINT,
+            ...SECRET,
+        });
         await expect(resource.deleteEndpoint('endpoint-1')).resolves.toBeUndefined();
         expect(await resource.getEndpointSecret('endpoint-1')).toEqual(SECRET);
         expect(await resource.rotateEndpointSecret('endpoint-1', 'account-2')).toEqual(SECRET);
@@ -468,7 +494,7 @@ describe('WebhookResource', () => {
                 },
             },
             { method: 'GET', url: `${base}/endpoint-1` },
-            { method: 'PUT', url: `${base}/endpoint-1`, body: { is_active: false } },
+            { method: 'PUT', url: `${base}/endpoint-1`, body: { signing_enabled: true } },
             { method: 'DELETE', url: `${base}/endpoint-1` },
             { method: 'GET', url: `${base}/endpoint-1/secret` },
             {
@@ -485,6 +511,7 @@ describe('WebhookResource', () => {
         const valid = { url: 'https://example.com/webhook', email: 'ops@example.com' };
         const requests = [
             () => resource.createEndpoint({ ...valid, url: 'ftp://example.com' }),
+            () => resource.createEndpoint({ ...valid, url: 'http://example.com' }),
             () => resource.createEndpoint({ ...valid, email: 'nope' }),
             () => resource.createEndpoint({ ...valid, signing_enabled: 'yes' as never }),
             () => resource.createEndpoint({ ...valid, name: 3 as never }),
@@ -492,6 +519,7 @@ describe('WebhookResource', () => {
             () => resource.updateEndpoint('endpoint-1', {}),
             () => resource.updateEndpoint('endpoint-1', { url: undefined } as never),
             () => resource.updateEndpoint('endpoint-1', { url: 'not a url' }),
+            () => resource.updateEndpoint('endpoint-1', { url: 'http://example.com' }),
             () => resource.updateEndpoint('endpoint-1', { events: [''] }),
             () => resource.updateEndpoint('', { is_active: true }),
             () => resource.getEndpoint(''),

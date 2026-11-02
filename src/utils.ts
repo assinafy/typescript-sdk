@@ -336,6 +336,23 @@ export function assertDateTime(value: unknown, label: string): asserts value is 
     }
 }
 
+/** Require an ISO-8601 assignment deadline accepted by the API. */
+export function assertExpirationDate(value: unknown, label: string): asserts value is string {
+    if (typeof value !== 'string') {
+        throw new ValidationError(`${label} must be an ISO-8601 date or date-time`);
+    }
+    const normalized = /^\d{4}-\d{2}-\d{2}$/u.test(value)
+        ? `${value}T00:00:00Z`
+        : /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?$/u.test(value)
+            ? `${value}Z`
+            : value;
+    try {
+        assertDateTime(normalized, label);
+    } catch {
+        throw new ValidationError(`${label} must be an ISO-8601 date or date-time`);
+    }
+}
+
 /** Strip undefined and null values from a params record (Axios sends `undefined` as literal). */
 export function cleanParams(params: Record<string, unknown>): Record<string, unknown> {
     assertRecord(params, 'params');

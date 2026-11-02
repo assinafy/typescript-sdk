@@ -43,9 +43,8 @@ They map to `auth.getSocialLoginUrl()` and
 The SDK also includes the production contract additions for:
 
 - the `pades` document artifact;
-- `DigitalCertificate` verification on virtual assignment creation and cost
-  estimation (template calls remain typed but are temporarily rejected because
-  the server derives their method);
+- `DigitalCertificate` verification on direct and template assignment creation
+  and cost estimation (templates with placed signer fields return `400`);
 - typed `display_settings` for collect fields;
 - signer `government_id` updates;
 - signature-image `reuse`;
@@ -379,11 +378,11 @@ estimation with `ValidationError.errors.code` set to
 
 Template role IDs do not reveal which entries are signers, editors or copy
 receivers. The SDK validates each entry's channel and positive `step`, then
-lets the API enforce role-aware signing order. The server also derives the
-assignment method from placed template fields but does not yet reject an
-unusable certificate/`collect` result. Until it does, the SDK refuses
-`DigitalCertificate` on both template-document creation and cost estimation
-with the same stable code; use a direct virtual assignment instead.
+lets the API enforce role-aware signing order. The server derives the method:
+a fieldless template supports `DigitalCertificate`, while placed signer fields
+produce `collect` and return `400`. A template signer can identify an existing
+signer by `id`, or use `email` to reuse or create one; `id` wins when both are
+sent.
 
 ## Identity document and face verification
 
@@ -468,9 +467,10 @@ Document upload accepts a PDF of at most 25 MB and 2,000 pages. The multipart
 schema documents the file; the SDK's optional `metadata` JSON part is retained
 for deployments that accept application-owned opaque metadata.
 
-The reset-expiration schema requires the `expires_at` key itself: send an
-ISO-8601 date-time string, or `null` to remove the expiration. The SDK's
-`resetExpiration` always sends the key and accepts `null` for clearing.
+Assignment expiration accepts an ISO-8601 date (ending at 23:59 UTC), a
+date-time without an offset (UTC), or an offset-aware date-time. The
+reset-expiration schema requires the `expires_at` key itself; send `null` to
+remove the expiration. The SDK always sends that key.
 
 ## Resend-cost response variants
 
@@ -530,12 +530,13 @@ signer access or verification value; treat it as a credential and never log it.
 Assinafy sends webhook events as HTTP `POST` JSON requests with
 `Connection: close`, `webhook-id` and `webhook-timestamp` headers, and a
 `webhook-signature` header on signing-enabled endpoints. Every active endpoint
-subscribed to an event receives it independently. Any `2xx` is successful. There are at most two automatic
-attempts per event with a three-second wait. After ten consecutive failed
-events, ordinary delivery pauses and about 5% of later events are attempted
-until one succeeds. `webhooks.retryDispatch()` requests immediate redelivery.
-Only the first 2,000 characters of the receiver response body are retained in
-dispatch history.
+subscribed to an event receives it independently. Any `2xx` is successful.
+Connection failures, timeouts, `408`, `429`, and `5xx` receive up to six
+attempts about ten minutes apart. After ten failed deliveries in a row, the
+endpoint is held and probed after 3, 15, and 60 minutes, then every six hours.
+Success replays missed events oldest first. `webhooks.retryDispatch()` sends
+once immediately, even while held. The first 2,000 response characters and the
+delivery entry are retained for seven days.
 
 The common body contains `id`, `event`, nullable `message`, nullable `payload`,
 nullable `origin`, Unix-second `created_at`, polymorphic `subject` and `object`,
@@ -551,10 +552,13 @@ oldest endpoint; the endpoint routes address each one by ID. Exact registered
 URLs can also filter `listEndpoints(accountId?, { url })` and identify the
 target of `deleteEndpointByUrl(url, accountId?)`.
 
-`createEndpoint()` returns `IWebhookEndpointCreateResponse` with `secret` when
-signing is enabled. Store that value securely at creation, including for OAuth
-applications: they cannot read or rotate the secret afterward. If an OAuth
-application loses it, delete and recreate its endpoint.
+New or changed endpoint URLs must use HTTPS. Endpoint responses expose
+`is_held` and `held_since`; dispatch entries expose `webhook_id`, `attempt`,
+`kind`, and `will_retry`. `createEndpoint()` returns
+`IWebhookEndpointCreateResponse` with `secret` when signing is enabled.
+`updateEndpoint()` returns the same shape and includes `secret` when that
+request turns signing on. Store the value securely. OAuth applications cannot
+read it afterward, but can rotate it with `webhooks:write`.
 
 Signing-enabled endpoints follow Standard Webhooks:
 `webhook-signature` holds space-separated `v1,<base64>` entries, each an
@@ -562,14 +566,14 @@ HMAC-SHA256 of `{webhook-id}.{webhook-timestamp}.{raw body}` keyed with the
 base64-decoded part of the `whsec_` secret.
 `webhookVerifier.verifySignature()` implements this, with a 300-second
 timestamp tolerance by default; non-finite or negative windows fail closed.
-The signing-secret routes are not available to
-OAuth applications. The earlier `webhookVerifier.verify()` (hex HMAC over the
+The secret-read route is not available to OAuth applications. The earlier
+`webhookVerifier.verify()` (hex HMAC over the
 body alone) is deprecated; it never matched an Assinafy signature.
 
-Older sandbox deployments can omit `secret` from the creation response and
-return `404` for deletion by URL. API-key integrations can still use the secret
-read/rotation and deletion-by-ID routes. OAuth integrations need a deployment
-that returns the creation secret to configure signed endpoints.
+Older sandbox deployments can omit `secret` from creation/update responses and
+return `404` for deletion by URL. API-key integrations can still read/rotate
+the secret and delete by ID. OAuth integrations can rotate a lost secret where
+the production route is available.
 
 ## Authentication isolation
 

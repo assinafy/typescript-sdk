@@ -664,8 +664,15 @@ describe('SignerDocumentsResource — signer-access-code query auth', () => {
         expect(paramsOf(calls[0])).toEqual({ 'signer-access-code': 'code-xyz' });
         expect(result).toBeUndefined();
         await expect(
-            new SignerDocumentsResource(http).decline('doc-1', 'asg-1', 'code-xyz', 'x'.repeat(2001)),
+            new SignerDocumentsResource(http).decline(
+                'doc-1', 'asg-1', 'code-xyz', '😀'.repeat(2000),
+            ),
+        ).resolves.toBeUndefined();
+        await expect(
+            new SignerDocumentsResource(http).decline(
+                'doc-1', 'asg-1', 'code-xyz', '😀'.repeat(2001),
+            ),
         ).rejects.toBeInstanceOf(ValidationError);
-        expect(calls).toHaveLength(1);
+        expect(calls).toHaveLength(2);
     });
 });

@@ -395,11 +395,11 @@ describe('buildAssignmentPayload', () => {
         const body = buildAssignmentPayload({
             signers: ['a'],
             message: 'hi',
-            expires_at: '2027-12-31T23:59:00Z',
+            expires_at: '2027-12-31',
             copy_receivers: ['c'],
         });
         expect(body['message']).toBe('hi');
-        expect(body['expires_at']).toBe('2027-12-31T23:59:00Z');
+        expect(body['expires_at']).toBe('2027-12-31');
         expect(body['copy_receivers']).toEqual(['c']);
     });
 
@@ -642,10 +642,10 @@ describe('AssignmentResource', () => {
         } as unknown as AxiosInstance;
 
         const resource = new AssignmentResource(axiosMock, 'acc');
-        await resource.resetExpiration('doc-1', 'asg-1', '2027-12-31T23:59:59Z');
+        await resource.resetExpiration('doc-1', 'asg-1', '2027-12-31T23:59:59');
 
         expect(capturedUrl).toBe('/documents/doc-1/assignments/asg-1/reset-expiration');
-        expect(capturedBody).toEqual({ expires_at: '2027-12-31T23:59:59Z' });
+        expect(capturedBody).toEqual({ expires_at: '2027-12-31T23:59:59' });
     });
 
     test('resetExpiration keeps expires_at: null in the body (does not strip null)', async () => {

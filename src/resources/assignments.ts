@@ -17,7 +17,7 @@ import type {
     SignerReference,
 } from '../types';
 import { ValidationError } from '../errors';
-import { assertDateTime, assertRecord, cleanListParams, cleanParams } from '../utils';
+import { assertExpirationDate, assertRecord, cleanListParams, cleanParams } from '../utils';
 import { BaseResource } from './base';
 
 const ASSIGNMENT_METHODS = new Set(['virtual', 'collect']);
@@ -134,12 +134,9 @@ export function validateSigningOrder(
 }
 
 /**
- * Reject a certificate signer unless the assignment is known to be virtual.
- *
+ * Reject a certificate signer when a direct assignment is not virtual.
  * Certificate completion can complete only the signer's virtual item; the
- * ordinary field-signing endpoint refuses certificate signers. Template
- * requests pass no method, so they are refused until the API enforces this
- * rule after deriving the method from the template's placed fields.
+ * ordinary field-signing endpoint refuses certificate signers.
  */
 export function validateDigitalCertificateMethod(
     method: 'virtual' | 'collect' | undefined,
@@ -206,7 +203,7 @@ export function buildAssignmentPayload(
     if (payload.message !== undefined && typeof payload.message !== 'string') {
         throw new ValidationError('message must be a string');
     }
-    if (payload.expires_at !== undefined) assertDateTime(payload.expires_at, 'expires_at');
+    if (payload.expires_at !== undefined) assertExpirationDate(payload.expires_at, 'expires_at');
     if (
         payload.copy_receivers !== undefined
         && (!Array.isArray(payload.copy_receivers)
@@ -438,7 +435,7 @@ export class AssignmentResource extends BaseResource {
      * without it. Note the camelCase spelling: `account_id` and an
      * `X-Account-Id` header are both rejected.
      *
-     * @param params - `page`, `per-page`.
+     * @param params - `page`, `per-page`, and `sort`.
      * @param accountId - Override the client's default account ID.
      * @returns Assignments, with pagination in `meta`. Each item is a full
      * {@link IAssignment} (same shape as {@link AssignmentResource.create}
@@ -574,6 +571,8 @@ export class AssignmentResource extends BaseResource {
      * @param payload - Signers plus optional `method` (defaults to `virtual`),
      * `message`, `expires_at`, `copy_receivers` (existing signer IDs, not
      * addresses), and `collect`-mode `entries` with page-image geometry.
+     * `expires_at` accepts a date (ending at 23:59 UTC), a date-time without
+     * an offset (UTC), or an offset-aware date-time.
      * @returns The created {@link IAssignment}: `signers` (rich, with `step` /
      * `notified` / `verification_method`), `items` (one row per signer × field),
      * a `summary` count block, and per-signer `signing_urls`. Response shape:
@@ -767,9 +766,10 @@ export class AssignmentResource extends BaseResource {
      * (`PUT /documents/{documentId}/assignments/{assignmentId}/reset-expiration`).
      *
      * Sends `{ expires_at }` verbatim; the key itself is required by the
-     * contract. Use an ISO-8601 date/time string, or `null` to remove the
-     * expiration — `null` is the documented clear mechanism and, unlike
-     * ordinary nullable inputs, is intentionally not stripped from the body.
+     * contract. Use an ISO-8601 date, a date-time with or without an offset,
+     * or `null` to remove the expiration. Date-only values end at 23:59 UTC;
+     * date-times without offsets are UTC. `null` is intentionally not stripped
+     * from the body.
      *
      * Request body (`application/json`):
      * ```jsonc
@@ -780,8 +780,8 @@ export class AssignmentResource extends BaseResource {
      *
      * @param documentId - The document the assignment belongs to.
      * @param assignmentId - The assignment to update.
-     * @param expiresAt - New expiry as an ISO-8601 date/time string, or `null`
-     * to remove the expiration.
+     * @param expiresAt - New expiry as an ISO-8601 date or date-time string,
+     * or `null` to remove the expiration.
      * @returns The updated {@link IAssignment} — the same full shape
      * {@link AssignmentResource.create} returns (`signers`, `items`, `summary`,
      * `signing_urls`), with `expires_at` reflecting the new value:
@@ -829,7 +829,7 @@ export class AssignmentResource extends BaseResource {
     ): Promise<IAssignment> {
         const docId = this.requireId(documentId, 'Document ID');
         const asgId = this.requireId(assignmentId, 'Assignment ID');
-        if (expiresAt !== null) assertDateTime(expiresAt, 'expiresAt');
+        if (expiresAt !== null) assertExpirationDate(expiresAt, 'expiresAt');
         // `null` is meaningful here ("no expiration"), so don't strip it.
         return this.call('Failed to update assignment expiration', () =>
             this.http.put(

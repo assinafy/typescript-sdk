@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.11.0] - 2026-11-02
+
+### Added
+
+- Template document creation accepts either an existing signer `id` or an
+  `email` that reuses or creates the signer, with optional `name` and E.164
+  `whatsapp_phone_number`.
+- Template creation and cost estimation support `DigitalCertificate` for
+  templates without placed signer fields; templates that produce `collect`
+  assignments remain rejected by the API.
+- Webhook endpoint and delivery types expose hold state, attempt identity,
+  attempt kind, and whether another retry will follow. Endpoint updates expose
+  a newly generated signing secret when they turn signing on.
+
+### Changed
+
+- Assignment deadlines accept date-only values, date-times interpreted as UTC
+  when no offset is present, and offset-aware date-times.
+- New or changed webhook endpoint URLs require HTTPS. OAuth applications with
+  `webhooks:write` can rotate a signing secret, while reading it remains
+  API-key-only.
+- Webhook delivery guidance covers the six-attempt retry policy, endpoint hold
+  probes, oldest-first recovery, and seven-day history retention.
+
+### Fixed
+
+- Signer decline reasons count Unicode characters rather than UTF-16 code
+  units, allowing the documented 2,000-character limit for astral characters.
+- Development tooling resolves `minimatch` 11.0.3, which prevents unbounded
+  glob-part amplification on attacker-controlled patterns.
+
 ## [2.10.0] - 2026-10-29
 
 ### Added
@@ -895,7 +926,8 @@ signer fields with `cpf` and `whatsapp_phone_number`.
 - High-level `uploadAndRequestSignatures` helper on `AssinafyClient`.
 - `PaginatedResult<T>` with parsed `X-Pagination-*` header meta.
 
-[Unreleased]: https://github.com/assinafy/typescript-sdk/compare/v2.10.0...HEAD
+[Unreleased]: https://github.com/assinafy/typescript-sdk/compare/v2.11.0...HEAD
+[2.11.0]: https://github.com/assinafy/typescript-sdk/compare/v2.10.0...v2.11.0
 [2.10.0]: https://github.com/assinafy/typescript-sdk/compare/v2.9.1...v2.10.0
 [2.9.1]: https://github.com/assinafy/typescript-sdk/compare/v2.9.0...v2.9.1
 [2.9.0]: https://github.com/assinafy/typescript-sdk/compare/v2.8.1...v2.9.0

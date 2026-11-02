@@ -1192,7 +1192,7 @@ function assertDeclineReason(declineReason: string): void {
     if (typeof declineReason !== 'string' || !declineReason.trim()) {
         throw new ValidationError('declineReason is required');
     }
-    if (declineReason.length > 2000) {
+    if ([...declineReason].length > 2000) {
         throw new ValidationError('declineReason must be at most 2000 characters');
     }
 }

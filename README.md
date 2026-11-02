@@ -946,6 +946,7 @@ await client.assignments.estimateCost(documentId, { signers: [{}] }); // Email p
 
 await client.assignments.resetExpiration(documentId, assignmentId, '2027-06-30T00:00:00Z');
 // A chave `expires_at` é exigida pelo contrato; envie `null` para remover a expiração.
+// Valores só com data terminam às 23:59 UTC; data/hora sem offset é UTC.
 await client.assignments.resetExpiration(documentId, assignmentId, null);
 
 await client.assignments.resendNotification(documentId, assignmentId, signerId);
@@ -1124,11 +1125,19 @@ const papelSignatario = configurado.roles?.find(
     && papel.assignment_type.toLowerCase() !== 'editor',
 );
 if (!papelSignatario) throw new Error('O template não tem papel de signatário');
-await client.documents.createFromTemplate(
+const gerado = await client.documents.createFromTemplate(
   templateId,
-  [{ role_id: papelSignatario.id, id: signerId, verification_method: 'Email', notification_methods: ['Email'] }],
-  { name: 'NDA - João Silva', message: 'Por favor, assine assim que puder.' },
+  [{
+    role_id: papelSignatario.id,
+    email: 'signatario@exemplo.com.br',
+    name: 'Signatário Exemplo',
+    verification_method: 'Email',
+    notification_methods: ['Email'],
+  }],
+  { name: 'NDA - Exemplo', message: 'Por favor, assine assim que puder.' },
 );
+// A resposta começa com status: 'uploaded' e assignment: null. Acompanhe
+// documents.get(gerado.id) ou os webhooks até pending_signature / failed.
 
 // Estime o custo antes de criar → ICostEstimate
 await client.documents.estimateCostFromTemplate(templateId, [
@@ -1138,11 +1147,13 @@ await client.documents.estimateCostFromTemplate(templateId, [
 //     has_sufficient_resources: true, blocking_reason: null, breakdown: [], … }
 ```
 
-O servidor deduz o método do assignment de template a partir dos campos posicionados e hoje aceita
-signatários por certificado mesmo quando isso cria um assignment `collect` impossível de concluir.
-Até a API impor atomicamente a regra de método virtual, o SDK rejeita `DigitalCertificate` tanto em
-`createFromTemplate()` quanto em `estimateCostFromTemplate()`, com o mesmo código estável. Para
-certificados, crie diretamente um assignment `virtual`.
+Cada signatário do template usa um `id` existente ou um `email`; `id` prevalece quando ambos são
+enviados. O email reutiliza o signatário correspondente da conta ou cria um com `name` e o
+`whatsapp_phone_number` E.164 opcional.
+
+O servidor deduz o método do assignment a partir do template. Um template sem campos posicionados
+para o signatário aceita `DigitalCertificate`; com campos posicionados, a API devolve `400` porque
+o assignment seria `collect`. `estimateCostFromTemplate()` aplica a mesma regra.
 
 Criar um template apenas envia o PDF e provisiona o papel de editor padrão — configure papéis e
 campos no editor da Assinafy depois. Os `download_url` dos objetos de página do template são URLs
@@ -1331,7 +1342,8 @@ Trocar um autenticador já confirmado exige também `password` ou `reauth_code` 
 Uma conta tem 1 endpoint de webhook, ou até 3 nos planos pagos. Cada endpoint ativo inscrito em um
 evento o recebe, de forma independente. Tokens OAuth exigem `account:read` para ler endpoints e
 `webhooks:write` para alterá-los. Com assinatura ativa, a criação devolve `secret`: guarde-o também
-nas integrações OAuth. Ler ou rotacionar esse segredo depois exige chave de API.
+nas integrações OAuth. Ler o segredo depois exige chave de API; uma aplicação OAuth com
+`webhooks:write` pode rotacionar um segredo perdido.
 
 ```ts
 const endpoint = await client.webhooks.createEndpoint({
@@ -1341,7 +1353,8 @@ const endpoint = await client.webhooks.createEndpoint({
   events: ['document_ready', 'signer_signed_document', 'signer_rejected_document'],
   signing_enabled: true, // assina as entregas no padrão Standard Webhooks
 });
-// → { id, name, url, email, events, is_active, signing_enabled, created_at, updated_at }
+// → { id, name, url, email, events, is_active, is_held, held_since,
+//     signing_enabled, secret, created_at, updated_at }
 
 const secret = endpoint.secret; // 'whsec_…'; guarde em armazenamento seguro na criação
 await client.webhooks.listEndpoints();                                  // IWebhookEndpoint[]
@@ -1363,11 +1376,13 @@ const historico = await client.webhooks.listDispatches({
 const reenviado = await client.webhooks.retryDispatch(dispatchId); // IWebhookDispatch
 ```
 
-`createEndpoint()` devolve `403` quando o limite do plano foi atingido e `400` quando outro endpoint
+URLs novas ou alteradas de webhook devem usar HTTPS. `createEndpoint()` devolve `403` quando o
+limite do plano foi atingido e `400` quando outro endpoint
 do workspace já usa a mesma `url`. Quando `events` é omitido ou vazio, o SDK envia
 `DEFAULT_WEBHOOK_EVENTS` (exportado): `document_ready`, `document_prepared`,
-`signer_signed_document`, `signer_rejected_document` e `document_processing_failed`. Em `updateEndpoint()`, `signing_enabled: true` gera um segredo se
-ainda não houver e `false` o descarta.
+`signer_signed_document`, `signer_rejected_document` e `document_processing_failed`. Em
+`updateEndpoint()`, `signing_enabled: true` gera um segredo se ainda não houver e devolve esse novo
+segredo uma vez; `false` o descarta.
 
 As rotas anteriores continuam disponíveis e operam sobre o endpoint mais antigo da conta:
 `register()` (cria ou atualiza), `get()` (`IWebhookSubscription | null`) e `inactivate()`.
@@ -1375,10 +1390,12 @@ As rotas anteriores continuam disponíveis e operam sobre o endpoint mais antigo
 A Assinafy entrega cada evento como um `POST` HTTP com `Content-Type: application/json`,
 `Connection: close` e os headers `webhook-id` (igual em todas as tentativas do mesmo evento para o
 mesmo endpoint — use-o para deduplicar), `webhook-timestamp` e, com assinatura ativa,
-`webhook-signature`. Qualquer `2xx` é sucesso. São no máximo duas tentativas, com três segundos de
-intervalo. Depois de dez eventos falhos consecutivos, a entrega comum é pausada e cerca de 5% dos
-eventos seguintes são tentados até um dar certo; use `retryDispatch()` para reenviar na hora. O
-histórico guarda apenas os primeiros 2.000 caracteres do corpo de resposta do receptor.
+`webhook-signature`. Qualquer `2xx` é sucesso. Erros de conexão, timeouts, `408`, `429` e `5xx`
+recebem até seis tentativas, separadas por cerca de dez minutos; outros status são finais. Depois
+de dez entregas falhas seguidas, `is_held` fica verdadeiro e o evento perdido mais antigo é testado
+após 3, 15 e 60 minutos, e depois a cada seis horas. O sucesso retoma as entregas e envia os eventos
+perdidos do mais antigo para o mais novo. `retryDispatch()` envia uma vez imediatamente, mesmo
+durante a pausa. O histórico guarda os primeiros 2.000 caracteres da resposta por sete dias.
 
 Cada item do histórico (ou resultado de reenvio) é um `IWebhookDispatch`:
 
@@ -1392,6 +1409,10 @@ type WebhookDispatchShape = {
   endpoint: string | null;
   payload: IWebhookPayload | Record<string, unknown> | null;
   delivered: boolean;
+  webhook_id?: string | null;
+  attempt?: number | null;
+  kind?: 'scheduled' | 'probe' | 'manual' | string;
+  will_retry?: boolean;
   http_status: number | null;
   response_body: string | null;
   error: string | null;
@@ -1404,7 +1425,7 @@ Todo corpo de entrega usa este envelope:
 
 ```ts
 type WebhookPayloadShape = {
-  id: number;                         // use para processamento idempotente
+  id: number;                         // atividade interna; deduplique pelo webhook-id
   event: string;
   message: string | null;
   payload: Record<string, unknown> | null;
