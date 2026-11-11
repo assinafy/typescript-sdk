@@ -4,6 +4,7 @@ import type {
     IWebhookEndpointCreatePayload,
     IWebhookEndpointCreateResponse,
     IWebhookEndpointSecret,
+    IWebhookEndpointSecretRotation,
     IWebhookEndpointUpdatePayload,
     IWebhookDispatchListParams,
     IWebhookEventTypeInfo,
@@ -674,34 +675,103 @@ export class WebhookResource extends BaseResource {
     /**
      * Replace an endpoint's signing secret and return the new one
      * (`POST /accounts/{accountId}/webhooks/endpoints/{endpointId}/secret/rotate`).
-     * The old secret stops working immediately: deliveries sent after the
-     * rotation are signed only with the new secret, so update the receiver at
-     * once. OAuth tokens need the `webhooks:write` scope.
+     *
+     * Without `keep_previous` the old secret stops at once: update the receiver
+     * immediately. With `keep_previous: true` both secrets sign deliveries for
+     * 24 hours (each delivery carries one `v1,` entry per secret, which
+     * `webhookVerifier.verifySignature()` already accepts), so the receiver can
+     * switch without dropping events; rotating again ends the overlap. OAuth
+     * tokens need the `webhooks:write` scope.
      *
      * @param endpointId - The endpoint ID.
      * @param accountId - Override the client's default account ID.
+     * @param options - `keep_previous`: keep the old secret signing for 24 hours.
      * @returns The new secret:
      * ```jsonc
-     * { "secret": "whsec_bmV3LWtleS1iYXNlNjQtZW5jb2RlZA==" }
+     * {
+     *   "secret": "whsec_bmV3LWtleS1iYXNlNjQtZW5jb2RlZA==",
+     *   "previous_secret_expires_at": "2026-11-12T14:00:00Z"   // only with keep_previous: true
+     * }
      * ```
-     * @throws {ValidationError} If `endpointId` is empty or no account ID is
-     * available.
+     * @throws {ValidationError} If `endpointId` is empty, no account ID is
+     * available, or `keep_previous` is not a boolean.
      * @throws {ApiError} `400` when signing is disabled on the endpoint; `404`
      * if it does not exist.
      *
      * @example
      * ```ts
-     * const { secret } = await client.webhooks.rotateEndpointSecret(endpoint.id);
+     * const { secret } = await client.webhooks.rotateEndpointSecret(endpoint.id, undefined, {
+     *   keep_previous: true,
+     * });
      * await secretStore.put('assinafy-webhook-secret', secret);
      * ```
      */
     async rotateEndpointSecret(
         endpointId: string,
         accountId?: string,
-    ): Promise<IWebhookEndpointSecret> {
+        options: { keep_previous?: boolean } = {},
+    ): Promise<IWebhookEndpointSecretRotation> {
+        assertRecord(options, 'rotation options');
+        if (options.keep_previous !== undefined && typeof options.keep_previous !== 'boolean') {
+            throw new ValidationError('keep_previous must be a boolean');
+        }
         const path = `${this.endpointPath(endpointId, accountId)}/secret/rotate`;
+        const body = options.keep_previous === undefined ? undefined : { keep_previous: options.keep_previous };
         this.logger.info('Rotating webhook endpoint secret');
-        return this.call('Failed to rotate webhook endpoint secret', () => this.http.post(path));
+        return this.call('Failed to rotate webhook endpoint secret', () => this.http.post(path, body));
+    }
+
+    /**
+     * Send the endpoint one `webhook_test` event now
+     * (`POST /accounts/{accountId}/webhooks/endpoints/{endpointId}/test`).
+     *
+     * Signed and sent like any delivery, to this endpoint only, also while it is
+     * paused or inactive; it neither lifts nor counts toward a pause. The
+     * endpoint has 10 seconds to answer. The event's `payload` and `origin` are
+     * `null`, and its `subject`/`object` describe the endpoint (never its
+     * secret). Up to 10 tests per user every 10 minutes; OAuth tokens need
+     * `webhooks:write`.
+     *
+     * @param endpointId - The endpoint ID.
+     * @param accountId - Override the client's default account ID.
+     * @returns The delivery attempt, also listed in the delivery history:
+     * ```jsonc
+     * {
+     *   "resource": "activity_dispatching_history",
+     *   "id": "1052b3c4d5e6f7a8b9c0d1e2f3a4",
+     *   "event": "webhook_test",
+     *   "activity_id": 8240001,
+     *   "endpoint_id": "1052b0e1f2a3b4c5d6e7f8a9b0c1",
+     *   "endpoint": "https://hooks.example.com/assinafy",
+     *   "payload": {                       // the event as delivered
+     *     "id": 8240001, "event": "webhook_test", "payload": null, "origin": null,
+     *     "account_id": "acc_example", "subject": { "type": "ActivityEventSubscription" }
+     *   },
+     *   "delivered": true,
+     *   "webhook_id": "msg_2v9TQ0a7",
+     *   "attempt": 1,
+     *   "kind": "manual",
+     *   "will_retry": false,
+     *   "duration_ms": 182,
+     *   "http_status": 200,
+     *   "response_body": "ok",
+     *   "error": null,
+     *   "created_at": "2026-11-11T14:00:00Z",
+     *   "updated_at": "2026-11-11T14:00:00Z"
+     * }
+     * ```
+     * @throws {ValidationError} If `endpointId` is empty or no account ID is available.
+     * @throws {ApiError} `404` for an unknown endpoint, `429` past 10 tests in 10 minutes.
+     *
+     * @example
+     * ```ts
+     * const attempt = await client.webhooks.testEndpoint(endpoint.id);
+     * if (!attempt.delivered) console.warn(attempt.http_status, attempt.error);
+     * ```
+     */
+    async testEndpoint(endpointId: string, accountId?: string): Promise<IWebhookDispatch> {
+        const path = `${this.endpointPath(endpointId, accountId)}/test`;
+        return this.call('Failed to send webhook test delivery', () => this.http.post(path));
     }
 
     private endpointsPath(accountId?: string): string {

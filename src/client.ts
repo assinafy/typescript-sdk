@@ -28,6 +28,8 @@ import { FieldsResource } from './resources/fields';
 import { SignerDocumentsResource } from './resources/signer-documents';
 import { UserResource } from './resources/users';
 import { ContractResource } from './resources/contracts';
+import { EnvelopeResource } from './resources/envelopes';
+import { EmbedResource } from './resources/embed';
 import { WebhookVerifier } from './support/webhook-verifier';
 import { SDK_USER_AGENT, withoutCredentials } from './support/transport';
 
@@ -86,6 +88,8 @@ export class AssinafyClient {
     public readonly signerDocuments: SignerDocumentsResource;
     public readonly users: UserResource;
     public readonly contracts: ContractResource;
+    public readonly envelopes: EnvelopeResource;
+    public readonly embed: EmbedResource;
     public readonly webhookVerifier: WebhookVerifier;
 
     /**
@@ -207,7 +211,12 @@ export class AssinafyClient {
             this.logger,
             this.publicAxiosInstance,
         );
-        this.fields = new FieldsResource(this.axiosInstance, this.defaultAccountId, this.logger);
+        this.fields = new FieldsResource(
+            this.axiosInstance,
+            this.defaultAccountId,
+            this.logger,
+            this.publicAxiosInstance,
+        );
         this.signerDocuments = new SignerDocumentsResource(
             this.axiosInstance,
             this.defaultAccountId,
@@ -220,6 +229,8 @@ export class AssinafyClient {
             this.defaultAccountId,
             this.logger,
         );
+        this.envelopes = new EnvelopeResource(this.axiosInstance, this.defaultAccountId, this.logger);
+        this.embed = new EmbedResource(this.axiosInstance, this.defaultAccountId, this.logger);
         this.webhookVerifier = new WebhookVerifier(this.webhookSecret);
     }
 
@@ -399,7 +410,7 @@ export class AssinafyClient {
      * });
      * console.log(document.status);          // usually 'pending_signature'
      * console.log(signer_ids.length);        // 2
-     * console.log(assignment.signing_urls?.length); // one protected link per signer
+     * console.log(assignment.signing_urls?.length); // one entry per notified signer; url is null for embedded or WhatsApp-only signers
      * ```
      */
     async uploadAndRequestSignatures(options: {

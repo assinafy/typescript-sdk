@@ -4,10 +4,12 @@
 
 TypeScript SDK for the [Assinafy API](https://api.assinafy.com.br/v1/docs) — a Brazilian digital signature platform.
 
-Covers all 118 operations in the current official OpenAPI document: accounts,
-authentication, OAuth 2.1 applications, users, documents, assignments, signers,
-signer-side flows, contract lifecycle management (CLM), templates, tags, fields,
-webhooks, branding, statistics, and
+Maps all 147 operations in the current official OpenAPI document (146 with SDK
+methods; the embed session exchange is reserved for Assinafy's embed page): accounts,
+authentication, OAuth 2.1 applications, users, documents, assignments,
+envelopes, embedded signing, signers, signer-side flows, contract lifecycle
+management (CLM), templates, tags, fields, webhooks, branding, plan usage,
+notification policy, statistics, and
 the high-level `uploadAndRequestSignatures` workflow. Five additional
 template-management routes used by existing integrations and two legacy browser
 URL helpers are retained for compatibility.
@@ -39,7 +41,8 @@ afterwards.
 **Per-resource detail** — [Resource reference](#resource-reference):
 [documents](#documents) · [signers](#signers) · [assignments](#assignments) ·
 [contract lifecycle management](#contract-lifecycle-management-clm) ·
-[paid signing branches](#paid-signing-branches) · [templates](#templates) ·
+[paid signing branches](#paid-signing-branches) · [envelopes](#envelopes) ·
+[embedded signing](#embedded-signing) · [templates](#templates) ·
 [tags](#tags) · [workspaces](#workspaces) ·
 [field definitions](#field-definitions) ·
 [auth and API keys](#authentication--api-key-management) ·
@@ -234,8 +237,8 @@ await client.oauth.getUserInfo(tokens.access_token); // OIDC claims; needs `open
 | `documents:write` | Create documents and send them for signature |
 | `templates:read` | Read templates |
 | `templates:write` | Create and change templates |
-| `account:read` | Read the workspace's profile, theme and logo |
-| `webhooks:write` | Create, change, deactivate and delete the workspace's webhook endpoints |
+| `account:read` | Read the workspace's profile, theme, logo, document KPIs, webhook subscription and endpoints, and which signing features it can use |
+| `webhooks:write` | Change the webhook subscription, manage endpoints, re-send and test deliveries, and obtain a new signing secret |
 | `openid` | Receive an `id_token` identifying the user |
 | `profile` | Read the user's name |
 | `email` | Read the user's email and whether it is verified |
@@ -319,9 +322,11 @@ waiting for the server-provided `Retry-After` (or `X-Rate-Limit-Reset`) delay
 before each attempt. Automatic replay is limited to read-safe `GET`, `HEAD`,
 `OPTIONS`, and `DELETE` requests. `GET /sign` is excluded because it records
 that the signer viewed the assignment. Writes are not replayed by default.
-A non-empty `Idempotency-Key` opts a custom request into SDK replay, but it is
-not part of the current Assinafy OpenAPI contract: confirm that the target
-route deduplicates that key server-side first. No other HTTP status is retried.
+A non-empty `Idempotency-Key` opts a request into SDK replay. Envelope creation
+and template document creation deduplicate it server-side, so
+`envelopes.create(…, { idempotencyKey })` and `documents.createFromTemplate(…,
+{ idempotencyKey })` are safe to retry; other routes ignore the header. No
+other HTTP status is retried.
 
 ### Factories
 
@@ -341,8 +346,9 @@ The configuration object accepted by `fromConfig` has the exported type
 
 ## Endpoint coverage
 
-All 118 operations documented at https://api.assinafy.com.br/v1/docs are
-covered. The table below is the resource-level summary; the detailed operation
+All 147 operations documented at https://api.assinafy.com.br/v1/docs are
+mapped: 146 have SDK methods, and the embed session exchange is reserved for
+Assinafy's embed page. The table below is the resource-level summary; the detailed operation
 ledger is in [API_COVERAGE.md](API_COVERAGE.md).
 
 | Resource              | Endpoints                                                                                                                                                                                                                                          |
@@ -351,15 +357,17 @@ ledger is in [API_COVERAGE.md](API_COVERAGE.md).
 | `client.signers`      | create, get, list, update, delete, findByEmail                                                                                                                                                                                                     |
 | `client.assignments`  | list, create, estimateCost, resetExpiration, resendNotification, estimateResendCost, listWhatsAppNotifications, getIdentityVerification, downloadIdentityVerificationImage, reviewIdentityVerification                                                                                                                                  |
 | `client.contracts`    | list, get, set, listRelated, renew, terminate |
+| `client.envelopes`    | list, get, create, estimateCost, update, delete, cancel, listActivities, download, addDocument, removeDocument, resendNotification |
+| `client.embed`        | listOrigins, addOrigin, updateOrigin, deleteOrigin, createSession |
 | `client.templates`    | create, list, get, update, delete, downloadPage                                                                                                                                                                                        |
 | `client.tags`         | list, create, update, delete                                                                                                                                                                                                                       |
-| `client.workspaces`   | create, list, get, update, delete, getTheme, downloadLogo, uploadLogo, deleteLogo, getStats                                                                                                                                                        |
-| `client.webhooks`     | listEndpoints, createEndpoint, getEndpoint, updateEndpoint, deleteEndpoint, deleteEndpointByUrl, getEndpointSecret, rotateEndpointSecret, register, get, inactivate, listEventTypes, listDispatches, retryDispatch |
+| `client.workspaces`   | create, list, get, update, delete, getTheme, downloadLogo, uploadLogo, deleteLogo, getStats, getUsage, getNotificationPolicy, updateNotificationPolicy |
+| `client.webhooks`     | listEndpoints, createEndpoint, getEndpoint, updateEndpoint, deleteEndpoint, deleteEndpointByUrl, getEndpointSecret, rotateEndpointSecret, testEndpoint, register, get, inactivate, listEventTypes, listDispatches, retryDispatch |
 | `client.fields`       | create, list, get, update, delete, validate, validateMultiple, listTypes                                                                                                                                                                           |
 | `client.oauth`        | **getProtectedResourceMetadata**, **getAuthorizationServerMetadata**, **createAuthorizationUrl**, **readAuthorizationCallback**, **exchangeCode**, **refreshToken**, **revokeToken**, **getUserInfo** |
 | `client.auth`         | getSocialLoginUrl, getSocialLoginCallbackUrl, login, verifyMfa, socialLogin, linkSocialLogin, createApiKey, getApiKey, deleteApiKey, changePassword, requestPasswordReset, resetPassword                                                                      |
-| `client.users`        | getCurrent, getStats, getNotificationPreferences, updateNotificationPreferences, getMfa, startTotpEnrollment, confirmTotpEnrollment, regenerateRecoveryCodes, deleteMfaMethod |
-| `client.signerDocuments` | getCurrent, list, search, listAsWorkspace, searchAsWorkspace, download, signMultiple, declineMultiple, self, getIdentityVerification, startIdentityVerification, acceptTerms, verifyEmail, confirmData, uploadSignature, downloadSignature, getAssignment, sign, decline                                                            |
+| `client.users`        | getCurrent, getStats, getNotificationPreferences, updateNotificationPreferences, getPushPreferences, updatePushPreferences, getMfa, startTotpEnrollment, confirmTotpEnrollment, regenerateRecoveryCodes, deleteMfaMethod |
+| `client.signerDocuments` | getCurrent, list, search, listAsWorkspace, searchAsWorkspace, download, signMultiple, declineMultiple, self, getIdentityVerification, startIdentityVerification, acceptTerms, verifyEmail, confirmData, uploadSignature, downloadSignature, getAssignment, getTheme, downloadLogo, resendCertifiedCopy, downloadCertifiedCopy, resendCertifiedCopyFromLink, sign, decline |
 | `client.webhookVerifier` | verifySignature, extractEvent, getEventType, getEventData |
 
 Every HTTP wrapper has TypeScript-checked request/response shapes and
@@ -509,8 +517,8 @@ The response is `ICostEstimate`:
   extra_document_cost: number;
   total_credits: number;
   breakdown: Array<{ code: string; name: string; cost: number; quantity?: number; unit_cost?: number }>;
-  document_balance: number;
-  credit_balance: number;
+  document_balance: number | null; // null when documents are not limited
+  credit_balance: number | null;   // null when credits are not limited
   has_sufficient_resources: boolean;
   blocking_reason: 'PendingPayment' | 'InsufficientDocuments' | 'InsufficientCredits' | null;
   message: string | null;
@@ -550,7 +558,8 @@ type AssignmentShape = {
     completed_count: number;
     signers: Array<ISigner & { completed?: boolean }>;
   };
-  signing_urls?: Array<{ signer_id: string; url: string }>;
+  // url is null for an embedded signer (mint embed.createSession) and a WhatsApp-only signer.
+  signing_urls?: Array<{ signer_id: string; url: string | null; embedded?: boolean }>;
 };
 ```
 
@@ -580,15 +589,21 @@ await signerClient.signerDocuments.verifyEmail({
   verificationCode,
 }); // Promise<void>
 
-const confirmed = await signerClient.signerDocuments.confirmData(
+// Send the contact the signer's channel needs; it must be the signer's own.
+await signerClient.signerDocuments.confirmData(
   uploaded.id,
   accessCode,
-  { full_name: self.full_name, ...(self.email === null ? {} : { email: self.email }) },
-); // ISigner
+  { ...(self.email === null ? {} : { email: self.email }), has_accepted_terms: true },
+); // null on production (data: [])
 
-const signable = await signerClient.signerDocuments.getAssignment(accessCode, true);
-// `getAssignment` returns IDocumentDetailsResponse and records that the signer
-// viewed the assignment. Do not issue it merely as a health check.
+const signable = await signerClient.signerDocuments.getAssignment(accessCode, {
+  hasAcceptedTerms: true,
+  expand: ['envelope'],
+});
+// `getAssignment` returns ISigningDocument and records that the signer viewed
+// the assignment. Do not issue it merely as a health check. Once the code is
+// closed it returns only id, name, status, current_signer, certified_copy and
+// envelope, with is_signer_access_closed: true.
 
 await signerClient.signerDocuments.signMultiple([signable.id], accessCode);
 // Wire body: { document_ids: [signable.id] }; acknowledgement has no data.
@@ -997,20 +1012,19 @@ await client.assignments.resendNotification(documentId, assignmentId, signerId);
 // → { is_sent: true, document_id: '…', signer_id: '…' }
 
 const resendCost = await client.assignments.estimateResendCost(documentId, assignmentId, signerId);
-// Official response: ICostEstimate. Older deployments can return the compact
-// IResendCostEstimate branch with `total` and `has_sufficient_credits`; narrow
-// with `'total_credits' in resendCost` before reading branch-specific fields.
+// Production: { total, breakdown, credit_balance, has_sufficient_credits }. Older
+// deployments return a full ICostEstimate; narrow with `'total_credits' in resendCost`.
 ```
 
 The `create` response is an `IAssignment`: `{ id, method, signers: [...],
-items: [{ display_settings, ... }], signing_urls: [{ signer_id, url }], … }`.
+items: [{ display_settings, ... }], signing_urls: [{ signer_id, url, embedded }], … }`.
 
 For backwards compatibility, the SDK also accepts legacy `signer_ids` and `signerIds` payloads and rewrites them to the current `signers: [{ id }]` format expected by the API.
 
 **Cancelling a signature request.** Assinafy has no workspace-side "cancel" endpoint. To stop a pending request either delete the document (when its status is deletable) or have the signer decline:
 
 ```ts
-await client.documents.delete(documentId);                                  // workspace-side
+await client.documents.delete(documentId);                                  // workspace-side (an envelope: envelopes.cancel)
 await client.signerDocuments.decline(documentId, assignmentId, accessCode, 'No longer needed'); // signer-side
 ```
 
@@ -1030,6 +1044,13 @@ to `Email`.
 | `Whatsapp` | One-time code (OTP) by WhatsApp | `Whatsapp` | 0.45 credit (the notification), paid plans only |
 | `DigitalCertificate` | The signer signs with their **own ICP-Brasil certificate — A1 or A3 —** through the Web PKI extension, producing a **qualified PAdES signature**; requires `method: 'virtual'` | `Email` **or** `Whatsapp` | 0.5 credits + the notification |
 | `IdDocumentFaceMatchBasic` | Hosted identity-document, face and liveness verification | `Email` **or** `Whatsapp` | Use `estimateCost()` |
+| `Bypass` | No code: your app has already authenticated the signer. Enabled per account by Assinafy | `Email`, `Whatsapp` **or** `Bypass` (sends no invitation) | The notification |
+
+Check what the plan allows before offering a method:
+`(await client.workspaces.get(accountId, { expand: 'signing_features' })).signing_features`
+holds `DigitalCertificate`, `VerificationIdDocumentFaceMatchBasic`,
+`WhatsappNotification`, `VerificationBypass` and `Embed`; a `false` feature
+answers `403` with `ApiError.code === 'PlanRestricted'`.
 
 Exactly one notification method per signer. The SDK rejects an invalid
 combination before the request; the API would answer `400`.
@@ -1122,6 +1143,85 @@ terms with `confirmData(..., { has_accepted_terms: true })` or `acceptTerms()`.
 The regular `sign()` endpoint rejects certificate signers; they complete the
 ICP-Brasil flow through Assinafy's browser integration. After completion,
 `documents.download(documentId, 'pades')` returns the qualified PAdES artifact.
+
+### Envelopes
+
+An envelope sends up to 20 documents to the same signers (up to 20) at once:
+one invitation per signer, one signing link for all of their documents, and one
+document charge for the whole envelope. Each document keeps its own assignment,
+status, certificate, downloads and webhooks. Upload the documents and wait for
+`metadata_ready` first; do not create assignments on them.
+
+```ts
+const body = {
+  name: 'Admission kit',
+  message: 'Please sign the documents below.',
+  signers: [{ id: anaId }, { id: bobId, verification_method: 'Whatsapp' as const }],
+  documents: [
+    { id: contractId, signer_ids: [anaId, bobId], expires_at: '2026-12-31' },
+    { id: policyId, signer_ids: [anaId] },
+  ],
+};
+
+const estimate = await client.envelopes.estimateCost(body); // ICostEstimate, documents: 1
+const envelope = await client.envelopes.create(
+  { ...body, max_total_credits: estimate.total_credits },
+  { idempotencyKey: crypto.randomUUID() }, // safe to retry after a lost response
+);
+// IEnvelope: { id, name, message, documents: [{ id, position, name, status, artifacts,
+//   signers: [{ id, full_name, email, whatsapp_phone_number, completed, signed_at }] }],
+//   counts: { pending_signature: 2 }, signing_urls: [{ signer_id, url, embedded }], created_at }
+
+await client.envelopes.resendNotification(envelope.id, anaId); // one reminder for every document
+const trail = await client.envelopes.listActivities(envelope.id, { sort: 'id' }); // each names document_id
+const zip = await client.envelopes.download(envelope.id, 'certificated');      // 1 - contract.pdf, …
+```
+
+- Envelope signers sign at once (no `step`). A `DigitalCertificate` signer
+  signs only `virtual` documents, alone on each; `collect` documents need
+  `entries` whose signers are exactly their `signer_ids`.
+- `update()` renames, changes the message or reorders (`document_ids`) without
+  sending anything. `addDocument()` adds an unassigned document for existing
+  signers; `removeDocument()` cancels one and the others carry on.
+- `cancel()` cancels every open document and is safe to repeat. `delete()` works
+  only once every document is closed (`409 EnvelopeOpen` before); the documents
+  remain. A document of an open envelope cannot be deleted on its own.
+- `documents.list({ envelope_id })` and `documents.details(id, { expand:
+  ['envelope'] })` find an envelope's documents and a document's envelope.
+- Creating, adding and estimating need the Envelopes plan feature (`403
+  PlanRestricted`).
+
+### Embedded signing
+
+Embedded signing shows Assinafy's signing screen in an iframe inside your app.
+This SDK covers the backend half; the browser half (iframe and `postMessage`
+handshake) follows the API's Embedded Signing Guide. It needs the Embed plan
+feature and an API key or user token — OAuth application tokens cannot mint
+sessions.
+
+```ts
+// Once per origin: exact https://host[:port], at most 10; http only for localhost.
+await client.embed.addOrigin('https://app.example.com');
+
+const assignment = await client.assignments.create(documentId, {
+  method: 'virtual',
+  signers: [{ id: signerId, verification_method: 'Email', embedded: true }],
+});
+// The embedded signer's signing_urls entry is { signer_id, url: null, embedded: true }.
+
+// Every time the frame is shown (including reloads), on your backend:
+const { url, expires_at } = await client.embed.createSession(documentId, assignment.id, signerId);
+// Hand `url` to that signer's page only; it works once, within 5 minutes. Never log or store it.
+```
+
+- The signer still receives the normal invitation with the 6-digit code they
+  type in the frame. With `Bypass` verification and the `Bypass` notification
+  (enabled per account) nothing is sent and no code is asked.
+- `createSession()` answers `409` with `ApiError.code` `document_not_ready`
+  (retry shortly), `already_signed`, `document_unavailable` or
+  `embed_origins_missing`, and `429` after 30 sessions per signer per hour.
+- Frame events are UI hints. Confirm the outcome from webhooks or by reading the
+  document before unlocking anything.
 
 ### Templates
 
@@ -1235,6 +1335,8 @@ await client.workspaces.create({
 // → { id, name, primary_color: 'ff0066', secondary_color: '0066ff', created_at }
 await client.workspaces.list();
 await client.workspaces.get(accountId);
+// → also { limits: { webhook_endpoints: 3 } }; with the expansion, signing_features.
+const { signing_features } = await client.workspaces.get(accountId, { expand: 'signing_features' });
 await client.workspaces.update(accountId, {
   name: 'Renamed',
   notification_sender_type: 'User',
@@ -1258,6 +1360,15 @@ await client.workspaces.getStats(accountId, {
   granularity: 'daily',
   month: '2026-06',
 });
+
+// Plan meter (not for OAuth applications): balances null = unlimited.
+const usage = await client.workspaces.getUsage(accountId);
+// → { plan: 'Pro', documents_renewal_date: '2026-12-11',
+//     balances: { documents: { balance, limit, spent }, credits: { balance, limit, spent } } }
+
+// Workspace-wide alerts, set by owners; false silences an alert for everyone.
+const policy = await client.workspaces.getNotificationPolicy(accountId); // { editable, owners_receive_all, events }
+await client.workspaces.updateNotificationPolicy(accountId, { events: { SignerViewed: false } });
 
 await client.workspaces.delete(accountId);
 // `force` cancels an active paid subscription as part of account deletion. It
@@ -1348,6 +1459,10 @@ await client.users.updateNotificationPreferences({
 });
 // Updates merge: omitted keys keep their current value. Both methods return
 // the complete thirteen-key notification preference map.
+
+// Push notifications on the user's phones, separate from e-mail (not for OAuth apps).
+const push = await client.users.getPushPreferences(); // every key, default true
+await client.users.updatePushPreferences({ SignerViewed: false });
 ```
 
 #### Two-factor authentication
@@ -1397,6 +1512,11 @@ await client.webhooks.listEndpoints(undefined, { url: endpoint.url });   // exac
 await client.webhooks.getEndpoint(endpoint.id);
 await client.webhooks.updateEndpoint(endpoint.id, { is_active: false }); // only the fields sent
 await client.webhooks.rotateEndpointSecret(endpoint.id); // the old secret stops at once
+// Or keep the old secret signing beside the new one for 24 hours while the receiver switches:
+// → { secret: 'whsec_…', previous_secret_expires_at: '2026-11-12T14:00:00Z' }
+await client.webhooks.rotateEndpointSecret(endpoint.id, undefined, { keep_previous: true });
+// One signed `webhook_test` delivery now (also to a held endpoint); 10 per 10 minutes.
+const attempt = await client.webhooks.testEndpoint(endpoint.id); // IWebhookDispatch, kind: 'manual'
 await client.webhooks.deleteEndpoint(endpoint.id);       // frees the plan slot
 // Alternative when the integration kept only the registered URL:
 // await client.webhooks.deleteEndpointByUrl(endpoint.url);
@@ -1555,38 +1675,48 @@ seconds. After `rotateEndpointSecret()`, update the receiver's secret at once.
 
 ### Signer-side endpoints
 
-For building custom signer portals. Most calls require the `signer-access-code`
-URL parameter that Assinafy emails/whatsapps to the signer. Artifact download is
-the documented public exception; its optional fourth access-code argument exists
-only for compatibility with deployments that still expect the legacy query.
+For building custom signer portals. Every call takes the `signer-access-code`
+that Assinafy emails/whatsapps to the signer, on a transport that never carries
+the workspace credentials. A code closes 30 minutes after its signer is done;
+reads then return only the signer's status and every other route answers `410`.
+An envelope code opens each of the envelope's documents.
 
 ```ts
 await client.signerDocuments.self(accessCode);
 await client.signerDocuments.verifyEmail({ signerAccessCode: accessCode, verificationCode: '123456' });
 
-await client.signerDocuments.getCurrent(signerId, accessCode);
-const { data } = await client.signerDocuments.list(signerId, accessCode, { 'per-page': 20 });
+await client.signerDocuments.getCurrent(signerId, accessCode, { expand: ['envelope'] });
+const { data } = await client.signerDocuments.list(signerId, accessCode, { envelope_id, 'per-page': 20 });
 // Signer-side counterpart of documents.search(), authorised by the access code.
 const found = await client.signerDocuments.search(signerId, accessCode, 'invoice');
-await client.signerDocuments.download(signerId, documentId, 'original');
-// Available only after an ICP-Brasil certificate signer completes signing.
-await client.signerDocuments.download(signerId, documentId, 'pades');
+// Only the original; an unusable code redirects, which the SDK reports as ApiError 302.
+await client.signerDocuments.download(signerId, documentId, 'original', accessCode);
 
+// The contact the signer's channel needs (it must be theirs) and the terms:
 await client.signerDocuments.confirmData(documentId, accessCode, {
   email: 'me@example.com',
-  full_name: 'Example Signer',
-  government_id: '123.456.789-00',
   has_accepted_terms: true,
-});
+}); // null on production
 // Alternatively, accept terms separately before getAssignment():
-// await client.signerDocuments.acceptTerms(accessCode);
+// await client.signerDocuments.acceptTerms(accessCode); // { full_name, email, has_accepted_terms }
+
+// Branding for every screen, also before verification and after deletion
+const theme = await client.signerDocuments.getTheme(accessCode); // { account_name, primary_color, secondary_color, logo }
+const logo = await client.signerDocuments.downloadLogo(accessCode); // Buffer; 404 without a logo
+
+// The certified copy is never downloaded with the code; it is sent to the signer.
+// signable.certified_copy → { available, notification_method, resends_left }
+await client.signerDocuments.resendCertifiedCopy(accessCode); // { available, notification_method, resends_left, sent_to }
+// From the link in that message (token = its last path segment):
+const certified = await client.signerDocuments.downloadCertifiedCopy(token); // 302 → ApiError when expired
+await client.signerDocuments.resendCertifiedCopyFromLink(token);
 
 // Signature image management ({ reuse: true } persists it for future documents)
 await client.signerDocuments.uploadSignature(accessCode, pngBuffer, { imageType: 'signature', reuse: true });
 await client.signerDocuments.downloadSignature(accessCode, 'signature');
 
-// Sign / decline
-const signable = await client.signerDocuments.getAssignment(accessCode);
+// Sign / decline (records a view; an envelope code may name another of its documents)
+const signable = await client.signerDocuments.getAssignment(accessCode, { documentId });
 // `sign()` is for collect assignments and requires every placed field value.
 await client.signerDocuments.sign(documentId, assignmentId, accessCode, [
   { itemId, fieldId, pageId, value: 'Signed by the signer' },
@@ -1661,9 +1791,11 @@ try {
     // OAuthError extends ApiError; branch on the RFC 6749 code, not the message.
     console.error('OAuth error:', err.error, err.errorDescription);
   } else if (err instanceof ApiError) {
-    console.error(`API error ${err.statusCode}:`, err.responseData);
-    // `err.challenge` carries the parsed WWW-Authenticate header when the API
-    // sent one — on a 403 it names the OAuth scope that is missing.
+    console.error(`API error ${err.statusCode}:`, err.code, err.fieldErrors);
+    // `err.code` names refusals you can act on ('PlanRestricted', 'CreditCeilingExceeded',
+    // 'IdempotencyKeyInUse', 'EnvelopeOpen', …); `err.fieldErrors` lists each refused
+    // field of a 400 as { field, code, message }. `err.challenge` carries the parsed
+    // WWW-Authenticate header — on a 403 it names the OAuth scope that is missing.
   } else if (err instanceof NetworkError) {
     console.error('Network error:', err.message);
   } else if (err instanceof AssinafyError) {

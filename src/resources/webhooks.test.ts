@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import type { AxiosInstance } from 'axios';
 import { ApiError, ValidationError } from '../errors';
 import { DEFAULT_WEBHOOK_EVENTS, WebhookResource } from './webhooks';
+import { recordingHttp } from '../testing/recording-http';
 
 describe('WebhookResource.deleteEndpointByUrl', () => {
     test('listEndpoints filters by the exact URL and validates before requesting', async () => {
@@ -538,5 +539,35 @@ describe('WebhookResource', () => {
         const { http, calls } = mockHttp();
         await new WebhookResource(http, 'account-1').listDispatches({ endpoint_id: 'endpoint-1' });
         expect(calls[0]?.config).toEqual({ params: { endpoint_id: 'endpoint-1' } });
+    });
+});
+
+describe('WebhookResource test delivery and overlapping rotation', () => {
+    test('sends a test delivery and rotates with or without keeping the previous secret', async () => {
+        const { http, calls } = recordingHttp({ secret: 'whsec_bmV3', previous_secret_expires_at: '2026-11-12T14:00:00Z' });
+        const resource = new WebhookResource(http, 'acc');
+        await resource.testEndpoint('ep-1');
+        await resource.rotateEndpointSecret('ep-1');
+        expect(await resource.rotateEndpointSecret('ep-1', 'other', { keep_previous: true })).toEqual({
+            secret: 'whsec_bmV3',
+            previous_secret_expires_at: '2026-11-12T14:00:00Z',
+        });
+        expect(calls).toEqual([
+            { method: 'POST', url: '/accounts/acc/webhooks/endpoints/ep-1/test', body: undefined, config: undefined },
+            { method: 'POST', url: '/accounts/acc/webhooks/endpoints/ep-1/secret/rotate', body: undefined, config: undefined },
+            { method: 'POST', url: '/accounts/other/webhooks/endpoints/ep-1/secret/rotate', body: { keep_previous: true }, config: undefined },
+        ]);
+    });
+
+    test('rejects a non-boolean keep_previous and a missing endpoint before requesting', async () => {
+        const { http, calls } = recordingHttp();
+        const resource = new WebhookResource(http, 'acc');
+        const requests = [
+            () => resource.rotateEndpointSecret('ep-1', undefined, { keep_previous: 'yes' as never }),
+            () => resource.rotateEndpointSecret('ep-1', undefined, null as never),
+            () => resource.testEndpoint(''),
+        ];
+        for (const request of requests) await expect(request()).rejects.toBeInstanceOf(ValidationError);
+        expect(calls).toHaveLength(0);
     });
 });

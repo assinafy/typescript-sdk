@@ -3,6 +3,7 @@ import { SignerResource } from './signers';
 import { ApiError, ValidationError } from '../errors';
 import { MAX_LIST_PAGE_SIZE } from '../utils';
 import type { AxiosInstance } from 'axios';
+import { recordingHttp } from '../testing/recording-http';
 
 describe('SignerResource', () => {
     let mockAxios: AxiosInstance;
@@ -605,5 +606,33 @@ describe('SignerResource public request contracts', () => {
             whatsapp_phone_number: '+5548999990000',
             metadata: { customer_id: 'customer-1' },
         });
+    });
+});
+
+describe('SignerResource clearing fields on update', () => {
+    test('sends null or empty values that clear email, WhatsApp and government ID', async () => {
+        const { http, calls } = recordingHttp({ id: 'signer-1' });
+        const resource = new SignerResource(http, 'acc');
+        await resource.update('signer-1', { email: null, whatsapp_phone_number: '', government_id: null });
+        await resource.update('signer-1', { phone: null, government_id: '' });
+        await resource.update('signer-1', { full_name: 'Ana Souza', whatsapp_phone_number: null, phone: '+5511999998888' });
+        expect(calls.map((call) => call.body)).toEqual([
+            { email: null, whatsapp_phone_number: '', government_id: null },
+            { whatsapp_phone_number: null, government_id: '' },
+            { full_name: 'Ana Souza', whatsapp_phone_number: null },
+        ]);
+    });
+
+    test('still rejects an empty name and malformed non-empty contacts', async () => {
+        const { http, calls } = recordingHttp();
+        const resource = new SignerResource(http, 'acc');
+        const requests = [
+            () => resource.update('signer-1', { full_name: '' }),
+            () => resource.update('signer-1', { email: 'not-an-email' }),
+            () => resource.update('signer-1', { whatsapp_phone_number: '11 9999' }),
+            () => resource.update('signer-1', { government_id: '---' }),
+        ];
+        for (const request of requests) await expect(request()).rejects.toBeInstanceOf(ValidationError);
+        expect(calls).toHaveLength(0);
     });
 });

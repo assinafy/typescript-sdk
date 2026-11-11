@@ -2,6 +2,7 @@ import { describe, test, expect, beforeEach } from 'bun:test';
 import { DocumentResource } from './documents';
 import { ApiError, ValidationError } from '../errors';
 import axios, { type AxiosInstance } from 'axios';
+import { recordingHttp } from '../testing/recording-http';
 
 describe('DocumentResource', () => {
     let mockAxios: AxiosInstance;
@@ -1136,5 +1137,65 @@ describe('DocumentResource public request contracts', () => {
 
         await new DocumentResource(http, 'acc').getPublic('doc/1?#');
         expect(url).toBe('/public/documents/doc%2F1%3F%23');
+    });
+});
+
+describe('DocumentResource envelope expansion, signed renders and template safeguards', () => {
+    test('expands envelope fields and requests signed renders', async () => {
+        const { http, calls } = recordingHttp({ id: 'doc-1' });
+        const resource = new DocumentResource(http, 'acc');
+        await resource.details('doc-1', { expand: ['envelope_id', 'envelope'] });
+        await resource.get('doc-1', { expand: [] });
+        await resource.thumbnail('doc-1', { artifact: 'certificated' });
+        await resource.downloadPage('doc-1', 'page-1', { artifact: 'certificated' });
+        expect(calls).toEqual([
+            { method: 'GET', url: '/documents/doc-1', config: { params: { expand: 'envelope_id,envelope' } } },
+            { method: 'GET', url: '/documents/doc-1', config: {} },
+            { method: 'GET', url: '/documents/doc-1/thumbnail', config: { responseType: 'arraybuffer', params: { artifact: 'certificated' } } },
+            {
+                method: 'GET',
+                url: '/documents/doc-1/pages/page-1/download',
+                config: { responseType: 'arraybuffer', params: { artifact: 'certificated' } },
+            },
+        ]);
+    });
+
+    test('sends the credit ceiling, embedded signers and the Idempotency-Key on template documents', async () => {
+        const { http, calls } = recordingHttp({ id: 'doc-1' });
+        await new DocumentResource(http, 'acc').createFromTemplate(
+            'tmpl-1',
+            [{ role_id: 'role-1', id: 'signer-1', verification_method: 'Email', embedded: true }],
+            { max_total_credits: 1.5, idempotencyKey: 'key-1' },
+        );
+        expect(calls).toEqual([{
+            method: 'POST',
+            url: '/accounts/acc/templates/tmpl-1/documents',
+            body: {
+                signers: [{ role_id: 'role-1', id: 'signer-1', verification_method: 'Email', embedded: true }],
+                max_total_credits: 1.5,
+            },
+            config: { headers: { 'Idempotency-Key': 'key-1' } },
+        }]);
+    });
+
+    test('rejects unknown expansions, render artifacts and unsafe template options before requesting', async () => {
+        const { http, calls } = recordingHttp();
+        const resource = new DocumentResource(http, 'acc');
+        const signer = [{ role_id: 'role-1', id: 'signer-1' }];
+        const requests = [
+            () => resource.details('doc-1', { expand: ['pages'] as never }),
+            () => resource.details('doc-1', { expand: 'envelope' as never }),
+            () => resource.details('doc-1', null as never),
+            () => resource.thumbnail('doc-1', { artifact: 'original' as never }),
+            () => resource.downloadPage('doc-1', 'page-1', null as never),
+            () => resource.createFromTemplate('tmpl-1', signer, { max_total_credits: -1 }),
+            () => resource.createFromTemplate('tmpl-1', signer, { idempotencyKey: '' }),
+            () => resource.createFromTemplate('tmpl-1', [{ role_id: 'role-1', id: 's', embedded: 'yes' as never }]),
+            () => resource.createFromTemplate('tmpl-1', [
+                { role_id: 'role-1', id: 's', verification_method: 'DigitalCertificate', embedded: true },
+            ]),
+        ];
+        for (const request of requests) await expect(request()).rejects.toBeInstanceOf(ValidationError);
+        expect(calls).toHaveLength(0);
     });
 });

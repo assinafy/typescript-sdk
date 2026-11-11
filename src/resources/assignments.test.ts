@@ -8,6 +8,7 @@ import {
 import { ValidationError } from '../errors';
 import type { AxiosInstance } from 'axios';
 import type { ISignerIdentityReview } from '../types';
+import { recordingHttp } from '../testing/recording-http';
 
 describe('AssignmentResource identity verification', () => {
     const review: ISignerIdentityReview = {
@@ -796,5 +797,61 @@ describe('AssignmentResource.resendNotification', () => {
         expect(capturedUrl).toBe(
             '/documents/doc%2F1/assignments/assignment%2F1/signers/signer%2F1/resend',
         );
+    });
+});
+
+describe('Assignment Bypass, embedded signers and credit ceiling', () => {
+    test('accepts the Bypass pairings and embedded Email, Whatsapp and Bypass signers', () => {
+        const body = buildAssignmentPayload({
+            method: 'virtual',
+            max_total_credits: 0,
+            signers: [
+                { id: 's1', verification_method: 'Bypass', notification_methods: ['Bypass'], embedded: true },
+                { id: 's2', verification_method: 'Bypass', notification_methods: ['Email'] },
+                { id: 's3', verification_method: 'Whatsapp', notification_methods: ['Whatsapp'], embedded: true },
+                { id: 's4', notification_methods: ['Bypass'], embedded: false },
+            ],
+        });
+        expect(body).toEqual({
+            method: 'virtual',
+            max_total_credits: 0,
+            signers: [
+                { id: 's1', verification_method: 'Bypass', notification_methods: ['Bypass'], embedded: true },
+                { id: 's2', verification_method: 'Bypass', notification_methods: ['Email'] },
+                { id: 's3', verification_method: 'Whatsapp', notification_methods: ['Whatsapp'], embedded: true },
+                { id: 's4', notification_methods: ['Bypass'], embedded: false },
+            ],
+        });
+    });
+
+    test('rejects unpaired Bypass, non-boolean embedded, embedded certificate/identity signers and bad ceilings', () => {
+        const invalid = [
+            { signers: [{ id: 's', verification_method: 'Email', notification_methods: ['Bypass'] }] },
+            { signers: [{ id: 's', verification_method: 'DigitalCertificate', notification_methods: ['Bypass'] }] },
+            { signers: [{ id: 's', embedded: 'true' }] },
+            { signers: [{ id: 's', verification_method: 'DigitalCertificate', embedded: true }] },
+            { signers: [{ id: 's', verification_method: 'IdDocumentFaceMatchBasic', embedded: true }] },
+            { signers: ['s'], max_total_credits: -0.5 },
+            { signers: ['s'], max_total_credits: Number.POSITIVE_INFINITY },
+            { signers: ['s'], max_total_credits: '1' },
+        ];
+        for (const payload of invalid) {
+            expect(() => buildAssignmentPayload({ method: 'virtual', ...payload } as never)).toThrow(ValidationError);
+        }
+    });
+
+    test('create forwards the ceiling and embedded flag on the wire', async () => {
+        const { http, calls } = recordingHttp({ id: 'asg-1' });
+        await new AssignmentResource(http, 'acc').create('doc-1', {
+            method: 'virtual',
+            signers: [{ id: 's1', embedded: true }],
+            max_total_credits: 3,
+        });
+        expect(calls).toEqual([{
+            method: 'POST',
+            url: '/documents/doc-1/assignments',
+            body: { method: 'virtual', signers: [{ id: 's1', embedded: true }], max_total_credits: 3 },
+            config: undefined,
+        }]);
     });
 });

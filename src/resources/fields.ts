@@ -1,3 +1,4 @@
+import type { AxiosInstance } from 'axios';
 import type {
     ICreateFieldPayload,
     IFieldDefinition,
@@ -6,10 +7,12 @@ import type {
     IFieldValidationMultipleResult,
     IFieldValidationResponse,
     IUpdateFieldPayload,
+    Logger,
 } from '../types';
 import { ValidationError } from '../errors';
 import { assertNonEmptyString, assertRecord, cleanListParams } from '../utils';
 import { BaseResource } from './base';
+import { withoutCredentials } from '../support/transport';
 
 /**
  * Custom field definitions used by `collect` assignments.
@@ -20,11 +23,28 @@ import { BaseResource } from './base';
  *  - `GET /accounts/{id}/fields/{id}`
  *  - `PUT /accounts/{id}/fields/{id}`
  *  - `DELETE /accounts/{id}/fields/{id}`
- *  - `POST /accounts/{id}/fields/{id}/validate?signer-access-code=…`
- *  - `POST /accounts/{id}/fields/validate-multiple?signer-access-code=…`
+ *  - `POST /accounts/{id}/fields/{id}/validate`
+ *  - `POST /accounts/{id}/fields/validate-multiple`
  *  - `GET /field-types`
+ *
+ * Validation authenticates either with the workspace credentials or, during
+ * the signing flow, with a signer access code alone: a code-authenticated call
+ * runs on the credential-free transport, so the code never travels with the
+ * API key or bearer token.
  */
 export class FieldsResource extends BaseResource {
+    private readonly signerHttp: AxiosInstance;
+
+    constructor(
+        http: AxiosInstance,
+        defaultAccountId?: string,
+        logger?: Logger,
+        publicHttp?: AxiosInstance,
+    ) {
+        super(http, defaultAccountId, logger);
+        this.signerHttp = withoutCredentials(publicHttp ?? http);
+    }
+
     /**
      * Create a field definition (`POST /accounts/{accountId}/fields`).
      *
@@ -283,9 +303,9 @@ export class FieldsResource extends BaseResource {
      * Validate a single value against a field definition
      * (`POST /accounts/{accountId}/fields/{fieldId}/validate`).
      *
-     * The operation uses the client's API-key/Bearer authentication.
-     * `signerAccessCode` is a compatibility query and is sent as
-     * `signer-access-code` when supplied.
+     * Without `signerAccessCode` the call uses the workspace credentials. With
+     * it, the code is sent as the `signer-access-code` query on the
+     * credential-free transport, as a custom signing UI does.
      *
      * Request body (`application/json`):
      * ```jsonc
@@ -297,9 +317,9 @@ export class FieldsResource extends BaseResource {
      * @param fieldId - The field definition to validate against.
      * @param value - The value to check (validated against the field's
      *   type/regex). Sent as `{ value }` in the request body.
-     * @param options - Account override and optional legacy `signerAccessCode`.
+     * @param options - Account override and optional `signerAccessCode`.
      * @param options.accountId - Override the client's default workspace.
-     * @param options.signerAccessCode - Legacy signer code sent as a query parameter.
+     * @param options.signerAccessCode - Authenticate as the signer instead of the workspace.
      * @returns The validation result. Response shape:
      * ```jsonc
      * {
@@ -310,7 +330,9 @@ export class FieldsResource extends BaseResource {
      * ```
      * @throws {ValidationError} If `fieldId` or the account ID is missing, or
      * `value` is `undefined`.
-     * @throws {ApiError} If the API rejects the request.
+     * @throws {ApiError} `400` for a malformed request, `403` when the code or
+     * credentials cannot reach the workspace, `404` for a field outside it, `410`
+     * when the signer's access code is closed.
      *
      * @example
      * ```ts
@@ -337,7 +359,7 @@ export class FieldsResource extends BaseResource {
             ? { 'signer-access-code': options.signerAccessCode }
             : undefined;
         return this.call('Failed to validate field value', () =>
-            this.http.post(
+            this.transportFor(options.signerAccessCode).post(
                 `/accounts/${this.pathSegment(id, 'Account ID')}/fields/${this.pathSegment(fid, 'Field ID')}/validate`,
                 { value },
                 { params },
@@ -350,9 +372,8 @@ export class FieldsResource extends BaseResource {
      * (`POST /accounts/{accountId}/fields/validate-multiple`).
      *
      * The request body is the array of `{ field_id, value }` entries itself
-     * (not wrapped in an object). The optional `signerAccessCode` query is the
-     * same compatibility extension described on
-     * {@link FieldsResource.validate}.
+     * (not wrapped in an object). `signerAccessCode` authenticates as described
+     * on {@link FieldsResource.validate}.
      *
      * Request body (`application/json`):
      * ```jsonc
@@ -365,9 +386,9 @@ export class FieldsResource extends BaseResource {
      * ```
      *
      * @param entries - Non-empty array of `{ field_id, value }` pairs.
-     * @param options - Account override and optional legacy `signerAccessCode`.
+     * @param options - Account override and optional `signerAccessCode`.
      * @param options.accountId - Override the client's default workspace.
-     * @param options.signerAccessCode - Legacy signer code sent as a query parameter.
+     * @param options.signerAccessCode - Authenticate as the signer instead of the workspace.
      * @returns One validation result per entry. Response shape:
      * ```jsonc
      * [
@@ -376,7 +397,7 @@ export class FieldsResource extends BaseResource {
      * ]
      * ```
      * @throws {ValidationError} If `entries` is empty or the account ID is missing.
-     * @throws {ApiError} If the API rejects the request.
+     * @throws {ApiError} `400`, `403`, `404` or `410`, as for {@link FieldsResource.validate}.
      *
      * @example
      * ```ts
@@ -418,7 +439,7 @@ export class FieldsResource extends BaseResource {
             value: entry.value,
         }));
         return this.call('Failed to validate field values', () =>
-            this.http.post(
+            this.transportFor(options.signerAccessCode).post(
                 `/accounts/${this.pathSegment(id, 'Account ID')}/fields/validate-multiple`,
                 body,
                 { params },
@@ -452,6 +473,11 @@ export class FieldsResource extends BaseResource {
      */
     async listTypes(): Promise<IFieldType[]> {
         return this.call('Failed to list field types', () => this.http.get('/field-types'));
+    }
+
+    /** A signer access code must never travel with the workspace credentials. */
+    private transportFor(signerAccessCode: string | undefined): AxiosInstance {
+        return signerAccessCode === undefined ? this.http : this.signerHttp;
     }
 }
 

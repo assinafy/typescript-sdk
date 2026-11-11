@@ -6,7 +6,7 @@ export { DocumentResource } from './resources/documents';
 export type { DocumentUploadSource, IDocumentUploadOptions } from './resources/documents';
 /** The API's hard 25 MB upload limit — check a file against it before uploading. */
 export { MAX_UPLOAD_BYTES } from './resources/upload';
-/** Observed cap for document and signer lists; production activities have a documented limit of 100. */
+/** Maximum `per-page` of every paginated list; a larger value answers this many rows. */
 export { MAX_LIST_PAGE_SIZE } from './utils';
 export { SignerResource } from './resources/signers';
 export { WorkspaceResource } from './resources/workspaces';
@@ -25,6 +25,8 @@ export { FieldsResource } from './resources/fields';
 export { SignerDocumentsResource } from './resources/signer-documents';
 export { UserResource } from './resources/users';
 export { ContractResource } from './resources/contracts';
+export { EnvelopeResource } from './resources/envelopes';
+export { EmbedResource } from './resources/embed';
 export { WebhookVerifier } from './support/webhook-verifier';
 export type { WebhookHeaders } from './support/webhook-verifier';
 /** Parsed `WWW-Authenticate` challenge exposed on {@link ApiError.challenge}. */

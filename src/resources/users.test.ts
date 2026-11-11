@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import type { AxiosInstance } from 'axios';
 import { ValidationError } from '../errors';
 import { UserResource } from './users';
+import { recordingHttp } from '../testing/recording-http';
 
 describe('UserResource', () => {
     test('getCurrent fetches and unwraps /users/self', async () => {
@@ -243,5 +244,27 @@ describe('UserResource', () => {
             await expect(request()).rejects.toBeInstanceOf(ValidationError);
         }
         expect(requested).toBe(false);
+    });
+});
+
+describe('UserResource push preferences', () => {
+    test('reads and merges push preferences', async () => {
+        const { http, calls } = recordingHttp({ SignerViewed: false });
+        const resource = new UserResource(http);
+        await resource.getPushPreferences();
+        expect(await resource.updatePushPreferences({ SignerViewed: false })).toMatchObject({ SignerViewed: false });
+        expect(calls).toEqual([
+            { method: 'GET', url: '/users/self/push-preferences', config: undefined },
+            { method: 'PUT', url: '/users/self/push-preferences', body: { SignerViewed: false }, config: undefined },
+        ]);
+    });
+
+    test('rejects empty or non-boolean push preference maps before requesting', async () => {
+        const { http, calls } = recordingHttp();
+        const resource = new UserResource(http);
+        for (const preferences of [{}, null, { SignerViewed: 'off' }, []]) {
+            await expect(resource.updatePushPreferences(preferences as never)).rejects.toBeInstanceOf(ValidationError);
+        }
+        expect(calls).toHaveLength(0);
     });
 });

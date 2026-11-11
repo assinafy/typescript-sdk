@@ -143,14 +143,14 @@ export class ContractResource extends BaseResource {
      * }
      * ```
      * @throws {ValidationError} If an ID is missing or invalid.
-     * @throws {ApiError} `401` for invalid credentials, `404` when the document
-     * has no tracked terms, or `500` on a server error.
+     * @throws {ApiError} `401` for invalid credentials, `404` (`code:
+     * 'NoContractTerms'` when the document exists without terms), or `500`.
      *
      * @example
      * ```ts
      * const contract = await client.contracts.get(document.id);
-     * if (contract.resource === 'document_contract_amendment') {
-     *   console.log(contract.parent_document_id);
+     * if ('parent_document_id' in contract) {
+     *   console.log(contract.parent_document_id); // an amendment, renewal or termination
      * }
      * ```
      */
@@ -212,9 +212,10 @@ export class ContractResource extends BaseResource {
      * }
      * ```
      * @throws {ValidationError} If the payload or an ID is malformed.
-     * @throws {ApiError} `400` for invalid terms, `403` when the plan does not
-     * include tracking, `404` for an unknown document, `409` after a concurrent
-     * change, or `500` on a server error.
+     * @throws {ApiError} `400` for invalid terms (each in `fieldErrors`), `403`
+     * (`PlanRestricted`) when the plan does not include tracking, `404` for an
+     * unknown document or a `parent_document_id` outside the workspace, `409`
+     * (`ContractChanged`) after a concurrent change, or `500` on a server error.
      *
      * @example
      * ```ts
@@ -248,6 +249,7 @@ export class ContractResource extends BaseResource {
      *
      * @param documentId - Any document in the contract family.
      * @param accountId - Override the client's default account ID.
+     * @param params - `expand: 'document'` embeds the root contract's document.
      * @returns The root contract and ordered instruments:
      * ```jsonc
      * {
@@ -299,9 +301,18 @@ export class ContractResource extends BaseResource {
      * const family = await client.contracts.listRelated(amendmentDocument.id);
      * ```
      */
-    async listRelated(documentId: string, accountId?: string): Promise<IDocumentContract> {
+    async listRelated(
+        documentId: string,
+        accountId?: string,
+        params: { expand?: 'document' } = {},
+    ): Promise<IDocumentContract> {
+        assertRecord(params, 'related contract params');
+        if (params.expand !== undefined && params.expand !== 'document') {
+            throw new ValidationError('expand must be document');
+        }
+        const config = params.expand === undefined ? {} : { params: { expand: params.expand } };
         return this.call('Failed to fetch related contracts', () =>
-            this.http.get(`${this.contractPath(documentId, accountId)}/related`),
+            this.http.get(`${this.contractPath(documentId, accountId)}/related`, config),
         );
     }
 

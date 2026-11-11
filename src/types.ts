@@ -51,6 +51,7 @@ export type AssignmentMethod = 'virtual' | 'collect';
  * | `Whatsapp` | One-time code sent over WhatsApp. | A `whatsapp_phone_number`; paid plan. | 0.45 credits |
  * | `DigitalCertificate` | The signer signs with their own ICP-Brasil certificate — **A1** (software, a file on the machine) or **A3** (hardware, a token or smartcard) — through the Web PKI browser extension, producing a qualified PAdES signature. | `method: 'virtual'`; Digital Certificate feature (Standard/Pro); `government_id`; the signer must be alone in their signing step. | 0.5 credits + notification |
  * | `IdDocumentFaceMatchBasic` | Hosted identity-document and face verification, with explicit biometric consent. | ID Document + Face Match feature; valid CPF in `government_id`; account approval for any `InReview` result before certification. | Use cost estimation for current pricing. |
+ * | `Bypass` | No verification code. Enabled per account by Assinafy (`signing_features.VerificationBypass`); typically for `embedded` signers your app has already authenticated. | The Verification Bypass feature (`403 PlanRestricted` otherwise). | Notification only. |
  *
  * A1 and A3 are certificate *media*, chosen by the signer in their browser at
  * signing time. The API models both as the single `DigitalCertificate` value —
@@ -61,8 +62,9 @@ export type AssignmentMethod = 'virtual' | 'collect';
  * verification code travels on the notification channel, so `Email` pairs only
  * with `Email` and `Whatsapp` only with `Whatsapp`. `DigitalCertificate`
  * and `IdDocumentFaceMatchBasic` carry no OTP and may be announced over either
- * channel. The SDK rejects an
- * invalid pairing before the request; the API answers `400`.
+ * channel; `Bypass` may also use the `Bypass` notification, which sends no
+ * invitation. The SDK rejects an invalid pairing before the request; the API
+ * answers `400`. `embedded` signers use `Email`, `Whatsapp` or `Bypass`.
  *
  * Send neither field to get `Email`/`Email`; send one and the other is
  * inferred from it.
@@ -71,7 +73,8 @@ export type AssignmentVerificationMethod =
     | 'Email'
     | 'Whatsapp'
     | 'DigitalCertificate'
-    | 'IdDocumentFaceMatchBasic';
+    | 'IdDocumentFaceMatchBasic'
+    | 'Bypass';
 
 /** Provider session state; `InReview` permits signing but holds certification. */
 export type IdentityVerificationStatus =
@@ -146,11 +149,12 @@ export interface ISignerIdentityReview {
  * | --- | --- | --- |
  * | `Email` | An `email`. | 0 credits |
  * | `Whatsapp` | A `whatsapp_phone_number`; paid plan. | 0.45 credits |
+ * | `Bypass` | Sends nothing; only with `Bypass` verification (per-account feature). The signer is reached through your app, e.g. an embed session. | — |
  *
  * Notifications are charged when the assignment is created and again on every
  * resend. See {@link AssignmentVerificationMethod} for the pairing rules.
  */
-export type AssignmentNotificationMethod = 'Email' | 'Whatsapp';
+export type AssignmentNotificationMethod = 'Email' | 'Whatsapp' | 'Bypass';
 
 /** Minimal logger contract (compatible with console, pino, winston, etc.). */
 export interface Logger {
@@ -222,18 +226,22 @@ export interface ICreateSignerPayload {
 
 /** Payload for updating a signer. */
 export interface IUpdateSignerPayload {
+    /** Cannot be cleared. */
     full_name?: string;
-    email?: string;
-    whatsapp_phone_number?: string;
+    /** `null` or `''` clears it. */
+    email?: string | null;
+    /** `null` or `''` clears it (stored as `null`). */
+    whatsapp_phone_number?: string | null;
     /** Compatibility alias normalized to `whatsapp_phone_number` before sending. */
-    phone?: string;
+    phone?: string | null;
     /** Compatibility extension. Brazilian CPF; non-digits are stripped. */
     cpf?: string;
     /**
      * CPF (11 digits) or CNPJ (14 characters, letters allowed). Sent as given;
-     * the API strips formatting and returns the normalized value.
+     * the API strips formatting and returns the normalized value. `null` or `''`
+     * clears it.
      */
-    government_id?: string;
+    government_id?: string | null;
 }
 
 /** Signer object as returned by the API. */
@@ -274,30 +282,29 @@ export interface ISignerSelf extends ISigner {
 
 /** Official identity fields accepted by the signer `confirm-data` operation. */
 export interface IConfirmSignerDataPayload {
-    /** Signer's full name as it should appear on the signed document. */
-    full_name?: string;
-    email?: string;
-    /** Government-issued identifier recorded with the signature. */
-    government_id?: string;
     /**
-     * Accept terms atomically with identity confirmation. Required before
-     * opening a DigitalCertificate assignment unless `acceptTerms()` was called.
+     * Required when the signer is verified or notified by e-mail. Saved when
+     * the signer has none; otherwise it must be theirs.
      */
-    has_accepted_terms?: boolean;
-}
-
-/**
- * Compatibility input retained for integrations written against older
- * Assinafy deployments. The extra phone property does not belong to the current
- * `confirm-data` request schema.
- */
-export interface ILegacyConfirmSignerDataPayload extends IConfirmSignerDataPayload {
+    email?: string;
     /**
-     * @deprecated Compatibility field. Prefer updating the account signer
-     * record before starting the signing flow.
+     * Required when the signer is verified or notified by WhatsApp (E.164).
+     * Saved when the signer has none; otherwise it must be theirs.
      */
     whatsapp_phone_number?: string;
+    /**
+     * Accept terms atomically with the confirmation. Required before opening a
+     * DigitalCertificate assignment unless `acceptTerms()` was called.
+     */
+    has_accepted_terms?: boolean;
+    /** @deprecated Ignored by production; read only by older deployments. */
+    full_name?: string;
+    /** @deprecated Ignored by production; read only by older deployments. */
+    government_id?: string;
 }
+
+/** @deprecated Identical to {@link IConfirmSignerDataPayload}; kept for existing imports. */
+export type ILegacyConfirmSignerDataPayload = IConfirmSignerDataPayload;
 
 /** Official options for uploading the PNG signature image described by OpenAPI. */
 export interface IUploadSignatureOptions {
@@ -348,6 +355,12 @@ export type SignerReference =
           verification_method?: AssignmentVerificationMethod;
           notification_methods?: AssignmentNotificationMethod[];
           /**
+           * Sign inside your app through `embed.createSession()`: the signer gets
+           * no link in `signing_urls`. Needs the Embed feature and `Email`,
+           * `Whatsapp` or `Bypass` verification.
+           */
+          embedded?: boolean;
+          /**
            * Positive integer controlling signing order. Signers sharing a step
            * sign in parallel; a step is activated (and its signers notified)
            * only after every signer in the previous step has signed. If supplied
@@ -384,6 +397,8 @@ export interface ICreateAssignmentPayload {
     copy_receivers?: string[];
     /** Field placement entries used when `method` is `collect`. */
     entries?: IAssignmentEntry[];
+    /** Refuse with `409 CreditCeilingExceeded`, creating and charging nothing, above this many credits. */
+    max_total_credits?: number;
 }
 
 /**
@@ -469,8 +484,21 @@ export interface IAssignmentSigner extends ISigner {
 /** Per-channel notification delivery history embedded in an assignment signer. */
 export interface INotificationHistoryEntry {
     event: string;
-    status: 'sent' | 'failed';
-    error_code: string | null;
+    /** Furthest delivery stage: `opened` means the e-mail was opened/clicked or the WhatsApp message read. */
+    status: 'sent' | 'delivered' | 'opened' | 'failed' | AnyString;
+    /** Set only when `status` is `failed`. */
+    error_code:
+        | 'MailboxFull'
+        | 'AddressNotFound'
+        | 'AddressSuppressed'
+        | 'ContentRejected'
+        | 'MarkedAsSpam'
+        | 'NotOnWhatsapp'
+        | 'RecipientRestricted'
+        | 'NotSent'
+        | 'Unknown'
+        | AnyString
+        | null;
     error_message: string | null;
     sent_at: string | null;
     failed_at: string | null;
@@ -499,7 +527,10 @@ export interface IAssignmentItem {
 /** Per-signer browser URL returned with a created assignment. */
 export interface ISigningUrl {
     signer_id: string;
-    url: string;
+    /** `null` for an embedded signer (mint `embed.createSession()`) and a WhatsApp-only signer. */
+    url: string | null;
+    /** Whether the signer was created with `embedded: true`. */
+    embedded?: boolean;
 }
 
 /** Assignment object as returned by the API. */
@@ -509,7 +540,8 @@ export interface IAssignment {
     /** The document this assignment belongs to; null only after document deletion. */
     document_id?: string | null;
     created_at?: string;
-    sender_email?: string;
+    /** `null` once the sending user deleted their account. */
+    sender_email?: string | null;
     method: AssignmentMethod;
     expires_at?: string | null;
     /** Compatibility extension; absent from the OpenAPI Assignment schema. */
@@ -524,7 +556,7 @@ export interface IAssignment {
         completed_count: number;
         signers: Array<ISigner & { completed?: boolean }>;
     };
-    /** Per-signer signing URLs. Array of `{ signer_id, url }` (not a map). */
+    /** Per-signer signing URLs. Array of `{ signer_id, url, embedded? }` (not a map). */
     signing_urls?: ISigningUrl[];
 }
 
@@ -555,8 +587,10 @@ export interface ICostEstimate {
         quantity?: number;
         unit_cost?: number;
     }>;
-    document_balance: number;
-    credit_balance: number;
+    /** `null` when the account's documents are not limited. */
+    document_balance: number | null;
+    /** `null` when the account's credits are not limited. */
+    credit_balance: number | null;
     has_sufficient_resources: boolean;
     /** `null` when the operation can proceed; otherwise the documented reason code. */
     blocking_reason:
@@ -568,26 +602,28 @@ export interface ICostEstimate {
 }
 
 /**
- * Legacy resend-cost payload still returned by some Assinafy environments.
- *
- * This smaller, resend-specific compatibility shape can be returned instead of
- * {@link ICostEstimate}; the SDK models both wire formats.
+ * Resend-cost payload (`ResendCostEstimate`): `total`, not `total_credits`.
+ * The name is historical; this is the shape production documents.
  */
 export interface ILegacyResendCostEstimate {
     total: number;
     breakdown: Array<{ code: string; name: string; cost: number }>;
-    credit_balance: number;
+    /** `null` when the account's credits are not limited. */
+    credit_balance: number | null;
     has_sufficient_credits: boolean;
 }
 
-/** Cost estimate returned by `assignments.estimateResendCost`. */
-export type IResendCostEstimate = ICostEstimate | ILegacyResendCostEstimate;
+/**
+ * Cost estimate returned by `assignments.estimateResendCost`: the compact
+ * {@link ILegacyResendCostEstimate}, or {@link ICostEstimate} on older deployments.
+ */
+export type IResendCostEstimate = ILegacyResendCostEstimate | ICostEstimate;
 
 /** Webhook payload envelope. */
 export interface IWebhookPayload {
-    /** Internal activity id; use it as an idempotency/deduplication key. */
+    /** Activity ID. To deduplicate retries prefer the `webhook-id` header, unique per endpoint. */
     id?: number;
-    event?: WebhookEventType | AnyString;
+    event?: WebhookDeliveryEventType | AnyString;
     type?: string;
     message?: string | null;
     payload?: Record<string, unknown> | null;
@@ -605,6 +641,12 @@ export interface IWebhookPayload {
     };
     [key: string]: unknown;
 }
+
+/**
+ * Event names a delivery can carry: every subscribable {@link WebhookEventType}
+ * plus `webhook_test`, sent only by `webhooks.testEndpoint()` and never subscribable.
+ */
+export type WebhookDeliveryEventType = WebhookEventType | 'webhook_test';
 
 /** Known webhook event names. */
 export type WebhookEventType =
@@ -657,6 +699,10 @@ export interface IDocumentListItem {
     declined_by?: ISigner | null;
     /** Tags attached to the document (inline `{ id, name, color }` shape). */
     tags?: IInlineTag[];
+    /** Code printed on the certificate page; `null` until `certificated`. */
+    verification_code?: string | null;
+    /** Public verification page; `null` until `certificated`. */
+    verification_url?: string | null;
     created_at: string;
     updated_at?: string;
     is_closed?: boolean;
@@ -801,6 +847,8 @@ export interface IDocumentListParams extends IListParams {
     method?: AssignmentMethod;
     /** Comma-separated list of tag IDs (AND semantics). */
     tags?: string;
+    /** Only the documents of this envelope. */
+    envelope_id?: string;
 }
 
 /**
@@ -822,6 +870,10 @@ export interface IDocumentSearchParams extends IListParams {
     search?: string;
     /** Filter by document status, e.g. `pending_signature`. */
     status?: DocumentStatus | AnyString;
+    /** Only the documents of this envelope. */
+    envelope_id?: string;
+    /** `name` or `updated_at`, `-` prefix for descending (`-updated_at` is the default). */
+    sort?: 'name' | '-name' | 'updated_at' | '-updated_at' | AnyString;
     /** Page number (1-based). */
     page?: number;
     /** Results per page. */
@@ -830,6 +882,8 @@ export interface IDocumentSearchParams extends IListParams {
 
 /** Query parameters accepted by `assignments.list`. */
 export interface IAssignmentListParams extends IListParams {
+    /** `created_at` (default, oldest first), `expires_at` or `id`; `-` prefix for descending. */
+    sort?: 'created_at' | '-created_at' | 'expires_at' | '-expires_at' | 'id' | '-id' | AnyString;
     /** Page number (1-based). */
     page?: number;
     /** Results per page. */
@@ -893,6 +947,10 @@ export interface IDocumentDetailsResponse {
     verification_url?: string | null;
     /** Present only on workspace detail reads when contract tracking is available. */
     has_contract?: boolean;
+    /** Only with `expand: ['envelope_id']`: the envelope the document is in, or `null`. */
+    envelope_id?: string | null;
+    /** Only with `expand: ['envelope']`: the document's envelope, or `null`. */
+    envelope?: IDocumentEnvelopeRef | null;
     artifacts?: {
         original: string;
         certificated?: string;
@@ -921,7 +979,7 @@ export interface IDocumentActivity {
     /** Event-specific payload. Object for most events, occasionally `[]` or `null`. */
     payload?: Record<string, unknown> | unknown[] | null;
     /** Request origin (`ip` / `user-agent`) when available; `null` for system events. */
-    origin: { ip?: string; 'user-agent'?: string } | string | null;
+    origin: { ip?: string | null; 'user-agent'?: string } | string | null;
     created_at: string;
 }
 
@@ -996,6 +1054,10 @@ export interface IWorkspaceResponse {
     notification_sender_type?: NotificationSenderType;
     roles?: string[];
     is_delete_allowed?: boolean;
+    /** Returned by `workspaces.get()`, not in workspace lists. More keys may appear. */
+    limits?: IAccountLimits;
+    /** Only with `workspaces.get(accountId, { expand: 'signing_features' })`. */
+    signing_features?: IAccountSigningFeatures;
     created_at: string;
 }
 
@@ -1014,11 +1076,15 @@ export type IWorkspaceListResponse = PaginatedResult<IWorkspaceListItem>;
 /** Branding returned by `GET /accounts/{accountId}/theme`. */
 export interface IAccountTheme {
     account_name: string;
-    /** Six-character hex colour without a leading `#`. */
+    /** Button background: six-character hex colour without a leading `#`. */
     primary_color: string;
-    secondary_color: string | null;
-    /** Absolute URL of the account logo. */
-    logo: string;
+    /** Button text: six-character hex colour without a leading `#`. */
+    secondary_color: string;
+    /**
+     * Absolute logo URL for the caller (`/accounts/{accountId}/logo` for members,
+     * `/sign/logo` for signers), or `null` when the account has none.
+     */
+    logo: string | null;
 }
 
 /** Granularity accepted by account/user document-statistics endpoints. */
@@ -1137,6 +1203,12 @@ export interface IWebhookEndpointSecret {
     secret: string;
 }
 
+/** Result of `webhooks.rotateEndpointSecret()`. */
+export interface IWebhookEndpointSecretRotation extends IWebhookEndpointSecret {
+    /** Only with `keep_previous: true`: when the previous secret stops signing (24 hours). */
+    previous_secret_expires_at?: string;
+}
+
 /** Event code and human-readable description from the webhook event catalog. */
 export interface IWebhookEventTypeInfo {
     id: WebhookEventType | AnyString;
@@ -1147,7 +1219,7 @@ export interface IWebhookEventTypeInfo {
 export interface IWebhookDispatch {
     resource?: string;
     id: string;
-    event: WebhookEventType | AnyString;
+    event: WebhookDeliveryEventType | AnyString;
     activity_id: number;
     /** Endpoint the delivery went to; `null` once that endpoint is deleted. */
     endpoint_id?: string | null;
@@ -1159,10 +1231,12 @@ export interface IWebhookDispatch {
     webhook_id?: string | null;
     /** Attempt number for this event and endpoint, counted from 1. */
     attempt?: number | null;
-    /** Whether the entry was scheduled, a recovery probe, or manually retried. */
+    /** `scheduled` delivery, recovery `probe` to a paused endpoint, or `manual` (retry or test delivery). */
     kind?: 'scheduled' | 'probe' | 'manual' | AnyString;
     /** Whether another automatic attempt follows this entry. */
     will_retry?: boolean;
+    /** Milliseconds the endpoint took; `null` when no request was sent or before it was measured. */
+    duration_ms?: number | null;
     http_status: number | null;
     /** Receiving endpoint body, truncated by Assinafy to 2,000 characters. */
     response_body: string | null;
@@ -1332,6 +1406,8 @@ export interface ITemplateSigner {
     whatsapp_phone_number?: string;
     verification_method?: AssignmentVerificationMethod;
     notification_methods?: AssignmentNotificationMethod[];
+    /** Sign inside your app (see {@link SignerReference}); Email, Whatsapp or Bypass verification. */
+    embedded?: boolean;
     /** Positive integer controlling signing order (see {@link SignerReference}). */
     step?: number;
 }
@@ -1357,6 +1433,13 @@ export interface ICreateDocumentFromTemplateOptions {
      * auto-created; the template's default-document-tags are always merged in.
      */
     tags?: string[];
+    /**
+     * Refuse with `409 CreditCeilingExceeded` above this many credits. A cost
+     * that rises after acceptance ends the document `failed` instead.
+     */
+    max_total_credits?: number;
+    /** New per document; a retry with the same key returns the first document without charging again. */
+    idempotencyKey?: string;
 }
 
 /**
@@ -1398,6 +1481,8 @@ export interface IDocumentVerification {
     signer_count: string | null;
     completed_count: number | null;
     completed_at: string | null;
+    /** When certification was first recorded. */
+    certificated_at?: string | null;
     verified_at: string;
     is_valid: boolean;
     message: string;
@@ -1626,10 +1711,11 @@ export interface IFieldValidateMultipleEntry {
 
 /** Item returned by `GET /documents/{id}/assignments/{id}/whatsapp-notifications`. */
 export interface IWhatsAppNotification {
-    sent_at: number;
+    /** ISO-8601 UTC timestamp. */
+    sent_at: string;
     header: string;
     body: string;
-    /** Compatibility extension: the spec documents only `text`; `url` is retained for deployments that send link buttons. */
+    /** Production strips button URLs; sandbox includes them, and they carry access codes. */
     buttons: Array<{ text: string; url?: string }>;
     phone_number: string;
     signer_id: string;
@@ -1832,4 +1918,328 @@ export interface IOAuthUserInfo {
     email?: string | null;
     /** Requires the `email` scope. */
     email_verified?: boolean | null;
+}
+
+/** Signing features a workspace's plan enables (`GET /accounts/{accountId}?expand=signing_features`). */
+export interface IAccountSigningFeatures {
+    /** `DigitalCertificate` verification (ICP-Brasil A1/A3). */
+    DigitalCertificate: boolean;
+    /** `IdDocumentFaceMatchBasic` verification. */
+    VerificationIdDocumentFaceMatchBasic: boolean;
+    /** The `Whatsapp` notification method, and therefore `Whatsapp` verification. */
+    WhatsappNotification: boolean;
+    /** The `Bypass` verification method, enabled per account by Assinafy. */
+    VerificationBypass: boolean;
+    /** Embedded signing: embed origins, `embedded` signers and embed sessions. */
+    Embed: boolean;
+    [feature: string]: boolean;
+}
+
+/** Plan limits returned on the workspace read. */
+export interface IAccountLimits {
+    /** Webhook endpoints the workspace may register (1, or 3 on paid plans). */
+    webhook_endpoints: number;
+    [limit: string]: number;
+}
+
+/** One plan meter in {@link IAccountUsage}. */
+export interface IAccountUsageBalance {
+    /** Remaining quantity; `null` for unlimited. */
+    balance: number | null;
+    /** Allowance per cycle or pool; `null` when not cycle-limited or unlimited. */
+    limit: number | null;
+    /** Quantity consumed in the current cycle. */
+    spent: number;
+}
+
+/** Plan and balances returned by `GET /accounts/{accountId}/usage`. */
+export interface IAccountUsage {
+    /** Plan name; `null` when the subscription has no plan or it was retired. */
+    plan: string | null;
+    /** `YYYY-MM-DD` when the document allowance renews, or `null`. */
+    documents_renewal_date: string | null;
+    balances: {
+        documents: IAccountUsageBalance;
+        credits: IAccountUsageBalance;
+    };
+}
+
+/** Document alert codes governed by the workspace notification policy. */
+export type NotificationPolicyEvent =
+    | 'DocumentCompleted'
+    | 'SignerDeclined'
+    | 'DocumentCancelled'
+    | 'DocumentAboutToExpire'
+    | 'DocumentExpired'
+    | 'DocumentExpirationReset'
+    | 'DocumentProcessingFailed'
+    | 'TemplateProcessingFailed'
+    | 'SignerWhatsappFailed'
+    | 'ContractRenewalNotice'
+    | 'ContractExpiring'
+    | 'ContractExpired'
+    | 'ContractRenewed'
+    | 'SignerViewed'
+    | 'SignerSigned'
+    | 'SignerIdentityReviewRequired';
+
+/** Workspace-wide alert policy returned by `GET /accounts/{accountId}/notification-policy`. */
+export interface INotificationPolicy {
+    /** Whether the requesting user is an owner and can change the policy. */
+    editable: boolean;
+    /** Owners also receive push alerts for every member's documents. */
+    owners_receive_all: boolean;
+    /** `false` silences that alert for everyone in the workspace, on every channel. */
+    events: Record<NotificationPolicyEvent, boolean> & Record<string, boolean>;
+}
+
+/** Partial policy accepted by `PUT /accounts/{accountId}/notification-policy`. */
+export interface IUpdateNotificationPolicyPayload {
+    events?: Partial<Record<NotificationPolicyEvent, boolean>>;
+    owners_receive_all?: boolean;
+}
+
+/** Push-notification alert codes for the authenticated user. */
+export type PushPreferenceEvent =
+    | 'SignerViewed'
+    | 'SignerSigned'
+    | 'DocumentCompleted'
+    | 'SignerDeclined'
+    | 'DocumentAboutToExpire'
+    | 'DocumentExpired'
+    | 'SignerIdentityReviewRequired'
+    | 'SignerWhatsappFailed';
+
+/** Push preferences returned by `GET /users/self/push-preferences`; new keys may appear. */
+export type IPushPreferences = Record<PushPreferenceEvent, boolean> & Record<string, boolean>;
+
+/** Partial map accepted by `PUT /users/self/push-preferences`. */
+export type IUpdatePushPreferences = Partial<Record<PushPreferenceEvent, boolean>>;
+
+/** An origin allowed to embed the workspace's signing pages. */
+export interface IEmbedOrigin {
+    id: string;
+    /** Exact `scheme://host[:port]`, lowercased, without a trailing `/` or default port. */
+    origin: string;
+    created_at: string;
+}
+
+/** Single-use embed session returned by `embed.createSession()`. */
+export interface IEmbedSession {
+    /** Load in an iframe within 5 minutes; opening it spends the token. Never store or log it. */
+    url: string;
+    expires_at: string;
+}
+
+/** Signer of one envelope document; a signer appears only on their documents. */
+export interface IEnvelopeDocumentSigner {
+    id: string;
+    full_name: string;
+    email: string | null;
+    whatsapp_phone_number: string | null;
+    /** Whether they signed this document. */
+    completed: boolean;
+    signed_at: string | null;
+}
+
+/** One document of an envelope, in envelope order. */
+export interface IEnvelopeDocument {
+    id: string;
+    /** Position in the envelope, from 1. */
+    position: number;
+    name: string;
+    status: DocumentStatus | AnyString;
+    /** Download URLs keyed by artifact name, as on the document read. */
+    artifacts: Partial<Record<DocumentArtifactName, string>> & Record<string, string>;
+    signers: IEnvelopeDocumentSigner[];
+}
+
+/** Envelope returned by every envelope read and mutation. */
+export interface IEnvelope {
+    resource?: string;
+    id: string;
+    name: string;
+    message: string | null;
+    documents: IEnvelopeDocument[];
+    /** Documents per status code (only statuses present); `null` once it lists no document. */
+    counts: Record<string, number> | null;
+    /** One entry per signer; `url` is `null` for embedded and WhatsApp-only signers. */
+    signing_urls: ISigningUrl[];
+    created_at: string;
+}
+
+/** Paginated envelope-list response. */
+export type IEnvelopeListResponse = PaginatedResult<IEnvelope>;
+
+/** Filters accepted by `envelopes.list()`. */
+export interface IEnvelopeListParams extends IListParams {
+    /** Part of the envelope name. */
+    search?: string;
+    /** `open`: a document is still open; `closed`: every document is closed. */
+    status?: 'open' | 'closed';
+}
+
+/** An envelope signer, listed once by ID. Envelope signers take no `step`. */
+export interface IEnvelopeSignerInput {
+    id: string;
+    verification_method?: AssignmentVerificationMethod;
+    notification_methods?: AssignmentNotificationMethod[];
+    /** Sign inside your app through `embed.createSession()`; needs the Embed feature. */
+    embedded?: boolean;
+}
+
+/** A `metadata_ready`, unassigned workspace document to put in an envelope. */
+export interface IEnvelopeDocumentInput {
+    id: string;
+    method?: AssignmentMethod;
+    /** Required for `collect`: its signers are exactly those on its fields. */
+    entries?: IAssignmentEntry[];
+    /** This document's signers, each listed once in the envelope's `signers`. */
+    signer_ids: string[];
+    /** At least one hour ahead; date-only means 23:59 UTC, no offset means UTC. `null` for none. */
+    expires_at?: string | null;
+    /** Signer IDs that only receive a copy of this document. */
+    copy_receiver_ids?: string[];
+}
+
+/** Body for `POST /accounts/{accountId}/envelopes` and its cost estimate. */
+export interface ICreateEnvelopePayload {
+    /** 1–255 characters without `<`; replaces document names in invitations. */
+    name: string;
+    message?: string | null;
+    /** Refuse with `409 CreditCeilingExceeded` when the total would exceed it. Ignored by the estimate. */
+    max_total_credits?: number;
+    /** 1–20 signers; each must be on at least one document. */
+    signers: IEnvelopeSignerInput[];
+    /** 1–20 documents, in envelope order. */
+    documents: IEnvelopeDocumentInput[];
+}
+
+/** Body for `POST /accounts/{accountId}/envelopes/{envelopeId}/documents`. */
+export interface IAddEnvelopeDocumentPayload extends IEnvelopeDocumentInput {
+    /** Refuse with `409 CreditCeilingExceeded` when this document costs more. */
+    max_total_credits?: number;
+}
+
+/** Body for `PATCH /accounts/{accountId}/envelopes/{envelopeId}`; send only what changes. */
+export interface IUpdateEnvelopePayload {
+    name?: string;
+    /** `null` removes the message. */
+    message?: string | null;
+    /** Every document of the envelope, each once, in the new order. */
+    document_ids?: string[];
+}
+
+/** Envelope activity: a document activity naming its document. */
+export interface IEnvelopeActivity extends IDocumentActivity {
+    document_id: string;
+    document_name: string;
+}
+
+/** Per-document outcome of `envelopes.cancel()`. */
+export interface IEnvelopeCancelResult {
+    id: string;
+    /** The document's status after the call. */
+    status: DocumentStatus | AnyString;
+    /** Whether this call cancelled it. */
+    cancelled: boolean;
+}
+
+/** Acknowledgement of `envelopes.resendNotification()`. */
+export interface IEnvelopeResendResponse {
+    /** Whether every notification method sent it. */
+    is_sent: boolean;
+    envelope_id: string;
+    signer_id: string;
+}
+
+/** Envelope a signer's code belongs to (`expand: 'envelope'`). */
+export interface IDocumentEnvelopeRef {
+    id: string;
+    name: string;
+}
+
+/** Whether a signer can ask for the certified copy again. */
+export interface ISignerCertifiedCopyStatus {
+    available: boolean;
+    notification_method: AssignmentNotificationMethod | null;
+    /** WhatsApp re-sends left; `null` for e-mail. */
+    resends_left: number | null;
+}
+
+/** Result of asking for the certified copy again. */
+export interface ICertifiedCopyResendResult {
+    /** Whether it can be asked for again. */
+    available: boolean;
+    notification_method: AssignmentNotificationMethod;
+    /** WhatsApp re-sends left; `null` for e-mail. */
+    resends_left: number | null;
+    /** Masked contact it went to, e.g. `j***@example.com`. */
+    sent_to: string;
+}
+
+/** Signer as `GET /sign` and `GET /signers/{signerId}/document` describe them. */
+export type ISigningCurrentSigner = Partial<ISigner> & {
+    id: string;
+    verification_method: AssignmentVerificationMethod | AnyString;
+    /** `null` on requests stored before they were recorded. */
+    notification_methods: Array<AssignmentNotificationMethod | AnyString> | null;
+    /** Whether this signer has signed. */
+    completed: boolean;
+};
+
+/**
+ * Document read with a signer access code. While the code is open it is the
+ * full document, whose `assignment` carries only this signer's items (no other
+ * signers, `signing_urls`, copy receivers or `summary`). Once the signer has
+ * been done for 30 minutes the code closes: only `id`, `name`, `status`,
+ * `current_signer`, `certified_copy` (and `envelope`, when asked for) remain,
+ * with `is_signer_access_closed: true`.
+ */
+export type ISigningDocument = Partial<Omit<IDocumentDetailsResponse, 'assignment'>> & {
+    /** The signer's own items only: no `signers`, `signing_urls`, `copy_receivers` or `summary`. */
+    assignment?: Omit<IAssignment, 'signers' | 'signing_urls' | 'copy_receivers' | 'summary'> | null;
+    id: string;
+    name: string;
+    status: DocumentStatus | AnyString;
+    current_signer: ISigningCurrentSigner;
+    is_signer_access_closed: boolean;
+    certified_copy: ISignerCertifiedCopyStatus;
+    /** Only with `expand: ['envelope']`; `null` outside an envelope. */
+    envelope?: IDocumentEnvelopeRef | null;
+};
+
+/** Signer state returned by `PUT /signers/accept-terms`. */
+export interface IAcceptTermsResult {
+    full_name: string;
+    email: string | null;
+    has_accepted_terms: boolean;
+}
+
+/** Filters accepted by the signer document list. */
+export interface ISignerDocumentListParams extends IListParams {
+    /** Only the documents of this envelope. */
+    envelope_id?: string;
+}
+
+/** Options for reading the document to sign (`GET /sign`). */
+export interface ISigningReadOptions {
+    /** Sent as `has_accepted_terms`; records the signer's acceptance. */
+    hasAcceptedTerms?: boolean;
+    /** `['envelope']` adds the envelope the code belongs to. */
+    expand?: Array<'envelope'>;
+    /** With an envelope code: another document of that envelope the signer is on. */
+    documentId?: string;
+}
+
+/** Options for `documents.details()` / `documents.get()`. */
+export interface IDocumentDetailsOptions {
+    /** `envelope_id` adds the document's envelope ID; `envelope` its `{ id, name }`. */
+    expand?: Array<'envelope_id' | 'envelope'>;
+}
+
+/** Options for `documents.thumbnail()` / `documents.downloadPage()`. */
+export interface IDocumentRenderOptions {
+    /** `certificated`: render as in the signed document (`404` until certified, `503` while pending). */
+    artifact?: 'certificated';
 }

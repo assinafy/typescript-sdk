@@ -3,6 +3,7 @@ import type { AxiosInstance } from 'axios';
 import { ValidationError } from '../errors';
 import type { IDocumentContract } from '../types';
 import { ContractResource } from './contracts';
+import { recordingHttp } from '../testing/recording-http';
 
 const contract: IDocumentContract = {
     resource: 'document_contract',
@@ -336,5 +337,20 @@ describe('ContractResource', () => {
             );
         }
         expect(calls).toBe(0);
+    });
+});
+
+describe('ContractResource related expansion', () => {
+    test('embeds the root document only when asked, and rejects other expansions', async () => {
+        const { http, calls } = recordingHttp(contract);
+        const resource = new ContractResource(http, 'acc');
+        await resource.listRelated('doc-1');
+        await resource.listRelated('doc-1', undefined, { expand: 'document' });
+        await expect(resource.listRelated('doc-1', undefined, { expand: 'pages' as never })).rejects.toBeInstanceOf(ValidationError);
+        await expect(resource.listRelated('doc-1', undefined, null as never)).rejects.toBeInstanceOf(ValidationError);
+        expect(calls).toEqual([
+            { method: 'GET', url: '/accounts/acc/documents/doc-1/contract/related', config: {} },
+            { method: 'GET', url: '/accounts/acc/documents/doc-1/contract/related', config: { params: { expand: 'document' } } },
+        ]);
     });
 });

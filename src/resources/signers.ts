@@ -258,7 +258,7 @@ export class SignerResource extends BaseResource {
         return this.call('Failed to update signer', () =>
             this.http.put(
                 `/accounts/${this.pathSegment(id, 'Account ID')}/signers/${this.pathSegment(sid, 'Signer ID')}`,
-                normaliseSignerPayload(payload),
+                { ...normaliseSignerPayload(payload), ...clearedContacts(payload) },
             ),
         );
     }
@@ -396,14 +396,24 @@ export function validateUpdateSignerPayload(payload: IUpdateSignerPayload): void
     ) {
         throw new ValidationError('full_name cannot be empty');
     }
-    if (payload.email !== undefined && !isEmail(payload.email)) {
+    if (payload.email !== undefined && !isClear(payload.email) && !isEmail(payload.email)) {
         throw new ValidationError('Invalid email address', { email: payload.email });
     }
 
-    const phone = payload.whatsapp_phone_number ?? payload.phone;
-    validateOptionalPhone(phone);
+    const phone = updatePhone(payload);
+    if (!isClear(phone)) validateOptionalPhone(phone);
     validateOptionalDigits(payload.cpf, 'cpf');
-    validateOptionalDigits(payload.government_id, 'government_id');
+    if (!isClear(payload.government_id)) validateOptionalDigits(payload.government_id, 'government_id');
+}
+
+/** `null` or `''` clears `email`, `whatsapp_phone_number` and `government_id` on update. */
+function isClear(value: unknown): value is null | '' {
+    return value === null || value === '';
+}
+
+/** Prefer `whatsapp_phone_number`, keeping an explicit `null` instead of falling back to `phone`. */
+function updatePhone(payload: IUpdateSignerPayload): string | null | undefined {
+    return payload.whatsapp_phone_number !== undefined ? payload.whatsapp_phone_number : payload.phone;
 }
 
 function validateOptionalDigits(value: string | undefined, field: 'cpf' | 'government_id'): void {
@@ -443,4 +453,18 @@ function normaliseSignerPayload(
     }
 
     return cleanParams(normalised);
+}
+
+/** The `null` / `''` values that clear a field on update, which cleaning would drop. */
+function clearedContacts(payload: IUpdateSignerPayload): Record<string, null | ''> {
+    const cleared: Record<string, null | ''> = {};
+    const candidates = {
+        email: payload.email,
+        whatsapp_phone_number: updatePhone(payload),
+        government_id: payload.government_id,
+    };
+    for (const [key, value] of Object.entries(candidates)) {
+        if (isClear(value)) cleared[key] = value;
+    }
+    return cleared;
 }

@@ -2,6 +2,7 @@ import { describe, test, expect, beforeEach } from 'bun:test';
 import { WorkspaceResource } from './workspaces';
 import { ValidationError } from '../errors';
 import type { AxiosInstance } from 'axios';
+import { recordingHttp } from '../testing/recording-http';
 
 describe('WorkspaceResource', () => {
     let mockAxios: AxiosInstance;
@@ -185,7 +186,7 @@ describe('WorkspaceResource', () => {
         const theme = {
             account_name: 'Acme',
             primary_color: 'aabbcc',
-            secondary_color: null,
+            secondary_color: 'ffffff',
             logo: 'https://example.test/logo',
         };
         const ax = {
@@ -396,5 +397,47 @@ describe('WorkspaceResource', () => {
             new WorkspaceResource(ax).delete('w1', { force: 'false' as never }),
         ).rejects.toBeInstanceOf(ValidationError);
         expect(calls).toBe(0);
+    });
+});
+
+describe('WorkspaceResource plan, usage and notification policy', () => {
+    test('expands signing features and reads usage and the notification policy', async () => {
+        const { http, calls } = recordingHttp();
+        const resource = new WorkspaceResource(http);
+        await resource.get('acc', { expand: 'signing_features' });
+        await resource.getUsage('acc');
+        await resource.getNotificationPolicy('acc');
+        await resource.updateNotificationPolicy('acc', { events: { SignerViewed: false }, owners_receive_all: true });
+        await resource.updateNotificationPolicy('acc', { owners_receive_all: false });
+        expect(calls).toEqual([
+            { method: 'GET', url: '/accounts/acc', config: { params: { expand: 'signing_features' } } },
+            { method: 'GET', url: '/accounts/acc/usage', config: undefined },
+            { method: 'GET', url: '/accounts/acc/notification-policy', config: undefined },
+            {
+                method: 'PUT',
+                url: '/accounts/acc/notification-policy',
+                body: { events: { SignerViewed: false }, owners_receive_all: true },
+                config: undefined,
+            },
+            { method: 'PUT', url: '/accounts/acc/notification-policy', body: { owners_receive_all: false }, config: undefined },
+        ]);
+    });
+
+    test('rejects malformed expansion and policy updates before requesting', async () => {
+        const { http, calls } = recordingHttp();
+        const resource = new WorkspaceResource(http);
+        const requests = [
+            () => resource.get('acc', { expand: 'members' as never }),
+            () => resource.get('acc', null as never),
+            () => resource.getUsage(''),
+            () => resource.getNotificationPolicy(' '),
+            () => resource.updateNotificationPolicy('acc', {}),
+            () => resource.updateNotificationPolicy('acc', null as never),
+            () => resource.updateNotificationPolicy('acc', { events: {} }),
+            () => resource.updateNotificationPolicy('acc', { events: { SignerViewed: 'no' as never } }),
+            () => resource.updateNotificationPolicy('acc', { owners_receive_all: 1 as never }),
+        ];
+        for (const request of requests) await expect(request()).rejects.toBeInstanceOf(ValidationError);
+        expect(calls).toHaveLength(0);
     });
 });

@@ -16,8 +16,13 @@ GET, PUT, DELETE   /v1/accounts/{accountId}
 GET, POST, DELETE  /v1/accounts/{accountId}/logo
 GET                /v1/accounts/{accountId}/theme
 GET                /v1/accounts/{accountId}/stats
+GET                /v1/accounts/{accountId}/usage
+GET, PUT           /v1/accounts/{accountId}/notification-policy
+GET, POST, PUT, DELETE /v1/accounts/{accountId}/embed-origins (and per-origin routes)
+GET, POST, PATCH, PUT, DELETE /v1/accounts/{accountId}/envelopes (and per-envelope routes)
 GET                /v1/users/self
 GET, PUT           /v1/users/self/notification-preferences
+GET, PUT           /v1/users/self/push-preferences
 GET                /v1/users/self/stats
 GET                /v1/users/self/mfa (and the two-factor management routes)
 POST               /v1/authentication/mfa/verify
@@ -25,8 +30,9 @@ GET, POST          /v1/accounts/{accountId}/webhooks/endpoints (and per-endpoint
 ```
 
 Sandbox deployments can return `404` for user statistics, account statistics,
-notification preferences, two-factor routes, or webhook endpoint routes while still accepting the production methods on
-the production host. The SDK keeps the official paths and response types. A
+notification preferences, two-factor routes, webhook endpoint routes, envelopes,
+embedded signing, usage, notification policy, push preferences, the signing-page
+theme/logo and certified-copy routes while production serves them. The SDK keeps the official paths and response types. A
 sandbox `404` does not cause the client to route a request elsewhere.
 
 Two browser URL helpers used by older deployments remain available:
@@ -38,7 +44,7 @@ GET /v1/login-callback
 
 They map to `auth.getSocialLoginUrl()` and
 `auth.getSocialLoginCallbackUrl()` and are not part of the official
-118-operation total.
+147-operation total.
 
 The SDK also includes the production contract additions for:
 
@@ -80,8 +86,9 @@ An amendment's `apply_error` is human-readable text, not a stable code. Do not
 parse it to select localized guidance. The published causes are a missing
 contract-tracking plan, a parent that cannot accept the delta, an earlier signed
 instrument still pending, a later signed instrument already applied, and an
-unexpected failure. A machine-readable error code requires an API contract
-addition before the SDK can expose it.
+unexpected failure. Refusals of the contract routes themselves carry a
+machine-readable `ApiError.code` (`ContractChanged`, `NoContractTerms`,
+`PlanRestricted`) and, for a `400`, `ApiError.fieldErrors`.
 
 A sandbox may return the generic `404` while these routes are not deployed, or
 `403` while its workspace plan does not include contract tracking. The SDK does
@@ -174,9 +181,10 @@ loud, so neither surfaces as an error a caller could react to:
   and the response falls back to the default of 20 rows. The SDK normalizes
   `per_page` to `per-page` on every list method, and an explicit `per-page`
   wins if both are supplied.
-- `per-page` is clamped to **50**. A request for 100 returns 50 rows with a
-  `200`, so page-size arithmetic based on the requested value is wrong by half.
-  That maximum is exported as `MAX_LIST_PAGE_SIZE`.
+- `per-page` is capped at **50** (default 20) on every paginated list. A
+  request for 100 returns 50 rows with a `200`, so page-size arithmetic based
+  on the requested value is wrong by half. That maximum is exported as
+  `MAX_LIST_PAGE_SIZE`.
 
 ```ts
 import { MAX_LIST_PAGE_SIZE } from '@assinafy/sdk';
@@ -191,10 +199,10 @@ const { data, meta } = await client.documents.list({ 'per-page': MAX_LIST_PAGE_S
 ### Document activities
 
 Production `GET /v1/documents/{documentId}/activities` is paginated: 20 entries
-per page by default, with `page`, `per-page` (documented maximum 100), and `sort`
+per page by default, with `page`, `per-page` (at most 50, as above), and `sort`
 (`-id` for newest first, the default; `id` for oldest first). A page beyond the
-end returns an empty `data` array. Its documented limit differs from the observed
-50-row cap above; the SDK forwards the requested size without clamping it.
+end returns an empty `data` array. `envelopes.listActivities()` reads an
+envelope's trail the same way.
 
 `documents.activities(documentId, params?)` continues to return
 `IDocumentActivity[]`, normalizing an absent body to `[]`. It accepts `per_page`
@@ -210,7 +218,7 @@ import type { IDocumentActivity } from '@assinafy/sdk';
 const events: IDocumentActivity[] = [];
 for (let page = 1; ; page++) {
   const { data, meta } = await client.documents.listActivities('document-id', {
-    page, 'per-page': 100, sort: 'id',
+    page, 'per-page': 50, sort: 'id',
   });
   events.push(...data);
   // Unpaged sandbox responses have no meta and must be consumed only once.
@@ -232,9 +240,10 @@ pagination.
 
 ## Assignment list account context
 
-`GET /v1/assignments` requires the workspace in the camel-case `accountId`
-query parameter even though most account-scoped routes place it in the path.
-The SDK obtains it from the optional method argument or the client default:
+`GET /v1/assignments` takes the workspace in the camel-case `accountId` query
+parameter (required unless an OAuth token names it) even though most
+account-scoped routes place it in the path. The SDK always sends it, from the
+optional method argument or the client default:
 
 ```ts
 const page = await client.assignments.list(
@@ -345,9 +354,10 @@ also retains `is_active` on create and `type` or `is_required` on update for
 deployments that accept them. New code should prefer the operation-specific
 official fields.
 
-The field-validation schemas omit the `signer-access-code` query parameter used
-by some signer portals. `fields.validate()` and `validateMultiple()` retain the
-typed `signerAccessCode` option for those environments.
+Field validation authenticates with the workspace credentials or with a signer
+access code. With `signerAccessCode`, `fields.validate()` and
+`validateMultiple()` send the code as the `signer-access-code` query on the
+credential-free transport, so it never travels with the API key or token.
 
 ## Signer request extensions
 
@@ -363,6 +373,11 @@ inputs remain accepted:
 
 New integrations should use the official fields, including `government_id`. `cpf` is not an alias for the official update field, and signer
 responses do not return it.
+
+On update, `null` or `''` clears `email`, `whatsapp_phone_number` (stored as
+`null`) and `government_id`; `full_name` cannot be cleared. Changing the e-mail
+or phone of a signer who has not verified yet issues new codes, and an open
+embed frame then reports `session_expired`.
 
 ## Digital certificate and collect placement
 
@@ -424,8 +439,9 @@ retaining the other document fields.
 belongs to the document creator. Do not infer the absence of a decline merely
 because that field is missing for another authenticated user.
 
-Owner and signer downloads accept `original`, `certificated`,
-`certificate-page`, `pades`, and `bundle`:
+Owner downloads accept `original`, `certificated`, `certificate-page`, `pades`,
+and `bundle`; a signer with an access code can download only `original` (the
+certified copy is sent to them instead):
 
 - `pades` exists only when the document had an ICP-Brasil certificate signer;
 - `bundle` is a ZIP containing `original`, `certificated`, and
@@ -435,16 +451,29 @@ Owner and signer downloads accept `original`, `certificated`,
 
 Document and page download URLs in JSON responses are protected. Prefer the
 typed download methods so credentials are applied and binary data is returned
-as a `Buffer`.
+as a `Buffer`. `thumbnail()` and `downloadPage()` accept `{ artifact:
+'certificated' }` for the signed render (`404` until certified, `503` with
+`Retry-After` while it is produced). `details()` accepts `expand:
+['envelope_id', 'envelope']`; those keys never appear in lists or webhooks.
 
 ## Signer-side preconditions
 
-The signer `confirm-data` body contains `full_name`, `email`,
-`government_id`, and `has_accepted_terms`. A certificate signer must confirm
-data and accept terms before `getAssignment()`; either send
-`has_accepted_terms: true` with `confirmData()` or call `acceptTerms()` first.
-The `has_accepted_terms` query on `getAssignment()` is too late to open that
-gate for a certificate signer.
+The production signer `confirm-data` body contains `email`,
+`whatsapp_phone_number` and `has_accepted_terms`: the signer sends the contact
+their channel needs, saved only when they have none. It answers `data: []`, so
+`confirmData()` resolves to `null`; older deployments read `full_name` and
+`government_id` and return the signer, so the SDK still forwards those fields.
+A certificate signer must confirm data and accept terms before
+`getAssignment()`; either send `has_accepted_terms: true` with `confirmData()`
+or call `acceptTerms()` first. The `has_accepted_terms` query on
+`getAssignment()` is too late to open that gate for a certificate signer.
+
+Signer reads return `ISigningDocument`. A code closes 30 minutes after its
+signer is done (with every document of an envelope); reads then return only
+`id`, `name`, `status`, `current_signer`, `certified_copy` and `envelope`, with
+`is_signer_access_closed: true`, and every other signer route answers `410`.
+An envelope code opens another of its documents with `getAssignment(code, {
+documentId })`, and `expand: ['envelope']` names the envelope.
 
 `getAssignment()` uses `GET /sign`, but the API records the signer as having
 viewed the assignment. The SDK therefore excludes this request from automatic
@@ -474,8 +503,9 @@ remove the expiration. The SDK always sends that key.
 
 ## Resend-cost response variants
 
-The official resend-cost response is `ICostEstimate`. Older deployments can
-return a compact branch, so the SDK exposes `IResendCostEstimate`:
+Production answers the compact `ResendCostEstimate` (`total`,
+`has_sufficient_credits`, nullable `credit_balance`); older deployments return
+the full `ICostEstimate`, so the SDK exposes `IResendCostEstimate`:
 
 ```ts
 const estimate = await client.assignments.estimateResendCost(
@@ -505,25 +535,30 @@ const document = await client.documents.getPublic(documentId);
 const pages = document.pages?.length ?? Number(document.page_count ?? 0);
 ```
 
-Signer artifact download is public in the OpenAPI document and requires no
-access-code query in the official three-argument call. An optional fourth code
-is available only for older deployments that require it.
+Signer artifact download requires the access code and offers only `original`;
+without a usable code the API redirects to its expired-link page. The SDK does
+not follow that redirect, so the call throws `ApiError` (`302`) instead of
+returning HTML bytes. The certified-copy link download
+(`downloadCertifiedCopy(token)`) behaves the same way for an expired link; ask
+for a new link with `resendCertifiedCopyFromLink(token)`.
 
 ## Empty acknowledgements
 
 Several write operations return a success envelope without `data`; older
 responses can use an empty array or object. Methods with no meaningful result
 resolve to `Promise<void>` after validating the HTTP and envelope status. This
-applies to token dispatch, signer OTP and terms, signature-image upload, bulk
-signer actions, and deletions without a documented result. Tag deletion and
+applies to signer OTP verification, signature-image upload, bulk signer
+actions, and deletions without a documented result. `acceptTerms()` returns
+the signer's `{ full_name, email, has_accepted_terms }`. Tag deletion and
 document-tag detachment preserve `{ deleted: boolean }` and
 `{ detached: boolean }`.
 
 ## WhatsApp notification buttons
 
-The published notification button schema requires `text`. Some deployments
-also return `url`, so the SDK types it as optional. A button URL can contain a
-signer access or verification value; treat it as a credential and never log it.
+The published notification button schema requires `text`. Production strips
+button URLs; the sandbox returns `url`, so the SDK types it as optional. A
+button URL can contain a signer access or verification value; treat it as a
+credential and never log it. `sent_at` is an ISO-8601 string.
 
 ## Webhook delivery
 
@@ -554,7 +589,13 @@ target of `deleteEndpointByUrl(url, accountId?)`.
 
 New or changed endpoint URLs must use HTTPS. Endpoint responses expose
 `is_held` and `held_since`; dispatch entries expose `webhook_id`, `attempt`,
-`kind`, and `will_retry`. `createEndpoint()` returns
+`kind`, `will_retry`, and `duration_ms`. `testEndpoint()` sends one signed
+`webhook_test` event (not subscribable, `payload` and `origin` `null`), also to a
+held or inactive endpoint, without lifting or counting toward a hold; it is
+limited to 10 per user every 10 minutes. `rotateEndpointSecret(endpointId,
+accountId?, { keep_previous: true })` keeps the old secret signing beside the
+new one for 24 hours (`previous_secret_expires_at`); each delivery then carries
+two `v1,` entries, which `verifySignature()` accepts. `createEndpoint()` returns
 `IWebhookEndpointCreateResponse` with `secret` when signing is enabled.
 `updateEndpoint()` returns the same shape and includes `secret` when that
 request turns signing on. Store the value securely. OAuth applications cannot
@@ -574,6 +615,24 @@ Older sandbox deployments can omit `secret` from creation/update responses and
 return `404` for deletion by URL. API-key integrations can still read/rotate
 the secret and delete by ID. OAuth integrations can rotate a lost secret where
 the production route is available.
+
+## Refusal codes, idempotency and Bypass
+
+- Error bodies carry a string `code` and, for a field `400`, `errors[]`; the SDK
+  exposes them as `ApiError.code` and `ApiError.fieldErrors`. The generic `404`
+  body's numeric `code: 0` is ignored.
+- Only envelope creation and template document creation deduplicate an
+  `Idempotency-Key`; other routes ignore it, so the SDK sends it only from
+  `envelopes.create()` and `documents.createFromTemplate()`. Assignment creation
+  answers a retry with `400`.
+- `Bypass` verification and notification are enabled per account and absent
+  from the published request enums; the SDK accepts them with the pairing the
+  API applies (Bypass verification with `Email`, `Whatsapp` or `Bypass`).
+- The embed session exchange route belongs to Assinafy's embed page and is not
+  exposed.
+
+Usage is documented in the [manual](README.en.md#envelopes) and in each
+method's JSDoc.
 
 ## Authentication isolation
 

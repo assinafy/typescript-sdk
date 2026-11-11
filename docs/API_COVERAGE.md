@@ -2,7 +2,7 @@
 
 This ledger maps the official
 [`GET /v1/docs/openapi.json`](https://api.assinafy.com.br/v1/docs/openapi.json)
-contract to the public SDK API: 90 paths, 118 HTTP operations, and 49 component
+contract to the public SDK API: 112 paths, 147 HTTP operations, and 62 component
 schemas.
 
 All paths below include the `/v1` prefix shown by the OpenAPI document, except
@@ -13,17 +13,19 @@ the corresponding relative path without repeating that prefix.
 Status meanings:
 
 - **Covered** — a public, typed SDK method sends the operation.
+- **Not exposed** — official route the API reserves for Assinafy's own pages;
+  integrations must not call it.
 - **Compatibility extension** — route retained for existing integrations but
-  absent from the current OpenAPI path set and excluded from the 118-operation
+  absent from the current OpenAPI path set and excluded from the 147-operation
   total.
 
-## Accounts — 10/10
+## Accounts — 13/13
 
 | Method | Path | SDK method | Status |
 | --- | --- | --- | --- |
 | `GET` | `/v1/accounts` | `client.workspaces.list()` | Covered |
 | `POST` | `/v1/accounts` | `client.workspaces.create(payload)` | Covered |
-| `GET` | `/v1/accounts/{accountId}` | `client.workspaces.get(accountId)` | Covered |
+| `GET` | `/v1/accounts/{accountId}` | `client.workspaces.get(accountId, options?)` | Covered |
 | `PUT` | `/v1/accounts/{accountId}` | `client.workspaces.update(accountId, payload)` | Covered |
 | `DELETE` | `/v1/accounts/{accountId}` | `client.workspaces.delete(accountId, options?)` | Covered |
 | `GET` | `/v1/accounts/{accountId}/theme` | `client.workspaces.getTheme(accountId)` | Covered |
@@ -31,6 +33,9 @@ Status meanings:
 | `POST` | `/v1/accounts/{accountId}/logo` | `client.workspaces.uploadLogo(accountId, source)` | Covered |
 | `DELETE` | `/v1/accounts/{accountId}/logo` | `client.workspaces.deleteLogo(accountId)` | Covered |
 | `GET` | `/v1/accounts/{accountId}/stats` | `client.workspaces.getStats(accountId, params?)` | Covered |
+| `GET` | `/v1/accounts/{accountId}/usage` | `client.workspaces.getUsage(accountId)` | Covered |
+| `GET` | `/v1/accounts/{accountId}/notification-policy` | `client.workspaces.getNotificationPolicy(accountId)` | Covered |
+| `PUT` | `/v1/accounts/{accountId}/notification-policy` | `client.workspaces.updateNotificationPolicy(accountId, payload)` | Covered |
 
 ## Assignments — 10/10
 
@@ -69,9 +74,41 @@ Status meanings:
 | `GET` | `/v1/accounts/{accountId}/contracts` | `client.contracts.list(params?, accountId?)` | Covered |
 | `GET` | `/v1/accounts/{accountId}/documents/{documentId}/contract` | `client.contracts.get(documentId, accountId?)` | Covered |
 | `PUT` | `/v1/accounts/{accountId}/documents/{documentId}/contract` | `client.contracts.set(documentId, payload, accountId?)` | Covered |
-| `GET` | `/v1/accounts/{accountId}/documents/{documentId}/contract/related` | `client.contracts.listRelated(documentId, accountId?)` | Covered |
+| `GET` | `/v1/accounts/{accountId}/documents/{documentId}/contract/related` | `client.contracts.listRelated(documentId, accountId?, params?)` | Covered |
 | `POST` | `/v1/accounts/{accountId}/documents/{documentId}/contract/renew` | `client.contracts.renew(documentId, payload, accountId?)` | Covered |
 | `POST` | `/v1/accounts/{accountId}/documents/{documentId}/contract/terminate` | `client.contracts.terminate(documentId, payload?, accountId?)` | Covered |
+
+## Embedded signing — 6/6
+
+Server side only: the iframe and its `postMessage` handshake run in the
+browser. The session exchange is called by Assinafy's embed page with the
+single-use token, and spending it from an integration would break the frame.
+
+| Method | Path | SDK method | Status |
+| --- | --- | --- | --- |
+| `GET` | `/v1/accounts/{accountId}/embed-origins` | `client.embed.listOrigins(accountId?)` | Covered |
+| `POST` | `/v1/accounts/{accountId}/embed-origins` | `client.embed.addOrigin(origin, accountId?)` | Covered |
+| `PUT` | `/v1/accounts/{accountId}/embed-origins/{originId}` | `client.embed.updateOrigin(originId, origin, accountId?)` | Covered |
+| `DELETE` | `/v1/accounts/{accountId}/embed-origins/{originId}` | `client.embed.deleteOrigin(originId, accountId?)` | Covered |
+| `POST` | `/v1/documents/{documentId}/assignments/{assignmentId}/signers/{signerId}/embed-sessions` | `client.embed.createSession(documentId, assignmentId, signerId)` | Covered |
+| `POST` | `/v1/embed/sessions/{token}/exchange` | — | Not exposed |
+
+## Envelopes — 12/12
+
+| Method | Path | SDK method | Status |
+| --- | --- | --- | --- |
+| `GET` | `/v1/accounts/{accountId}/envelopes` | `client.envelopes.list(params?, accountId?)` | Covered |
+| `POST` | `/v1/accounts/{accountId}/envelopes` | `client.envelopes.create(payload, options?, accountId?)` | Covered |
+| `POST` | `/v1/accounts/{accountId}/envelopes/estimate-cost` | `client.envelopes.estimateCost(payload, accountId?)` | Covered |
+| `GET` | `/v1/accounts/{accountId}/envelopes/{envelopeId}` | `client.envelopes.get(envelopeId, accountId?)` | Covered |
+| `PATCH` | `/v1/accounts/{accountId}/envelopes/{envelopeId}` | `client.envelopes.update(envelopeId, payload, accountId?)` | Covered |
+| `DELETE` | `/v1/accounts/{accountId}/envelopes/{envelopeId}` | `client.envelopes.delete(envelopeId, accountId?)` | Covered |
+| `GET` | `/v1/accounts/{accountId}/envelopes/{envelopeId}/activities` | `client.envelopes.listActivities(envelopeId, params?, accountId?)` | Covered |
+| `PUT` | `/v1/accounts/{accountId}/envelopes/{envelopeId}/cancel` | `client.envelopes.cancel(envelopeId, accountId?)` | Covered |
+| `POST` | `/v1/accounts/{accountId}/envelopes/{envelopeId}/documents` | `client.envelopes.addDocument(envelopeId, payload, accountId?)` | Covered |
+| `DELETE` | `/v1/accounts/{accountId}/envelopes/{envelopeId}/documents/{documentId}` | `client.envelopes.removeDocument(envelopeId, documentId, accountId?)` | Covered |
+| `GET` | `/v1/accounts/{accountId}/envelopes/{envelopeId}/download/{artifactName}` | `client.envelopes.download(envelopeId, artifactName, accountId?)` | Covered |
+| `PUT` | `/v1/accounts/{accountId}/envelopes/{envelopeId}/signers/{signerId}/resend` | `client.envelopes.resendNotification(envelopeId, signerId, accountId?)` | Covered |
 
 ## Documents — 18/18
 
@@ -81,14 +118,14 @@ Status meanings:
 | `POST` | `/v1/accounts/{accountId}/documents` | `client.documents.upload(source, options?)` | Covered |
 | `GET` | `/v1/accounts/{accountId}/documents/search` | `client.documents.search(params?, accountId?)` | Covered |
 | `GET` | `/v1/documents/statuses` | `client.documents.statuses()` | Covered |
-| `GET` | `/v1/documents/{documentId}` | `client.documents.details(documentId)` / `get(documentId)` | Covered |
+| `GET` | `/v1/documents/{documentId}` | `client.documents.details(documentId, options?)` / `get(documentId, options?)` | Covered |
 | `DELETE` | `/v1/documents/{documentId}` | `client.documents.delete(documentId)` | Covered |
 | `PATCH` | `/v1/documents/{documentId}` | `client.documents.rename(documentId, name)` | Covered |
 | `GET` | `/v1/documents/{documentId}/activities` | `client.documents.activities(documentId, params?)` / `client.documents.listActivities(documentId, params?)` | Covered |
 | `GET` | `/v1/documents/{documentId}/download/{artifactName}` | `client.documents.download(documentId, artifactName)` | Covered |
 | `GET` | `/v1/documents/{documentSignatureHash}/verify` | `client.documents.verify(documentSignatureHash)` | Covered |
-| `GET` | `/v1/documents/{documentId}/thumbnail` | `client.documents.thumbnail(documentId)` | Covered |
-| `GET` | `/v1/documents/{documentId}/pages/{pageId}/download` | `client.documents.downloadPage(documentId, pageId)` | Covered |
+| `GET` | `/v1/documents/{documentId}/thumbnail` | `client.documents.thumbnail(documentId, options?)` | Covered |
+| `GET` | `/v1/documents/{documentId}/pages/{pageId}/download` | `client.documents.downloadPage(documentId, pageId, options?)` | Covered |
 | `GET` | `/v1/accounts/{accountId}/documents/{documentId}/tags` | `client.documents.listTags(documentId, accountId?)` | Covered |
 | `PUT` | `/v1/accounts/{accountId}/documents/{documentId}/tags` | `client.documents.replaceTags(documentId, tagIds, accountId?)` | Covered |
 | `POST` | `/v1/accounts/{accountId}/documents/{documentId}/tags` | `client.documents.addTags(documentId, tagIds, accountId?)` | Covered |
@@ -136,14 +173,16 @@ ordinary OAuth applications use the two SDK methods listed below.
 | `PUT` | `/v1/accounts/{accountId}/signers/{signerId}` | `client.signers.update(signerId, payload, accountId?)` | Covered |
 | `DELETE` | `/v1/accounts/{accountId}/signers/{signerId}` | `client.signers.delete(signerId, accountId?)` | Covered |
 
-## Signing and public flows — 19/19
+## Signing and public flows — 24/24
 
 All access-code methods in this section use the auth-free transport and reject
 a missing or blank code; they authenticate with the `signer-access-code` query
 parameter required by the OpenAPI security scheme. The signer document list and
 search also accept workspace credentials; only the explicit `listAsWorkspace` /
-`searchAsWorkspace` methods send them, and never with an access code. The artifact download is explicitly public and accepts
-an optional fourth access-code argument only for legacy compatibility.
+`searchAsWorkspace` methods send them, and never with an access code. The signer
+artifact download and the certified-copy link download do not follow redirects,
+so an expired link surfaces as an error instead of an HTML page. Field
+validation with a signer code (see Fields) also runs on the auth-free transport.
 
 | Method | Path | SDK method | Status |
 | --- | --- | --- | --- |
@@ -152,8 +191,13 @@ an optional fourth access-code argument only for legacy compatibility.
 | `GET` | `/v1/signers/self` | `client.signerDocuments.self(accessCode)` | Covered |
 | `GET` | `/v1/signers/identity-verification` | `client.signerDocuments.getIdentityVerification(accessCode)` | Covered |
 | `POST` | `/v1/signers/identity-verification` | `client.signerDocuments.startIdentityVerification(accessCode, payload)` | Covered |
-| `GET` | `/v1/signers/{signerId}/document` | `client.signerDocuments.getCurrent(signerId, accessCode)` | Covered |
-| `GET` | `/v1/sign` | `client.signerDocuments.getAssignment(accessCode, hasAcceptedTerms?)` | Covered |
+| `GET` | `/v1/signers/{signerId}/document` | `client.signerDocuments.getCurrent(signerId, accessCode, options?)` | Covered |
+| `GET` | `/v1/sign` | `client.signerDocuments.getAssignment(accessCode, options?)` | Covered |
+| `GET` | `/v1/sign/theme` | `client.signerDocuments.getTheme(accessCode)` | Covered |
+| `GET` | `/v1/sign/logo` | `client.signerDocuments.downloadLogo(accessCode)` | Covered |
+| `POST` | `/v1/sign/certified-copy` | `client.signerDocuments.resendCertifiedCopy(accessCode, documentId?)` | Covered |
+| `GET` | `/v1/signers/downloads/{token}` | `client.signerDocuments.downloadCertifiedCopy(token, artifact?)` | Covered |
+| `POST` | `/v1/signers/downloads/{token}/resend` | `client.signerDocuments.resendCertifiedCopyFromLink(token)` | Covered |
 | `POST` | `/v1/documents/{documentId}/assignments/{assignmentId}` | `client.signerDocuments.sign(documentId, assignmentId, accessCode, entries)` | Covered |
 | `PUT` | `/v1/documents/{documentId}/assignments/{assignmentId}/reject` | `client.signerDocuments.decline(documentId, assignmentId, accessCode, reason)` | Covered |
 | `PUT` | `/v1/signers/documents/sign-multiple` | `client.signerDocuments.signMultiple(documentIds, accessCode)` | Covered |
@@ -164,8 +208,8 @@ an optional fourth access-code argument only for legacy compatibility.
 | `POST` | `/v1/signature` | `client.signerDocuments.uploadSignature(accessCode, image, options?)` | Covered |
 | `GET` | `/v1/signature/{signatureType}` | `client.signerDocuments.downloadSignature(accessCode, signatureType)` | Covered |
 | `GET` | `/v1/signers/{signerId}/documents` | `client.signerDocuments.list(signerId, accessCode, params?)` / `client.signerDocuments.listAsWorkspace(signerId, params?)` | Covered |
-| `GET` | `/v1/signers/{signerId}/documents/search` | `client.signerDocuments.search(signerId, accessCode, search)` / `client.signerDocuments.searchAsWorkspace(signerId, search?)` | Covered |
-| `GET` | `/v1/signers/{signerId}/documents/{documentId}/download/{artifactName}` | `client.signerDocuments.download(signerId, documentId, artifactName)` | Covered |
+| `GET` | `/v1/signers/{signerId}/documents/search` | `client.signerDocuments.search(signerId, accessCode, search?, params?)` / `client.signerDocuments.searchAsWorkspace(signerId, search?, params?)` | Covered |
+| `GET` | `/v1/signers/{signerId}/documents/{documentId}/download/{artifactName}` | `client.signerDocuments.download(signerId, documentId, 'original', accessCode)` | Covered |
 
 ## Tags — 4/4
 
@@ -185,7 +229,7 @@ an optional fourth access-code argument only for legacy compatibility.
 Five additional routes are documented separately under
 [Template compatibility routes](#template-compatibility-routes).
 
-## Users — 9/9
+## Users — 11/11
 
 | Method | Path | SDK method | Status |
 | --- | --- | --- | --- |
@@ -193,13 +237,15 @@ Five additional routes are documented separately under
 | `GET` | `/v1/users/self/stats` | `client.users.getStats(params?)` | Covered |
 | `GET` | `/v1/users/self/notification-preferences` | `client.users.getNotificationPreferences()` | Covered |
 | `PUT` | `/v1/users/self/notification-preferences` | `client.users.updateNotificationPreferences(preferences)` | Covered |
+| `GET` | `/v1/users/self/push-preferences` | `client.users.getPushPreferences()` | Covered |
+| `PUT` | `/v1/users/self/push-preferences` | `client.users.updatePushPreferences(preferences)` | Covered |
 | `GET` | `/v1/users/self/mfa` | `client.users.getMfa()` | Covered |
 | `POST` | `/v1/users/self/mfa/totp` | `client.users.startTotpEnrollment(label?)` | Covered |
 | `PUT` | `/v1/users/self/mfa/totp/confirm` | `client.users.confirmTotpEnrollment(payload)` | Covered |
 | `POST` | `/v1/users/self/mfa/recovery-codes` | `client.users.regenerateRecoveryCodes(proof)` | Covered |
 | `DELETE` | `/v1/users/self/mfa/{customId}` | `client.users.deleteMfaMethod(methodId, proof)` | Covered |
 
-## Webhooks — 14/14
+## Webhooks — 15/15
 
 | Method | Path | SDK method | Status |
 | --- | --- | --- | --- |
@@ -216,12 +262,13 @@ Five additional routes are documented separately under
 | `PUT` | `/v1/accounts/{accountId}/webhooks/endpoints/{endpointId}` | `client.webhooks.updateEndpoint(endpointId, payload, accountId?)` | Covered |
 | `DELETE` | `/v1/accounts/{accountId}/webhooks/endpoints/{endpointId}` | `client.webhooks.deleteEndpoint(endpointId, accountId?)` | Covered |
 | `GET` | `/v1/accounts/{accountId}/webhooks/endpoints/{endpointId}/secret` | `client.webhooks.getEndpointSecret(endpointId, accountId?)` | Covered |
-| `POST` | `/v1/accounts/{accountId}/webhooks/endpoints/{endpointId}/secret/rotate` | `client.webhooks.rotateEndpointSecret(endpointId, accountId?)` | Covered |
+| `POST` | `/v1/accounts/{accountId}/webhooks/endpoints/{endpointId}/secret/rotate` | `client.webhooks.rotateEndpointSecret(endpointId, accountId?, options?)` | Covered |
+| `POST` | `/v1/accounts/{accountId}/webhooks/endpoints/{endpointId}/test` | `client.webhooks.testEndpoint(endpointId, accountId?)` | Covered |
 
 ## Template compatibility routes
 
 These routes are available to existing integrations but do not appear in the
-current OpenAPI path set. They are excluded from the official 118-operation
+current OpenAPI path set. They are excluded from the official 147-operation
 coverage count.
 
 | Method | Path | SDK method | Status |
@@ -236,7 +283,7 @@ coverage count.
 
 Two browser URL helpers used by older deployments are live but absent from the
 current OpenAPI path set, so they are likewise excluded from the official
-118-operation coverage count.
+147-operation coverage count.
 
 | Method | Path | SDK method | Status |
 | --- | --- | --- | --- |

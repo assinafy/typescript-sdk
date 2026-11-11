@@ -9,6 +9,7 @@ const SAFE_LOG_NUMBER_FIELDS = new Set([
     'delayMs',
     'maxRetries',
     'signerCount',
+    'documentCount',
     'size',
 ]);
 
@@ -351,6 +352,57 @@ export function assertExpirationDate(value: unknown, label: string): asserts val
     } catch {
         throw new ValidationError(`${label} must be an ISO-8601 date or date-time`);
     }
+}
+
+/**
+ * Validate an optional `max_total_credits` ceiling: a finite number of credits,
+ * zero or more. The API refuses a send above it with `409 CreditCeilingExceeded`
+ * and charges nothing.
+ */
+export function assertCreditCeiling(value: unknown): void {
+    if (value !== undefined && (typeof value !== 'number' || !Number.isFinite(value) || value < 0)) {
+        throw new ValidationError('max_total_credits must be a finite number of credits, zero or more');
+    }
+}
+
+/**
+ * Request config carrying an optional `Idempotency-Key`. Only routes that
+ * deduplicate the key server-side (envelope and template-document creation)
+ * accept it; with it, the SDK's 429 replay is safe for those POSTs.
+ */
+export function idempotencyConfig(key: unknown): { headers?: Record<string, string> } {
+    if (key === undefined) return {};
+    if (typeof key !== 'string' || key.trim().length === 0) {
+        throw new ValidationError('idempotencyKey must be a non-empty string');
+    }
+    return { headers: { 'Idempotency-Key': key } };
+}
+
+/**
+ * Require a non-empty `{ code: boolean }` map, as the preference and policy
+ * endpoints merge. With `known`, also reject codes outside it; without it the
+ * API's own `400` judges codes, for maps the API says may grow.
+ */
+export function assertBooleanMap(value: unknown, label: string, known?: ReadonlySet<string>): void {
+    assertRecord(value, label);
+    const entries = Object.entries(value as Record<string, unknown>);
+    if (entries.length === 0) throw new ValidationError(`${label} must set at least one key`);
+    for (const [key, item] of entries) {
+        if (known && !known.has(key)) throw new ValidationError(`unknown ${label} key: ${key}`);
+        if (typeof item !== 'boolean') throw new ValidationError(`${label}.${key} must be a boolean`);
+    }
+}
+
+/**
+ * Serialize an `expand` list comma-joined (`expand=a,b`), as the API reads it
+ * (`style: form, explode: false`); Axios would otherwise send `expand[]=`.
+ */
+export function expandParam(value: unknown, allowed: ReadonlySet<string>): { expand?: string } {
+    if (value === undefined) return {};
+    if (!Array.isArray(value) || value.some((item) => !allowed.has(item))) {
+        throw new ValidationError(`expand must list only ${[...allowed].join(', ')}`);
+    }
+    return value.length > 0 ? { expand: value.join(',') } : {};
 }
 
 /** Strip undefined and null values from a params record (Axios sends `undefined` as literal). */

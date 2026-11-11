@@ -479,6 +479,7 @@ async function runOptionalSignerReads(
                         signerId,
                         firstDocument.id,
                         'original',
+                        accessCode,
                     ),
                 );
             });
@@ -553,6 +554,30 @@ async function runReadOnlyAccountAudit(
     await reporter.step('webhooks.dispatches', async () => {
         const result = await client.webhooks.listDispatches({ 'per-page': 5 });
         assertArray(result.data);
+    });
+
+    await reporter.step('workspaces.signing-features', async () => {
+        const workspace = await client.workspaces.get(config.accountId, { expand: 'signing_features' });
+        assertCondition(typeof workspace.signing_features?.Embed === 'boolean');
+    });
+    // Routes production publishes ahead of the sandbox: a sandbox 404 is a skip, not a pass.
+    const productionOnly = 'route not yet published by this environment';
+    await reporter.stepWithKnownApiStatusSkip('workspaces.usage', 404, productionOnly, async () => {
+        const usage = await client.workspaces.getUsage(config.accountId);
+        assertCondition('documents' in usage.balances && 'credits' in usage.balances);
+    });
+    await reporter.stepWithKnownApiStatusSkip('workspaces.notification-policy', 404, productionOnly, async () => {
+        const policy = await client.workspaces.getNotificationPolicy(config.accountId);
+        assertCondition(typeof policy.editable === 'boolean');
+    });
+    await reporter.stepWithKnownApiStatusSkip('users.push-preferences', 404, productionOnly, async () => {
+        assertCondition(typeof (await client.users.getPushPreferences())['SignerSigned'] === 'boolean');
+    });
+    await reporter.stepWithKnownApiStatusSkip('envelopes.list', 404, productionOnly, async () => {
+        assertArray((await client.envelopes.list({ 'per-page': 5 })).data);
+    });
+    await reporter.stepWithKnownApiStatusSkip('embed.origins', 403, 'plan lacks the Embed feature', async () => {
+        assertArray(await client.embed.listOrigins());
     });
 
     if (config.publicDocumentId) {
@@ -1264,12 +1289,9 @@ async function runAssignmentSuite(
     await reporter.step('signer-documents.search-as-workspace', async () => {
         assertArray((await client.signerDocuments.searchAsWorkspace(signer.id)).data);
     });
-    await reporter.step('signer-documents.download-public-original', async () => {
-        assertBuffer(await client.signerDocuments.download(signer.id, documentId, 'original'));
-    });
     reporter.skip(
-        'signer-documents.download-public-pades',
-        'unsigned document has no PAdES artifact',
+        'signer-documents.download-original',
+        'signer downloads need the signer access code; covered by the signer fixture reads',
     );
     await reporter.step('assignments.reset-expiration', async () => {
         const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1_000).toISOString();

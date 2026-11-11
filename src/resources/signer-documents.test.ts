@@ -3,7 +3,8 @@ import type { AxiosInstance } from 'axios';
 import { SignerDocumentsResource } from './signer-documents';
 import { ValidationError } from '../errors';
 import type {
-    IDocumentDetailsResponse,
+    IAcceptTermsResult,
+    ISigningDocument,
     IDocumentListResponse,
     ISigner,
     ISignerSelf,
@@ -63,7 +64,7 @@ describe('SignerDocumentsResource identity verification', () => {
     });
 });
 
-const documentResponse: IDocumentDetailsResponse = {
+const documentResponse: ISigningDocument = {
     resource: 'document',
     id: 'doc-1',
     account_id: 'account-1',
@@ -74,6 +75,15 @@ const documentResponse: IDocumentDetailsResponse = {
     created_at: '2026-08-06T12:00:00Z',
     updated_at: '2026-08-06T12:00:00Z',
     is_closed: false,
+    current_signer: {
+        id: 'signer-1',
+        full_name: 'Example Signer',
+        verification_method: 'Email',
+        notification_methods: ['Email'],
+        completed: false,
+    },
+    is_signer_access_closed: false,
+    certified_copy: { available: false, notification_method: 'Email', resends_left: null },
 };
 
 function mockHttp(): { http: AxiosInstance; calls: Array<{ method: string; url: string; body?: unknown; config?: unknown }> } {
@@ -219,7 +229,7 @@ describe('SignerDocumentsResource — signer-access-code query auth', () => {
 
     test('getCurrent GETs the signer document endpoint with the code as a query param', async () => {
         const { http, calls } = mockHttp();
-        const result: IDocumentDetailsResponse = await new SignerDocumentsResource(
+        const result: ISigningDocument = await new SignerDocumentsResource(
             http,
         ).getCurrent('signer/1', 'code-xyz');
         expect(calls[0]?.method).toBe('GET');
@@ -230,12 +240,13 @@ describe('SignerDocumentsResource — signer-access-code query auth', () => {
 
     test('acceptTerms PUTs /signers/accept-terms with no body and the code as a query param', async () => {
         const { http, calls } = mockHttp();
-        const result: void = await new SignerDocumentsResource(http).acceptTerms('code-xyz');
+        // An acknowledgement without data (older deployments) resolves to null.
+        const result: IAcceptTermsResult | null = await new SignerDocumentsResource(http).acceptTerms('code-xyz');
         expect(calls[0]?.method).toBe('PUT');
         expect(calls[0]?.url).toBe('/signers/accept-terms');
         expect(calls[0]?.body).toBeUndefined();
         expect(calls[0]?.config).toEqual({ params: { 'signer-access-code': 'code-xyz' } });
-        expect(result).toBeUndefined();
+        expect(result).toBeNull();
     });
 
     test('verifyEmail POSTs /verify with the OTP in the body and the code as a query param', async () => {
@@ -296,7 +307,7 @@ describe('SignerDocumentsResource — signer-access-code query auth', () => {
             government_id: '123.456.789-00',
             email: undefined,
         };
-        const result: ISigner = await new SignerDocumentsResource(http).confirmData(
+        const result: ISigner | null = await new SignerDocumentsResource(http).confirmData(
             'doc-1',
             'code-xyz',
             dirtyPayload as never,
@@ -414,51 +425,35 @@ describe('SignerDocumentsResource — signer-access-code query auth', () => {
         ).rejects.toThrow(ValidationError);
     });
 
-    test('download uses the official public request without an access-code query', async () => {
+    test('download sends the required access code and never follows the expired-link redirect', async () => {
         const { http, calls } = mockHttp();
         const buf = await new SignerDocumentsResource(http).download(
-            'signer-1',
-            'doc-1',
-            'pades',
-        );
-        expect(calls[0]?.method).toBe('GET');
-        expect(calls[0]?.url).toBe('/signers/signer-1/documents/doc-1/download/pades');
-        expect(calls[0]?.config).toEqual({ responseType: 'arraybuffer' });
-        expect(buf).toBeInstanceOf(Buffer);
-    });
-
-    test('download rejects an unsupported artifact before requesting', async () => {
-        const { http, calls } = mockHttp();
-
-        await expect(
-            new SignerDocumentsResource(http).download(
-                'signer-1',
-                'doc-1',
-                'unsupported' as never,
-            ),
-        ).rejects.toBeInstanceOf(ValidationError);
-        expect(calls).toHaveLength(0);
-    });
-
-    test('download retains the optional legacy access-code query', async () => {
-        const { http, calls } = mockHttp();
-        await new SignerDocumentsResource(http).download(
             'signer-1',
             'doc-1',
             'original',
             'code-xyz',
         );
+        expect(calls[0]?.method).toBe('GET');
+        expect(calls[0]?.url).toBe('/signers/signer-1/documents/doc-1/download/original');
         expect(calls[0]?.config).toEqual({
             responseType: 'arraybuffer',
+            maxRedirects: 0,
             params: { 'signer-access-code': 'code-xyz' },
         });
+        expect(buf).toBeInstanceOf(Buffer);
     });
 
-    test('download rejects an explicitly blank legacy access code', async () => {
-        const { http } = mockHttp();
-        await expect(
-            new SignerDocumentsResource(http).download('signer-1', 'doc-1', 'original', ''),
-        ).rejects.toThrow(ValidationError);
+    test('download rejects other artifacts and a missing or blank code before requesting', async () => {
+        const { http, calls } = mockHttp();
+        const resource = new SignerDocumentsResource(http);
+        const requests = [
+            () => resource.download('signer-1', 'doc-1', 'pades' as never, 'code-xyz'),
+            () => resource.download('signer-1', 'doc-1', 'unsupported' as never, 'code-xyz'),
+            () => resource.download('signer-1', 'doc-1', 'original', undefined as never),
+            () => resource.download('signer-1', 'doc-1', 'original', ''),
+        ];
+        for (const request of requests) await expect(request()).rejects.toBeInstanceOf(ValidationError);
+        expect(calls).toHaveLength(0);
     });
 
     test('downloadSignature fetches the selected image type as arraybuffer', async () => {
@@ -491,7 +486,7 @@ describe('SignerDocumentsResource — signer-access-code query auth', () => {
 
     test('getAssignment GETs /sign and forwards has_accepted_terms=true', async () => {
         const { http, calls } = mockHttp();
-        const result: IDocumentDetailsResponse = await new SignerDocumentsResource(
+        const result: ISigningDocument = await new SignerDocumentsResource(
             http,
         ).getAssignment('code-xyz', true);
         expect(calls[0]?.method).toBe('GET');
@@ -503,22 +498,13 @@ describe('SignerDocumentsResource — signer-access-code query auth', () => {
         expect(result).toEqual(documentResponse);
     });
 
-    test('getAssignment accepts the official signer-context shape without completed', async () => {
-        const signerContextResponse: IDocumentDetailsResponse = {
+    test('getAssignment returns the signer-context assignment: own items, no signers or links', async () => {
+        const signerContextResponse: ISigningDocument = {
             ...documentResponse,
             assignment: {
                 id: 'assignment-1',
                 method: 'virtual',
-                signers: [
-                    {
-                        ...signerResponse,
-                        notification_history: null,
-                        verification_method: 'Email',
-                        notification_methods: ['Email'],
-                        step: 1,
-                        notified: true,
-                    },
-                ],
+                items: [{ id: 'item-1', page: null, signer: signerResponse, field: null, value: null, completed: false }],
             },
         };
         const http = {
@@ -526,7 +512,8 @@ describe('SignerDocumentsResource — signer-access-code query auth', () => {
         } as unknown as AxiosInstance;
 
         const result = await new SignerDocumentsResource(http).getAssignment('code-xyz');
-        expect(result.assignment?.signers[0]?.completed).toBeUndefined();
+        expect(result.assignment?.items?.[0]?.id).toBe('item-1');
+        expect(result.assignment && 'signers' in result.assignment).toBe(false);
     });
 
     test('getAssignment omits has_accepted_terms when it is not provided', async () => {
@@ -674,5 +661,140 @@ describe('SignerDocumentsResource — signer-access-code query auth', () => {
             ),
         ).rejects.toBeInstanceOf(ValidationError);
         expect(calls).toHaveLength(2);
+    });
+});
+
+describe('SignerDocumentsResource signing page and envelope reads', () => {
+    type Call = { method: string; url: string; body?: unknown; config?: unknown };
+    const recorder = (data: unknown = {}) => {
+        const calls: Call[] = [];
+        const reply = () => ({ status: 200, data: { status: 200, message: '', data } });
+        const http = {
+            get: async (url: string, config?: unknown) => {
+                calls.push({ method: 'GET', url, config });
+                return url.includes('logo') || url.includes('/downloads/')
+                    ? { status: 200, data: Buffer.from('bytes').buffer }
+                    : reply();
+            },
+            post: async (url: string, body?: unknown, config?: unknown) => {
+                calls.push({ method: 'POST', url, body, config });
+                return reply();
+            },
+            put: async (url: string, body?: unknown, config?: unknown) => {
+                calls.push({ method: 'PUT', url, body, config });
+                return reply();
+            },
+        } as unknown as AxiosInstance;
+        return { calls, resource: new SignerDocumentsResource(http) };
+    };
+    const code = { 'signer-access-code': 'code' };
+
+    test('reads the signing document with envelope expansion and another envelope document', async () => {
+        const { resource, calls } = recorder();
+        await resource.getAssignment('code');
+        await resource.getAssignment('code', false);
+        await resource.getAssignment('code', { hasAcceptedTerms: true, expand: ['envelope'], documentId: 'doc-2' });
+        await resource.getAssignment('code', { expand: [] });
+        await resource.getCurrent('signer-1', 'code', { expand: ['envelope'] });
+        expect(calls).toEqual([
+            { method: 'GET', url: '/sign', config: { params: code } },
+            { method: 'GET', url: '/sign', config: { params: { ...code, has_accepted_terms: false } } },
+            {
+                method: 'GET',
+                url: '/sign',
+                config: { params: { ...code, has_accepted_terms: true, document_id: 'doc-2', expand: 'envelope' } },
+            },
+            { method: 'GET', url: '/sign', config: { params: code } },
+            { method: 'GET', url: '/signers/signer-1/document', config: { params: { ...code, expand: 'envelope' } } },
+        ]);
+    });
+
+    test('filters signer document lists and searches by envelope', async () => {
+        const { resource, calls } = recorder([]);
+        await resource.list('signer-1', 'code', { envelope_id: 'env-1' });
+        await resource.search('signer-1', 'code', 'kit', { envelope_id: 'env-1' });
+        await resource.searchAsWorkspace('signer-1', undefined, { envelope_id: 'env-1' });
+        expect(calls.map((call) => call.config)).toEqual([
+            { params: { envelope_id: 'env-1', ...code } },
+            { params: { ...code, search: 'kit', envelope_id: 'env-1' } },
+            { params: { envelope_id: 'env-1' } },
+        ]);
+    });
+
+    test('brands the page, resends the certified copy, and downloads it without following redirects', async () => {
+        const { resource, calls } = recorder({ available: true, notification_method: 'Email', resends_left: null, sent_to: 'j***@example.com' });
+        await resource.getTheme('code');
+        expect(await resource.downloadLogo('code')).toBeInstanceOf(Buffer);
+        await resource.resendCertifiedCopy('code');
+        await resource.resendCertifiedCopy('code', 'doc-2');
+        expect(await resource.downloadCertifiedCopy('a'.repeat(64))).toBeInstanceOf(Buffer);
+        await resource.downloadCertifiedCopy('b'.repeat(64), 'pades');
+        await resource.resendCertifiedCopyFromLink('c'.repeat(64));
+        expect(calls).toEqual([
+            { method: 'GET', url: '/sign/theme', config: { params: code } },
+            { method: 'GET', url: '/sign/logo', config: { responseType: 'arraybuffer', params: code } },
+            { method: 'POST', url: '/sign/certified-copy', body: {}, config: { params: code } },
+            { method: 'POST', url: '/sign/certified-copy', body: { document_id: 'doc-2' }, config: { params: code } },
+            { method: 'GET', url: `/signers/downloads/${'a'.repeat(64)}`, config: { responseType: 'arraybuffer', maxRedirects: 0 } },
+            { method: 'GET', url: `/signers/downloads/${'b'.repeat(64)}/pades`, config: { responseType: 'arraybuffer', maxRedirects: 0 } },
+            { method: 'POST', url: `/signers/downloads/${'c'.repeat(64)}/resend`, body: undefined, config: undefined },
+        ]);
+    });
+
+    test('returns accept-terms data and normalises the confirm-data acknowledgement', async () => {
+        const accepted = { full_name: 'Example Signer', email: 'signer@example.com', has_accepted_terms: true };
+        expect(await recorder(accepted).resource.acceptTerms('code')).toEqual(accepted);
+        const confirm = recorder([]);
+        expect(await confirm.resource.confirmData('doc-1', 'code', {
+            email: 'signer@example.com',
+            whatsapp_phone_number: '+5511999998888',
+            has_accepted_terms: true,
+        })).toBeNull();
+        expect(confirm.calls[0]?.body).toEqual({
+            email: 'signer@example.com',
+            whatsapp_phone_number: '+5511999998888',
+            has_accepted_terms: true,
+        });
+        expect(await recorder(signerResponse).resource.confirmData('doc-1', 'code', { email: 'signer@example.com' }))
+            .toEqual(signerResponse);
+    });
+
+    test('rejects malformed signing options and blank credentials before requesting', async () => {
+        const { resource, calls } = recorder();
+        const requests = [
+            () => resource.getAssignment('code', { expand: ['document'] as never }),
+            () => resource.getAssignment('code', { expand: 'envelope' as never }),
+            () => resource.getAssignment('code', { documentId: ' ' }),
+            () => resource.getAssignment('code', { hasAcceptedTerms: 'yes' as never }),
+            () => resource.getCurrent('signer-1', 'code', null as never),
+            () => resource.search('signer-1', 'code', 1 as never),
+            () => resource.searchAsWorkspace('signer-1', 'kit', null as never),
+            () => resource.getTheme(''),
+            () => resource.downloadLogo(' '),
+            () => resource.resendCertifiedCopy('code', ''),
+            () => resource.resendCertifiedCopy(''),
+            () => resource.downloadCertifiedCopy(''),
+            () => resource.downloadCertifiedCopy('token', 'certificated' as never),
+            () => resource.resendCertifiedCopyFromLink('..'),
+        ];
+        for (const request of requests) await expect(request()).rejects.toBeInstanceOf(ValidationError);
+        expect(calls).toHaveLength(0);
+    });
+});
+
+describe('SignerDocumentsResource workspace list isolation', () => {
+    test('listAsWorkspace drops a signer-access-code smuggled through list params', async () => {
+        const calls: Array<{ url: string; config: unknown }> = [];
+        const workspaceHttp = {
+            get: async (url: string, config: unknown) => {
+                calls.push({ url, config });
+                return { status: 200, data: { status: 200, data: [] } };
+            },
+        } as unknown as AxiosInstance;
+        await new SignerDocumentsResource(workspaceHttp).listAsWorkspace('signer-1', {
+            'signer-access-code': 'code',
+            envelope_id: 'env-1',
+        });
+        expect(calls).toEqual([{ url: '/signers/signer-1/documents', config: { params: { envelope_id: 'env-1' } } }]);
     });
 });

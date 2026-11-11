@@ -14,7 +14,7 @@ import { SDK_USER_AGENT } from '../src/support/transport';
 const DEFAULT_SPEC_URL = 'https://api.assinafy.com.br/v1/docs/openapi.json';
 const COVERAGE_FILE = new URL('../docs/API_COVERAGE.md', import.meta.url);
 const HTTP_METHODS = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']);
-const EXPECTED_CONTRACT_FINGERPRINT = '014ad8040c0a611e470872f88bf9c7aef536c8aa7fd6f332d16f4a066d87f790';
+const EXPECTED_CONTRACT_FINGERPRINT = 'd2c77fac558f459e4146d7aedae7e0d52e255753a416737e75f72f6a05f37ec5';
 const NON_CONTRACT_KEYS = new Set([
     'description',
     'summary',
@@ -133,17 +133,27 @@ function validateProductionStructure(spec: OpenApiDocument): number {
         'document activities must accept sort',
     );
     requireValue(
-        at(spec, 'components', 'parameters', 'PerPage', 'schema', 'maximum') === 100,
-        'document activities must allow per-page up to 100',
+        at(spec, 'components', 'parameters', 'PerPage', 'schema', 'maximum') === 50,
+        'list page size must be capped at 50 (MAX_LIST_PAGE_SIZE)',
     );
 
-    for (const path of [
-        '/v1/documents/{documentId}/download/{artifactName}',
-        '/v1/signers/{signerId}/documents/{documentId}/download/{artifactName}',
-    ]) {
-        const artifacts = at(parameter(spec, path, 'get', 'artifactName'), 'schema', 'enum');
-        requireValue(Array.isArray(artifacts) && artifacts.includes('pades'), `${path} must include pades`);
-    }
+    const documentArtifacts = at(
+        parameter(spec, '/v1/documents/{documentId}/download/{artifactName}', 'get', 'artifactName'),
+        'schema',
+        'enum',
+    );
+    requireValue(
+        Array.isArray(documentArtifacts) && documentArtifacts.includes('pades'),
+        'document downloads must include pades',
+    );
+    requireValue(
+        sameMembers(
+            at(parameter(spec, '/v1/signers/{signerId}/documents/{documentId}/download/{artifactName}',
+                'get', 'artifactName'), 'schema', 'enum'),
+            ['original'],
+        ),
+        'signer downloads must offer only original',
+    );
 
     for (const path of [
         '/v1/documents/{documentId}/assignments',
@@ -199,6 +209,7 @@ function validateProductionStructure(spec: OpenApiDocument): number {
                     'whatsapp_phone_number',
                     'verification_method',
                     'notification_methods',
+                    'embedded',
                     'step',
                 ],
             ),
@@ -355,7 +366,8 @@ function validateProductionStructure(spec: OpenApiDocument): number {
         at(spec, 'components', 'schemas', 'Assignment', 'properties', 'signing_urls', 'items', '$ref')
             === '#/components/schemas/SigningUrl'
             && at(spec, 'components', 'schemas', 'SigningUrl', 'properties', 'signer_id', 'type') === 'string'
-            && at(spec, 'components', 'schemas', 'SigningUrl', 'properties', 'url', 'type') === 'string',
+            && sameMembers(at(spec, 'components', 'schemas', 'SigningUrl', 'properties', 'url', 'type'), ['string', 'null'])
+            && at(spec, 'components', 'schemas', 'SigningUrl', 'properties', 'embedded', 'type') === 'boolean',
         'assignment signing URL shape changed',
     );
     requireValue(
@@ -403,7 +415,7 @@ function validateProductionStructure(spec: OpenApiDocument): number {
                 [
                     'resource', 'id', 'event', 'activity_id', 'endpoint_id', 'endpoint',
                     'payload', 'delivered', 'webhook_id', 'attempt', 'kind', 'will_retry',
-                    'http_status', 'response_body', 'error', 'created_at', 'updated_at',
+                    'duration_ms', 'http_status', 'response_body', 'error', 'created_at', 'updated_at',
                 ],
             ),
         'webhook hold and delivery-attempt fields changed',
@@ -552,7 +564,110 @@ function validateProductionStructure(spec: OpenApiDocument): number {
             ].every((key) => key in statsProperties),
         'DocumentStatsRow notification/verification counters changed',
     );
+    validateSigningSurfaces(spec, requireValue);
     return checked;
+}
+
+/** Contracts behind envelopes, embedded signing, signer reads and refusal codes. */
+function validateSigningSurfaces(
+    spec: OpenApiDocument,
+    requireValue: (condition: unknown, message: string) => void,
+): void {
+    const schema = (name: string): unknown => at(spec, 'components', 'schemas', name);
+    const keys = (value: unknown): string[] => (isRecord(value) ? Object.keys(value) : []);
+    const jsonBody = (path: string, method: string): unknown =>
+        at(spec, 'paths', path, method, 'requestBody', 'content', 'application/json', 'schema');
+
+    const envelopes = '/v1/accounts/{accountId}/envelopes';
+    requireValue(
+        sameMembers(keys(at(schema('EnvelopeCreateRequest'), 'properties')),
+            ['name', 'message', 'max_total_credits', 'signers', 'documents'])
+            && sameMembers(keys(at(schema('EnvelopeCreateRequest'), 'properties', 'signers', 'items', 'properties')),
+                ['id', 'verification_method', 'notification_methods', 'embedded'])
+            && sameMembers(keys(at(schema('EnvelopeDocumentRequest'), 'properties')),
+                ['id', 'method', 'entries', 'signer_ids', 'expires_at', 'copy_receiver_ids'])
+            && at(schema('EnvelopeCreateRequest'), 'properties', 'signers', 'maxItems') === 20
+            && at(schema('EnvelopeCreateRequest'), 'properties', 'documents', 'maxItems') === 20,
+        'envelope creation body changed',
+    );
+    requireValue(
+        sameMembers(
+            at(parameter(spec, `${envelopes}/{envelopeId}/download/{artifactName}`, 'get', 'artifactName'), 'schema', 'enum'),
+            ['original', 'certificated', 'certificate-page', 'pades', 'bundle'],
+        )
+            && sameMembers(at(parameter(spec, envelopes, 'get', 'status'), 'schema', 'enum'), ['open', 'closed'])
+            && sameMembers(keys(at(jsonBody(`${envelopes}/{envelopeId}`, 'patch'), 'properties')),
+                ['name', 'message', 'document_ids']),
+        'envelope artifacts, filters or update body changed',
+    );
+    for (const path of [envelopes, '/v1/accounts/{accountId}/templates/{templateId}/documents']) {
+        requireValue(
+            at(parameter(spec, path, 'post', 'Idempotency-Key'), 'in') === 'header',
+            `${path} must accept an Idempotency-Key header`,
+        );
+    }
+    requireValue(
+        at(jsonBody('/v1/documents/{documentId}/assignments', 'post'), 'properties', 'max_total_credits', 'type') === 'number'
+            && at(jsonBody('/v1/documents/{documentId}/assignments', 'post'), 'properties', 'signers', 'items',
+                'properties', 'embedded', 'type') === 'boolean',
+        'assignment creation must accept max_total_credits and embedded signers',
+    );
+    requireValue(
+        sameMembers(at(jsonBody('/v1/accounts/{accountId}/embed-origins', 'post'), 'required'), ['origin'])
+            && sameMembers(keys(at(schema('EmbedSession'), 'properties')), ['url', 'expires_at'])
+            && isRecord(at(spec, 'paths', '/v1/documents/{documentId}/assignments/{assignmentId}/signers/{signerId}/embed-sessions', 'post')),
+        'embedded signing origins or sessions changed',
+    );
+    requireValue(
+        sameMembers(keys(at(schema('NotificationPolicyEvents'), 'properties')), [
+            'DocumentCompleted', 'SignerDeclined', 'DocumentCancelled', 'DocumentAboutToExpire',
+            'DocumentExpired', 'DocumentExpirationReset', 'DocumentProcessingFailed',
+            'TemplateProcessingFailed', 'SignerWhatsappFailed', 'ContractRenewalNotice',
+            'ContractExpiring', 'ContractExpired', 'ContractRenewed', 'SignerViewed',
+            'SignerSigned', 'SignerIdentityReviewRequired',
+        ])
+            && sameMembers(keys(at(schema('PushPreferences'), 'properties')), [
+                'SignerViewed', 'SignerSigned', 'DocumentCompleted', 'SignerDeclined',
+                'DocumentAboutToExpire', 'DocumentExpired', 'SignerIdentityReviewRequired',
+                'SignerWhatsappFailed',
+            ]),
+        'notification policy or push preference keys changed',
+    );
+    requireValue(
+        sameMembers(at(schema('Account'), 'properties', 'signing_features', 'required'), [
+            'DigitalCertificate', 'VerificationIdDocumentFaceMatchBasic', 'WhatsappNotification',
+            'VerificationBypass', 'Embed',
+        ])
+            && at(parameter(spec, '/v1/accounts/{accountId}', 'get', 'expand'), 'in') === 'query',
+        'account signing features changed',
+    );
+    requireValue(
+        at(jsonBody('/v1/accounts/{accountId}/webhooks/endpoints/{endpointId}/secret/rotate', 'post'),
+            'properties', 'keep_previous', 'type') === 'boolean'
+            && isRecord(at(spec, 'paths', '/v1/accounts/{accountId}/webhooks/endpoints/{endpointId}/test', 'post')),
+        'webhook secret rotation overlap or test delivery changed',
+    );
+    requireValue(
+        sameMembers(at(parameter(spec, '/v1/sign', 'get', 'expand'), 'schema', 'items', 'enum'), ['envelope'])
+            && at(parameter(spec, '/v1/sign', 'get', 'document_id'), 'in') === 'query'
+            && sameMembers(at(parameter(spec, '/v1/documents/{documentId}', 'get', 'expand'), 'schema', 'items', 'enum'),
+                ['envelope_id', 'envelope'])
+            && at(spec, 'components', 'parameters', 'SignedRender', 'name') === 'artifact'
+            && at(parameter(spec, '/v1/signers/{signerId}/documents', 'get', 'envelope_id'), 'in') === 'query',
+        'signing and document read expansions changed',
+    );
+    requireValue(
+        sameMembers(keys(at(jsonBody('/v1/documents/{documentId}/signers/confirm-data', 'put'), 'properties')),
+            ['email', 'whatsapp_phone_number', 'has_accepted_terms'])
+            && sameMembers(at(schema('SigningDocument'), 'required'),
+                ['id', 'name', 'status', 'current_signer', 'is_signer_access_closed', 'certified_copy']),
+        'signer confirm-data body or signing document shape changed',
+    );
+    requireValue(
+        at(schema('ErrorEnvelope'), 'properties', 'code', 'type') === 'string'
+            && sameMembers(at(schema('ErrorEnvelope'), 'properties', 'errors', 'items', 'required'), ['field', 'code', 'message']),
+        'error envelope code or field errors changed',
+    );
 }
 
 function operationKey(method: string, path: string): string {
@@ -593,10 +708,13 @@ function documentedOperations(markdown: string): Set<string> {
         if (status.includes('compatibility extension')) {
             continue;
         }
-        if (!sdkMethod || sdkMethod === '—' || sdkMethod === '-') {
+        // Official routes the API reserves for Assinafy's own pages are listed
+        // without a method.
+        const notExposed = status.includes('not exposed');
+        if (!notExposed && (!sdkMethod || sdkMethod === '—' || sdkMethod === '-')) {
             throw new Error(`Coverage row has no SDK method: ${method} ${path}`);
         }
-        if (!status.includes('covered') && !status.includes('url helper')) {
+        if (!notExposed && !status.includes('covered') && !status.includes('url helper')) {
             throw new Error(`Coverage row has an unsupported status: ${method} ${path}`);
         }
 

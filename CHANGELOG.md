@@ -7,6 +7,98 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.0.0] - 2026-11-11
+
+### Breaking changes
+
+These follow what the API now accepts and returns; code that compiled against
+2.x may need the change shown.
+
+- `signerDocuments.download(signerId, documentId, artifactName, signerAccessCode)`
+  requires the access code and accepts only `'original'`; the API refuses other
+  artifacts and answers a request without a usable code with a redirect, which
+  now throws `ApiError` (`302`). Pass the signer's code; send the certified copy
+  with `resendCertifiedCopy()`.
+- `signerDocuments.confirmData()` resolves to `ISigner | null` (`null` when the
+  API returns no signer, as production does). Stop reading the signer from it.
+- `signerDocuments.getAssignment()` and `getCurrent()` return `ISigningDocument`:
+  document fields other than `id`, `name` and `status` are optional, because a
+  closed access code returns only those plus `current_signer`,
+  `certified_copy` and `envelope`. Check `is_signer_access_closed` first. Its
+  `assignment` has no `signers`, `signing_urls`, `copy_receivers` or `summary`,
+  which signer reads never return.
+- `signerDocuments.acceptTerms()` returns `IAcceptTermsResult | null` instead of
+  `void` (`null` from deployments that acknowledge without data).
+- `ISigningUrl.url` is `string | null`: `null` for embedded and WhatsApp-only
+  signers.
+- `IWhatsAppNotification.sent_at` is an ISO-8601 string instead of a number.
+- `IAccountTheme.logo` is `string | null`; `secondary_color` is `string`.
+- `ICostEstimate.document_balance` and `credit_balance`, and the compact
+  resend-cost `credit_balance`, are `number | null` (`null` when unlimited).
+- `IAssignment.sender_email` is `string | null`.
+- `IDocumentActivity.origin.ip` is `string | null` (`null` when the request
+  carried no client address).
+- `AssignmentVerificationMethod` and `AssignmentNotificationMethod` include
+  `'Bypass'`, and `INotificationHistoryEntry.status` includes `'delivered'` and
+  `'opened'`; exhaustive `switch` statements need the new cases.
+- `ILegacyConfirmSignerDataPayload` is an alias of `IConfirmSignerDataPayload`,
+  which now has `whatsapp_phone_number`.
+
+### Added
+
+- Envelopes through `client.envelopes`: send up to 20 documents to the same
+  signers with one invitation per signer and one document charge; estimate the
+  cost, rename or reorder, add and remove documents, remind a signer, cancel,
+  delete, read the activity trail, and download an artifact zip.
+- Embedded signing through `client.embed`: manage the origins allowed to frame
+  the signing page and mint single-use sessions for signers created with
+  `embedded: true`.
+- `Bypass` verification and notification methods for accounts that have the
+  feature, and `embedded` signers on assignments, template documents and
+  envelopes. Embedded signers use `Email`, `Whatsapp` or `Bypass` verification.
+- `max_total_credits` on assignment, template document and envelope creation,
+  and `idempotencyKey` on template document and envelope creation.
+- `workspaces.get(accountId, { expand: 'signing_features' })`, the workspace
+  `limits`, `workspaces.getUsage()`, `getNotificationPolicy()` and
+  `updateNotificationPolicy()`.
+- `users.getPushPreferences()` and `updatePushPreferences()`.
+- `webhooks.testEndpoint()`, overlapping secret rotation with
+  `rotateEndpointSecret(endpointId, accountId?, { keep_previous: true })`,
+  delivery `duration_ms`, and the `webhook_test` delivery event type.
+- Signer-side `getTheme()`, `downloadLogo()`, `resendCertifiedCopy()`,
+  `downloadCertifiedCopy()` and `resendCertifiedCopyFromLink()`;
+  `getAssignment()` options for `expand: ['envelope']` and another envelope
+  document; `getCurrent()` envelope expansion; `envelope_id` filters on signer
+  document lists and searches.
+- `documents.details()` / `get()` envelope expansion, `envelope_id` filters on
+  document lists and searches, and signed renders with `thumbnail()` /
+  `downloadPage()` `{ artifact: 'certificated' }`.
+- `contracts.listRelated(documentId, accountId?, { expand: 'document' })`.
+- `ApiError.code` and `ApiError.fieldErrors` expose the refusal code and the
+  fields a `400` refused.
+- `signers.update()` clears `email`, `whatsapp_phone_number` and
+  `government_id` with `null` or an empty string.
+
+### Changed
+
+- `signerDocuments.confirmData()` sends `whatsapp_phone_number` as a regular
+  field.
+- Response types add `embedded` on signing URLs, typed notification failure
+  codes, `certificated_at` on verification, and verification fields on
+  document lists.
+- The resend-cost estimate documents the compact `total` /
+  `has_sufficient_credits` shape that production returns.
+
+### Fixed
+
+- Field validation with a signer access code no longer sends the workspace
+  credentials with the code, and `signerDocuments.listAsWorkspace()` never
+  forwards a signer access code passed through its list parameters.
+- Signer artifact and certified-copy downloads throw `ApiError` (`302`) instead
+  of returning the expired-link page as file bytes.
+- Webhook signature verification rejects signature values that are not
+  canonical base64.
+
 ## [2.11.0] - 2026-11-02
 
 ### Added
@@ -926,7 +1018,8 @@ signer fields with `cpf` and `whatsapp_phone_number`.
 - High-level `uploadAndRequestSignatures` helper on `AssinafyClient`.
 - `PaginatedResult<T>` with parsed `X-Pagination-*` header meta.
 
-[Unreleased]: https://github.com/assinafy/typescript-sdk/compare/v2.11.0...HEAD
+[Unreleased]: https://github.com/assinafy/typescript-sdk/compare/v3.0.0...HEAD
+[3.0.0]: https://github.com/assinafy/typescript-sdk/compare/v2.11.0...v3.0.0
 [2.11.0]: https://github.com/assinafy/typescript-sdk/compare/v2.10.0...v2.11.0
 [2.10.0]: https://github.com/assinafy/typescript-sdk/compare/v2.9.1...v2.10.0
 [2.9.1]: https://github.com/assinafy/typescript-sdk/compare/v2.9.0...v2.9.1

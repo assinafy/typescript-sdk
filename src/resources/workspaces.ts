@@ -1,4 +1,7 @@
 import type {
+    IAccountUsage,
+    INotificationPolicy,
+    IUpdateNotificationPolicyPayload,
     IAccountTheme,
     ICreateWorkspacePayload,
     IDocumentStatsParams,
@@ -10,7 +13,7 @@ import type {
 } from '../types';
 import { ValidationError } from '../errors';
 import { documentStatsParams } from '../support/stats';
-import { assertNonEmptyString, assertRecord } from '../utils';
+import { assertBooleanMap, assertNonEmptyString, assertRecord } from '../utils';
 import { BaseResource } from './base';
 import { buildFileForm, loadSource, validateFileNotEmpty } from './upload';
 
@@ -134,7 +137,13 @@ export class WorkspaceResource extends BaseResource {
     /**
      * Fetch a single workspace (`GET /accounts/{accountId}`).
      *
+     * `expand: 'signing_features'` adds which signing methods the plan allows
+     * (OAuth: `account:read`). A `false` feature makes creating or estimating an
+     * assignment, template document or envelope with that method answer `403`
+     * (`PlanRestricted`); check it before offering the method.
+     *
      * @param accountId - The workspace to fetch.
+     * @param options - `expand: 'signing_features'`.
      * @returns The workspace. `primary_color` / `secondary_color` are `null`
      * until brand colours are set (6-char hex, no `#`, when present):
      * ```jsonc
@@ -147,21 +156,156 @@ export class WorkspaceResource extends BaseResource {
      *   "notification_sender_type": "User",
      *   "roles": ["owner"],
      *   "is_delete_allowed": true,
+     *   "limits": { "webhook_endpoints": 3 },
+     *   "signing_features": {            // only with expand: 'signing_features'
+     *     "DigitalCertificate": true,
+     *     "VerificationIdDocumentFaceMatchBasic": true,
+     *     "WhatsappNotification": true,
+     *     "VerificationBypass": false,
+     *     "Embed": true
+     *   },
      *   "created_at": "2026-05-12T18:05:11Z"
      * }
      * ```
-     * @throws {ValidationError} If `accountId` is missing.
-     * @throws {ApiError} `404` if the workspace does not exist.
+     * @throws {ValidationError} If `accountId` is missing or `expand` is unknown.
+     * @throws {ApiError} `403` for another workspace's token, `404` if the
+     * workspace does not exist.
      *
      * @example
      * ```ts
-     * const ws = await client.workspaces.get('acc_example');
+     * const ws = await client.workspaces.get('acc_example', { expand: 'signing_features' });
+     * if (ws.signing_features?.Embed) await client.embed.listOrigins();
      * ```
      */
-    async get(accountId: string): Promise<IWorkspaceResponse> {
+    async get(accountId: string, options: { expand?: 'signing_features' } = {}): Promise<IWorkspaceResponse> {
         const id = this.requireId(accountId, 'Account ID');
+        assertRecord(options, 'workspace options');
+        if (options.expand !== undefined && options.expand !== 'signing_features') {
+            throw new ValidationError('expand must be signing_features');
+        }
+        const config = options.expand === undefined ? {} : { params: { expand: options.expand } };
         return this.call('Failed to fetch workspace', () =>
-            this.http.get(`/accounts/${this.pathSegment(id, 'Account ID')}`),
+            this.http.get(`/accounts/${this.pathSegment(id, 'Account ID')}`, config),
+        );
+    }
+
+    /**
+     * Read the workspace's plan and balances (`GET /accounts/{accountId}/usage`).
+     *
+     * For a plan and credit meter; prices and payments are not included. Not
+     * available to third-party OAuth applications (`403`), whatever their scopes.
+     *
+     * @param accountId - The workspace to read.
+     * @returns The plan meter:
+     * ```jsonc
+     * {
+     *   "plan": "Pro",                         // null without a current plan
+     *   "documents_renewal_date": "2026-12-11",
+     *   "balances": {
+     *     "documents": { "balance": 97, "limit": 100, "spent": 3 },
+     *     "credits": { "balance": 12.5, "limit": null, "spent": 0.9 }   // null: unlimited / not cycle-limited
+     *   }
+     * }
+     * ```
+     * @throws {ValidationError} If `accountId` is missing.
+     * @throws {ApiError} `403` for an OAuth application token, `404` for an unknown workspace.
+     *
+     * @example
+     * ```ts
+     * const { balances } = await client.workspaces.getUsage('acc_example');
+     * ```
+     */
+    async getUsage(accountId: string): Promise<IAccountUsage> {
+        const id = this.requireId(accountId, 'Account ID');
+        return this.call('Failed to fetch account usage', () =>
+            this.http.get(`/accounts/${this.pathSegment(id, 'Account ID')}/usage`),
+        );
+    }
+
+    /**
+     * Read which document alerts the workspace sends
+     * (`GET /accounts/{accountId}/notification-policy`).
+     *
+     * Every member can read it; `editable` says whether the caller (an owner)
+     * can change it. Not available to third-party OAuth applications.
+     *
+     * @param accountId - The workspace to read.
+     * @returns The policy; every event key is present:
+     * ```jsonc
+     * {
+     *   "editable": true,
+     *   "owners_receive_all": false,      // owners also get push alerts for members' documents
+     *   "events": {
+     *     "DocumentCompleted": true, "SignerDeclined": true, "DocumentCancelled": true,
+     *     "DocumentAboutToExpire": true, "DocumentExpired": true, "DocumentExpirationReset": true,
+     *     "DocumentProcessingFailed": true, "TemplateProcessingFailed": true, "SignerWhatsappFailed": true,
+     *     "ContractRenewalNotice": true, "ContractExpiring": true, "ContractExpired": true,
+     *     "ContractRenewed": true, "SignerViewed": true, "SignerSigned": true,
+     *     "SignerIdentityReviewRequired": true
+     *   }
+     * }
+     * ```
+     * @throws {ValidationError} If `accountId` is missing.
+     * @throws {ApiError} `403` for an OAuth application token.
+     *
+     * @example
+     * ```ts
+     * const policy = await client.workspaces.getNotificationPolicy('acc_example');
+     * ```
+     */
+    async getNotificationPolicy(accountId: string): Promise<INotificationPolicy> {
+        const id = this.requireId(accountId, 'Account ID');
+        return this.call('Failed to fetch notification policy', () =>
+            this.http.get(`/accounts/${this.pathSegment(id, 'Account ID')}/notification-policy`),
+        );
+    }
+
+    /**
+     * Change which document alerts the workspace sends
+     * (`PUT /accounts/{accountId}/notification-policy`).
+     *
+     * Owners only. Merges what is sent: an event set to `false` reaches nobody
+     * in the workspace on any channel, whatever each member's preferences. The
+     * identity-review e-mail is always sent, because the signer cannot continue
+     * without it.
+     *
+     * @param accountId - The workspace to change.
+     * @param payload - `events` keys to change and/or `owners_receive_all`.
+     * @returns The full policy, as {@link WorkspaceResource.getNotificationPolicy} returns.
+     * @throws {ValidationError} If nothing would change or a value is not a boolean.
+     * @throws {ApiError} `400` for an unknown event code, `403` for a non-owner or
+     * an OAuth application token.
+     *
+     * @example
+     * ```ts
+     * await client.workspaces.updateNotificationPolicy('acc_example', {
+     *   events: { SignerViewed: false },
+     *   owners_receive_all: true,
+     * });
+     * ```
+     */
+    async updateNotificationPolicy(
+        accountId: string,
+        payload: IUpdateNotificationPolicyPayload,
+    ): Promise<INotificationPolicy> {
+        const id = this.requireId(accountId, 'Account ID');
+        assertRecord(payload, 'notification policy');
+        const body: Record<string, unknown> = {};
+        if (payload.events !== undefined) {
+            assertBooleanMap(payload.events, 'events');
+            body['events'] = { ...payload.events };
+        }
+        if (payload.owners_receive_all !== undefined) {
+            if (typeof payload.owners_receive_all !== 'boolean') {
+                throw new ValidationError('owners_receive_all must be a boolean');
+            }
+            body['owners_receive_all'] = payload.owners_receive_all;
+        }
+        if (Object.keys(body).length === 0) {
+            throw new ValidationError('notification policy update must change events or owners_receive_all');
+        }
+        return this.call('Failed to update notification policy', () =>
+            this.http.put(`/accounts/${this.pathSegment(id, 'Account ID')}/notification-policy`, body),
         );
     }
 
@@ -171,13 +315,13 @@ export class WorkspaceResource extends BaseResource {
      * Request body/query: none.
      *
      * @param accountId - Account whose public branding should be returned.
-     * @returns The unwrapped theme:
+     * @returns The unwrapped theme. Colours fall back to the platform default:
      * ```jsonc
      * {
      *   "account_name": "Acme Inc.",
-     *   "primary_color": "aabbcc",
-     *   "secondary_color": "112233",
-     *   "logo": "https://api.assinafy.com.br/v1/accounts/account-id/logo"
+     *   "primary_color": "aabbcc",      // button background
+     *   "secondary_color": "112233",    // button text
+     *   "logo": "https://api.assinafy.com.br/v1/accounts/account-id/logo"   // null without a logo
      * }
      * ```
      * @throws {ValidationError} If `accountId` is empty.

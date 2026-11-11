@@ -23,9 +23,10 @@ export class WebhookVerifier {
     private readonly webhookSecret: string | undefined;
 
     /**
-     * @param webhookSecret - The endpoint's `whsec_…` secret from
-     * `webhooks.getEndpointSecret()`. Omit it to keep verification disabled
-     * (every check returns `false`).
+     * @param webhookSecret - The endpoint's `whsec_…` secret, as returned by
+     * `webhooks.createEndpoint()` / `updateEndpoint()` when signing turns on,
+     * `rotateEndpointSecret()`, or (API key only) `getEndpointSecret()`. Omit it
+     * to keep verification disabled (every check returns `false`).
      *
      * @example
      * ```ts
@@ -88,6 +89,8 @@ export class WebhookVerifier {
             const [version, signature] = entry.split(',', 2);
             if (version !== 'v1' || !signature) return false;
             const actual = Buffer.from(signature, 'base64');
+            // Node's decoder skips junk characters; accept only the canonical encoding.
+            if (actual.toString('base64') !== signature) return false;
             return actual.length === expected.length && timingSafeEqual(actual, expected);
         });
     }

@@ -5,10 +5,11 @@
 SDK oficial em TypeScript para a [API Assinafy](https://api.assinafy.com.br/v1/docs) — plataforma
 brasileira de assinatura eletrônica de documentos.
 
-Cobre as 118 operações do documento OpenAPI oficial: contas, autenticação, aplicações OAuth 2.1,
-usuários, documentos, assignments, signatários, fluxos do lado do signatário, gestão do ciclo de
-vida de contratos (CLM), templates, tags,
-campos, webhooks, identidade visual, estatísticas e o fluxo de alto nível
+Mapeia as 147 operações do documento OpenAPI oficial (146 com métodos no SDK; a troca da sessão
+incorporada é reservada à página de embed da Assinafy): contas, autenticação, aplicações OAuth 2.1,
+usuários, documentos, assignments, envelopes, assinatura incorporada, signatários, fluxos do lado
+do signatário, gestão do ciclo de vida de contratos (CLM), templates, tags,
+campos, webhooks, identidade visual, uso do plano, política de notificações, estatísticas e o fluxo de alto nível
 `uploadAndRequestSignatures`. Cinco rotas adicionais de gestão de templates usadas por integrações
 existentes e dois helpers de URL de navegador são mantidos por compatibilidade.
 
@@ -36,7 +37,8 @@ recurso. Leia na ordem na primeira vez; use como referência depois.
 **Detalhe por recurso** — [Referência de recursos](#referência-de-recursos):
 [documentos](#documentos) · [signatários](#signatários) · [assignments](#assignments) ·
 [gestão do ciclo de vida de contratos](#gestão-do-ciclo-de-vida-de-contratos-clm) ·
-[ramos pagos de assinatura](#ramos-pagos-de-assinatura) · [templates](#templates) · [tags](#tags) ·
+[ramos pagos de assinatura](#ramos-pagos-de-assinatura) · [envelopes](#envelopes) ·
+[assinatura incorporada](#assinatura-incorporada) · [templates](#templates) · [tags](#tags) ·
 [workspaces](#workspaces) · [definições de campo](#definições-de-campo) ·
 [autenticação e chaves de API](#autenticação--gestão-de-chaves-de-api) ·
 [usuário autenticado](#usuário-autenticado) · [webhooks](#webhooks)
@@ -226,8 +228,8 @@ await client.oauth.getUserInfo(tokens.access_token);  // claims OIDC; exige `ope
 | `documents:write` | Criar documentos e enviá-los para assinatura |
 | `templates:read` | Ler templates |
 | `templates:write` | Criar e alterar templates |
-| `account:read` | Ler perfil, tema e logotipo do workspace |
-| `webhooks:write` | Criar, alterar, inativar e excluir endpoints de webhook do workspace |
+| `account:read` | Ler perfil, tema, logotipo, indicadores de documentos, assinatura e endpoints de webhook e os recursos de assinatura do workspace |
+| `webhooks:write` | Alterar a assinatura de webhook, gerenciar endpoints, reenviar e testar entregas e obter um novo segredo de assinatura |
 | `openid` | Receber um `id_token` identificando o usuário |
 | `profile` | Ler o nome do usuário |
 | `email` | Ler o e-mail do usuário e se está verificado |
@@ -305,9 +307,10 @@ Em um HTTP `429` o cliente retenta até `maxRetries` vezes, aguardando o `Retry-
 `X-Rate-Limit-Reset`) devolvido pelo servidor antes de cada tentativa. A repetição automática vale
 apenas para `GET`, `HEAD`, `OPTIONS` e `DELETE`, que são seguros de repetir. `GET /sign` fica de
 fora porque registra que o signatário visualizou o assignment. Escritas não são repetidas por
-padrão. Um `Idempotency-Key` não vazio inscreve uma requisição customizada na repetição do SDK, mas
-ele **não** faz parte do contrato OpenAPI atual: confirme antes que a rota alvo de fato deduplica
-essa chave no servidor. Nenhum outro status é retentado.
+padrão. Um `Idempotency-Key` não vazio inscreve a requisição na repetição do SDK. A criação de
+envelope e a criação de documento por template deduplicam a chave no servidor, então
+`envelopes.create(…, { idempotencyKey })` e `documents.createFromTemplate(…, { idempotencyKey })`
+podem ser repetidas com segurança; as demais rotas ignoram o header. Nenhum outro status é retentado.
 
 ### Fábricas
 
@@ -326,7 +329,8 @@ O objeto aceito por `fromConfig` tem o tipo exportado `ClientConfigInput`.
 
 ## Cobertura de endpoints
 
-As 118 operações documentadas em https://api.assinafy.com.br/v1/docs estão cobertas. A tabela abaixo
+As 147 operações documentadas em https://api.assinafy.com.br/v1/docs estão mapeadas: 146 têm métodos
+no SDK, e a troca da sessão incorporada é reservada à página de embed da Assinafy. A tabela abaixo
 é o resumo por recurso; o mapa detalhado por operação está em
 [API_COVERAGE.md](API_COVERAGE.md).
 
@@ -336,15 +340,17 @@ As 118 operações documentadas em https://api.assinafy.com.br/v1/docs estão co
 | `client.signers` | create, get, list, update, delete, findByEmail |
 | `client.assignments` | list, create, estimateCost, resetExpiration, resendNotification, estimateResendCost, listWhatsAppNotifications, getIdentityVerification, downloadIdentityVerificationImage, reviewIdentityVerification |
 | `client.contracts` | list, get, set, listRelated, renew, terminate |
+| `client.envelopes` | list, get, create, estimateCost, update, delete, cancel, listActivities, download, addDocument, removeDocument, resendNotification |
+| `client.embed` | listOrigins, addOrigin, updateOrigin, deleteOrigin, createSession |
 | `client.templates` | create, list, get, update, delete, downloadPage |
 | `client.tags` | list, create, update, delete |
-| `client.workspaces` | create, list, get, update, delete, getTheme, downloadLogo, uploadLogo, deleteLogo, getStats |
-| `client.webhooks` | listEndpoints, createEndpoint, getEndpoint, updateEndpoint, deleteEndpoint, deleteEndpointByUrl, getEndpointSecret, rotateEndpointSecret, register, get, inactivate, listEventTypes, listDispatches, retryDispatch |
+| `client.workspaces` | create, list, get, update, delete, getTheme, downloadLogo, uploadLogo, deleteLogo, getStats, getUsage, getNotificationPolicy, updateNotificationPolicy |
+| `client.webhooks` | listEndpoints, createEndpoint, getEndpoint, updateEndpoint, deleteEndpoint, deleteEndpointByUrl, getEndpointSecret, rotateEndpointSecret, testEndpoint, register, get, inactivate, listEventTypes, listDispatches, retryDispatch |
 | `client.fields` | create, list, get, update, delete, validate, validateMultiple, listTypes |
 | `client.oauth` | **getProtectedResourceMetadata**, **getAuthorizationServerMetadata**, **createAuthorizationUrl**, **readAuthorizationCallback**, **exchangeCode**, **refreshToken**, **revokeToken**, **getUserInfo** |
 | `client.auth` | getSocialLoginUrl, getSocialLoginCallbackUrl, login, verifyMfa, socialLogin, linkSocialLogin, createApiKey, getApiKey, deleteApiKey, changePassword, requestPasswordReset, resetPassword |
-| `client.users` | getCurrent, getStats, getNotificationPreferences, updateNotificationPreferences, getMfa, startTotpEnrollment, confirmTotpEnrollment, regenerateRecoveryCodes, deleteMfaMethod |
-| `client.signerDocuments` | getCurrent, list, search, listAsWorkspace, searchAsWorkspace, download, signMultiple, declineMultiple, self, getIdentityVerification, startIdentityVerification, acceptTerms, verifyEmail, confirmData, uploadSignature, downloadSignature, getAssignment, sign, decline |
+| `client.users` | getCurrent, getStats, getNotificationPreferences, updateNotificationPreferences, getPushPreferences, updatePushPreferences, getMfa, startTotpEnrollment, confirmTotpEnrollment, regenerateRecoveryCodes, deleteMfaMethod |
+| `client.signerDocuments` | getCurrent, list, search, listAsWorkspace, searchAsWorkspace, download, signMultiple, declineMultiple, self, getIdentityVerification, startIdentityVerification, acceptTerms, verifyEmail, confirmData, uploadSignature, downloadSignature, getAssignment, getTheme, downloadLogo, resendCertifiedCopy, downloadCertifiedCopy, resendCertifiedCopyFromLink, sign, decline |
 | `client.webhookVerifier` | verifySignature, extractEvent, getEventType, getEventData |
 
 Todo wrapper HTTP tem tipos de requisição e resposta verificados pelo TypeScript e JSDoc por método,
@@ -485,8 +491,8 @@ A resposta é `ICostEstimate`:
   extra_document_cost: number;
   total_credits: number;
   breakdown: Array<{ code: string; name: string; cost: number; quantity?: number; unit_cost?: number }>;
-  document_balance: number;
-  credit_balance: number;
+  document_balance: number | null; // null quando os documentos não são limitados
+  credit_balance: number | null;   // null quando os créditos não são limitados
   has_sufficient_resources: boolean;
   blocking_reason: 'PendingPayment' | 'InsufficientDocuments' | 'InsufficientCredits' | null;
   message: string | null;
@@ -526,7 +532,8 @@ type AssignmentShape = {
     completed_count: number;
     signers: Array<ISigner & { completed?: boolean }>;
   };
-  signing_urls?: Array<{ signer_id: string; url: string }>;
+  // url é null para signatário incorporado (gere embed.createSession) e para quem só recebe WhatsApp.
+  signing_urls?: Array<{ signer_id: string; url: string | null; embedded?: boolean }>;
 };
 ```
 
@@ -552,15 +559,20 @@ await clienteSignatario.signerDocuments.verifyEmail({
   verificationCode,
 }); // Promise<void>
 
-const confirmado = await clienteSignatario.signerDocuments.confirmData(
+// Envie o contato que o canal do signatário exige; ele precisa ser do próprio signatário.
+await clienteSignatario.signerDocuments.confirmData(
   enviado.id,
   accessCode,
-  { full_name: self.full_name, ...(self.email === null ? {} : { email: self.email }) },
-); // ISigner
+  { ...(self.email === null ? {} : { email: self.email }), has_accepted_terms: true },
+); // null em produção (data: [])
 
-const assinavel = await clienteSignatario.signerDocuments.getAssignment(accessCode, true);
-// `getAssignment` devolve IDocumentDetailsResponse e registra que o signatário
-// visualizou o assignment. Não use como simples healthcheck.
+const assinavel = await clienteSignatario.signerDocuments.getAssignment(accessCode, {
+  hasAcceptedTerms: true,
+  expand: ['envelope'],
+});
+// `getAssignment` devolve ISigningDocument e registra que o signatário visualizou o
+// assignment. Não use como simples healthcheck. Com o código encerrado, devolve só id,
+// name, status, current_signer, certified_copy e envelope, com is_signer_access_closed: true.
 
 await clienteSignatario.signerDocuments.signMultiple([assinavel.id], accessCode);
 // Corpo de rede: { document_ids: [assinavel.id] }; o reconhecimento não traz dados.
@@ -953,13 +965,12 @@ await client.assignments.resendNotification(documentId, assignmentId, signerId);
 // → { is_sent: true, document_id: '…', signer_id: '…' }
 
 const custoReenvio = await client.assignments.estimateResendCost(documentId, assignmentId, signerId);
-// Resposta oficial: ICostEstimate. Deploys antigos podem devolver o ramo compacto
-// IResendCostEstimate, com `total` e `has_sufficient_credits`; estreite com
-// `'total_credits' in custoReenvio` antes de ler campos específicos de um ramo.
+// Produção: { total, breakdown, credit_balance, has_sufficient_credits }. Deploys antigos
+// devolvem um ICostEstimate completo; estreite com `'total_credits' in custoReenvio`.
 ```
 
 A resposta de `create` é um `IAssignment`: `{ id, method, signers: [...],
-items: [{ display_settings, ... }], signing_urls: [{ signer_id, url }], … }`.
+items: [{ display_settings, ... }], signing_urls: [{ signer_id, url, embedded }], … }`.
 
 Por compatibilidade, o SDK também aceita os payloads antigos `signer_ids` e `signerIds` e os
 reescreve no formato atual `signers: [{ id }]` esperado pela API.
@@ -969,7 +980,7 @@ workspace. Para interromper um pedido pendente, apague o documento (quando o sta
 peça que o signatário recuse:
 
 ```ts
-await client.documents.delete(documentId);                                       // lado do workspace
+await client.documents.delete(documentId);                                       // lado do workspace (envelope: envelopes.cancel)
 await client.signerDocuments.decline(documentId, assignmentId, accessCode, 'Não é mais necessário'); // lado do signatário
 ```
 
@@ -987,6 +998,13 @@ que faltar é inferido. Sem nenhum dos dois, ambos assumem `Email`.
 | `Whatsapp` | Código de uso único (OTP) por WhatsApp | `Whatsapp` | 0,45 crédito (a notificação), só em planos pagos |
 | `DigitalCertificate` | O signatário assina com o **próprio certificado ICP-Brasil — A1 ou A3 —** pela extensão Web PKI, gerando uma assinatura **PAdES qualificada**; exige `method: 'virtual'` | `Email` **ou** `Whatsapp` | 0,5 crédito + a notificação |
 | `IdDocumentFaceMatchBasic` | Documento de identidade, foto e prova de vida em sessão hospedada | `Email` **ou** `Whatsapp` | Consulte `estimateCost()` |
+| `Bypass` | Sem código: seu app já autenticou o signatário. Habilitado por conta pela Assinafy | `Email`, `Whatsapp` **ou** `Bypass` (não envia convite) | A notificação |
+
+Confira o que o plano permite antes de oferecer um método:
+`(await client.workspaces.get(accountId, { expand: 'signing_features' })).signing_features`
+traz `DigitalCertificate`, `VerificationIdDocumentFaceMatchBasic`, `WhatsappNotification`,
+`VerificationBypass` e `Embed`; um recurso `false` responde `403` com
+`ApiError.code === 'PlanRestricted'`.
 
 Apenas um método de notificação por signatário. O SDK recusa uma combinação inválida antes da
 requisição; a API responderia `400`.
@@ -1086,6 +1104,82 @@ POST /v1/signers/certificate/complete  → data.signerName
 > não constam do documento OpenAPI publicado.
 
 Concluído o fluxo, `documents.download(documentId, 'pades')` devolve o artefato PAdES qualificado.
+
+### Envelopes
+
+Um envelope envia até 20 documentos aos mesmos signatários (até 20) de uma vez: um convite por
+signatário, um link para todos os documentos dele e uma única cobrança de documento pelo envelope
+inteiro. Cada documento mantém seu assignment, status, certificado, downloads e webhooks. Envie os
+documentos e aguarde `metadata_ready` antes; não crie assignments neles.
+
+```ts
+const corpo = {
+  name: 'Kit de admissão',
+  message: 'Por favor, assine os documentos abaixo.',
+  signers: [{ id: anaId }, { id: brunoId, verification_method: 'Whatsapp' as const }],
+  documents: [
+    { id: contratoId, signer_ids: [anaId, brunoId], expires_at: '2026-12-31' },
+    { id: politicaId, signer_ids: [anaId] },
+  ],
+};
+
+const estimativa = await client.envelopes.estimateCost(corpo); // ICostEstimate, documents: 1
+const envelope = await client.envelopes.create(
+  { ...corpo, max_total_credits: estimativa.total_credits },
+  { idempotencyKey: crypto.randomUUID() }, // seguro repetir após perder a resposta
+);
+// IEnvelope: { id, name, message, documents: [{ id, position, name, status, artifacts,
+//   signers: [{ id, full_name, email, whatsapp_phone_number, completed, signed_at }] }],
+//   counts: { pending_signature: 2 }, signing_urls: [{ signer_id, url, embedded }], created_at }
+
+await client.envelopes.resendNotification(envelope.id, anaId); // um lembrete para todos os documentos
+const trilha = await client.envelopes.listActivities(envelope.id, { sort: 'id' }); // cada uma nomeia document_id
+const zip = await client.envelopes.download(envelope.id, 'certificated');         // 1 - contrato.pdf, …
+```
+
+- Signatários de envelope assinam ao mesmo tempo (sem `step`). Um signatário `DigitalCertificate`
+  assina só documentos `virtual`, sozinho em cada um; documentos `collect` precisam de `entries`
+  cujos signatários sejam exatamente os `signer_ids`.
+- `update()` renomeia, troca a mensagem ou reordena (`document_ids`) sem enviar nada.
+  `addDocument()` acrescenta um documento sem assignment para signatários existentes;
+  `removeDocument()` cancela um e os demais seguem.
+- `cancel()` cancela todos os documentos abertos e pode ser repetido. `delete()` só funciona com
+  todos os documentos encerrados (`409 EnvelopeOpen` antes); os documentos permanecem. Um documento
+  de envelope aberto não pode ser excluído sozinho.
+- `documents.list({ envelope_id })` e `documents.details(id, { expand: ['envelope'] })` encontram
+  os documentos de um envelope e o envelope de um documento.
+- Criar, acrescentar e estimar exigem o recurso Envelopes no plano (`403 PlanRestricted`).
+
+### Assinatura incorporada
+
+A assinatura incorporada exibe a tela de assinatura da Assinafy em um iframe dentro do seu app.
+Este SDK cobre a metade do backend; a metade do navegador (iframe e handshake `postMessage`) segue
+o guia de assinatura incorporada da API. Exige o recurso Embed e uma chave de API ou token de
+usuário — tokens de aplicações OAuth não geram sessões.
+
+```ts
+// Uma vez por origem: exatamente https://host[:porta], até 10; http só para localhost.
+await client.embed.addOrigin('https://app.exemplo.com.br');
+
+const assignment = await client.assignments.create(documentId, {
+  method: 'virtual',
+  signers: [{ id: signerId, verification_method: 'Email', embedded: true }],
+});
+// A entrada do signatário incorporado em signing_urls é { signer_id, url: null, embedded: true }.
+
+// A cada exibição do iframe (inclusive recarregamentos), no seu backend:
+const { url, expires_at } = await client.embed.createSession(documentId, assignment.id, signerId);
+// Entregue `url` só à página desse signatário; vale uma vez, por 5 minutos. Nunca registre nem guarde.
+```
+
+- O signatário continua recebendo o convite normal com o código de 6 dígitos que digita no iframe.
+  Com verificação `Bypass` e notificação `Bypass` (habilitadas por conta) nada é enviado e nenhum
+  código é pedido.
+- `createSession()` responde `409` com `ApiError.code` `document_not_ready` (tente de novo em
+  instantes), `already_signed`, `document_unavailable` ou `embed_origins_missing`, e `429` após 30
+  sessões por signatário por hora.
+- Os eventos do iframe são indicações de interface. Confirme o resultado pelos webhooks ou lendo o
+  documento antes de liberar qualquer coisa.
 
 ### Templates
 
@@ -1198,6 +1292,8 @@ await client.workspaces.create({
 // → { id, name, primary_color: 'ff0066', secondary_color: '0066ff', created_at }
 await client.workspaces.list();
 await client.workspaces.get(accountId);
+// → também { limits: { webhook_endpoints: 3 } }; com a expansão, signing_features.
+const { signing_features } = await client.workspaces.get(accountId, { expand: 'signing_features' });
 await client.workspaces.update(accountId, {
   name: 'Renomeado',
   notification_sender_type: 'User',
@@ -1221,6 +1317,15 @@ await client.workspaces.getStats(accountId, {
   granularity: 'daily',
   month: '2026-06',
 });
+
+// Medidor do plano (não disponível a aplicações OAuth): balance null = ilimitado.
+const uso = await client.workspaces.getUsage(accountId);
+// → { plan: 'Pro', documents_renewal_date: '2026-12-11',
+//     balances: { documents: { balance, limit, spent }, credits: { balance, limit, spent } } }
+
+// Alertas do workspace, definidos pelos donos; false silencia o alerta para todos.
+const politica = await client.workspaces.getNotificationPolicy(accountId); // { editable, owners_receive_all, events }
+await client.workspaces.updateNotificationPolicy(accountId, { events: { SignerViewed: false } });
 
 await client.workspaces.delete(accountId);
 // `force` cancela uma assinatura paga ativa como parte da exclusão da conta. Não
@@ -1314,6 +1419,10 @@ await client.users.updateNotificationPreferences({
 });
 // A atualização é um merge: chaves omitidas mantêm o valor atual. Os dois
 // métodos devolvem o mapa completo de treze preferências.
+
+// Notificações push nos celulares do usuário, separadas do e-mail (não para apps OAuth).
+const push = await client.users.getPushPreferences(); // todas as chaves, padrão true
+await client.users.updatePushPreferences({ SignerViewed: false });
 ```
 
 #### Autenticação em dois fatores
@@ -1362,6 +1471,11 @@ await client.webhooks.listEndpoints(undefined, { url: endpoint.url });   // filt
 await client.webhooks.getEndpoint(endpoint.id);
 await client.webhooks.updateEndpoint(endpoint.id, { is_active: false }); // só os campos enviados
 await client.webhooks.rotateEndpointSecret(endpoint.id); // o segredo antigo para na hora
+// Ou mantenha o segredo antigo assinando junto com o novo por 24 horas durante a troca:
+// → { secret: 'whsec_…', previous_secret_expires_at: '2026-11-12T14:00:00Z' }
+await client.webhooks.rotateEndpointSecret(endpoint.id, undefined, { keep_previous: true });
+// Uma entrega `webhook_test` assinada agora (também a um endpoint retido); 10 a cada 10 minutos.
+const tentativa = await client.webhooks.testEndpoint(endpoint.id); // IWebhookDispatch, kind: 'manual'
 await client.webhooks.deleteEndpoint(endpoint.id);       // libera a vaga do plano
 // Alternativa quando a integração guardou somente a URL:
 // await client.webhooks.deleteEndpointByUrl(endpoint.url);
@@ -1513,38 +1627,48 @@ atualize o segredo do receptor imediatamente.
 
 ### Endpoints do signatário
 
-Para construir portais de assinatura próprios. Quase todas as chamadas exigem o parâmetro de URL
-`signer-access-code` que a Assinafy envia ao signatário por e-mail/WhatsApp. O download de artefato
-é a exceção pública documentada; seu quarto argumento opcional de código de acesso existe apenas por
-compatibilidade com deploys que ainda esperam a query antiga.
+Para construir portais de assinatura próprios. Todas as chamadas usam o `signer-access-code` que a
+Assinafy envia ao signatário por e-mail/WhatsApp, num transporte que nunca leva as credenciais do
+workspace. O código se encerra 30 minutos depois que o signatário termina; as leituras passam a
+devolver só o status dele e as demais rotas respondem `410`. O código de um envelope abre cada um
+dos documentos do envelope.
 
 ```ts
 await client.signerDocuments.self(accessCode);
 await client.signerDocuments.verifyEmail({ signerAccessCode: accessCode, verificationCode: '123456' });
 
-await client.signerDocuments.getCurrent(signerId, accessCode);
-const { data } = await client.signerDocuments.list(signerId, accessCode, { 'per-page': 20 });
+await client.signerDocuments.getCurrent(signerId, accessCode, { expand: ['envelope'] });
+const { data } = await client.signerDocuments.list(signerId, accessCode, { envelope_id, 'per-page': 20 });
 // Equivalente a documents.search() do lado do signatário, autorizado pelo código de acesso.
 const achados = await client.signerDocuments.search(signerId, accessCode, 'nota fiscal');
-await client.signerDocuments.download(signerId, documentId, 'original');
-// Disponível só depois que um signatário por certificado ICP-Brasil concluir a assinatura.
-await client.signerDocuments.download(signerId, documentId, 'pades');
+// Só o original; um código inutilizável redireciona, e o SDK reporta ApiError 302.
+await client.signerDocuments.download(signerId, documentId, 'original', accessCode);
 
+// O contato que o canal do signatário exige (precisa ser dele) e os termos:
 await client.signerDocuments.confirmData(documentId, accessCode, {
   email: 'eu@exemplo.com.br',
-  full_name: 'Signatário Exemplo',
-  government_id: '123.456.789-00',
   has_accepted_terms: true,
-});
+}); // null em produção
 // Como alternativa, aceite os termos separadamente antes de getAssignment():
-// await client.signerDocuments.acceptTerms(accessCode);
+// await client.signerDocuments.acceptTerms(accessCode); // { full_name, email, has_accepted_terms }
+
+// Identidade visual para todas as telas, também antes da verificação e após a exclusão
+const tema = await client.signerDocuments.getTheme(accessCode); // { account_name, primary_color, secondary_color, logo }
+const logo = await client.signerDocuments.downloadLogo(accessCode); // Buffer; 404 sem logotipo
+
+// A cópia certificada nunca é baixada com o código; ela é enviada ao signatário.
+// assinavel.certified_copy → { available, notification_method, resends_left }
+await client.signerDocuments.resendCertifiedCopy(accessCode); // { available, notification_method, resends_left, sent_to }
+// A partir do link dessa mensagem (token = último segmento do caminho):
+const certificado = await client.signerDocuments.downloadCertifiedCopy(token); // 302 → ApiError quando expirado
+await client.signerDocuments.resendCertifiedCopyFromLink(token);
 
 // Gestão da imagem de assinatura ({ reuse: true } guarda para documentos futuros)
 await client.signerDocuments.uploadSignature(accessCode, pngBuffer, { imageType: 'signature', reuse: true });
 await client.signerDocuments.downloadSignature(accessCode, 'signature');
 
-// Assinar / recusar
-const assinavel = await client.signerDocuments.getAssignment(accessCode);
+// Assinar / recusar (registra visualização; o código de envelope pode indicar outro documento dele)
+const assinavel = await client.signerDocuments.getAssignment(accessCode, { documentId });
 // `sign()` é para assignments collect e exige o valor de cada campo posicionado.
 await client.signerDocuments.sign(documentId, assignmentId, accessCode, [
   { itemId, fieldId, pageId, value: 'Assinado pelo signatário' },
@@ -1623,9 +1747,11 @@ try {
     // OAuthError estende ApiError; ramifique pelo código RFC 6749, não pela mensagem.
     console.error('Erro OAuth:', err.error, err.errorDescription);
   } else if (err instanceof ApiError) {
-    console.error(`Erro da API ${err.statusCode}:`, err.responseData);
-    // `err.challenge` traz o header WWW-Authenticate já interpretado quando a API
-    // envia um — em um 403 ele nomeia o escopo OAuth que está faltando.
+    console.error(`Erro da API ${err.statusCode}:`, err.code, err.fieldErrors);
+    // `err.code` nomeia recusas tratáveis ('PlanRestricted', 'CreditCeilingExceeded',
+    // 'IdempotencyKeyInUse', 'EnvelopeOpen', …); `err.fieldErrors` lista cada campo recusado
+    // de um 400 como { field, code, message }. `err.challenge` traz o header
+    // WWW-Authenticate já interpretado — em um 403 ele nomeia o escopo OAuth que falta.
   } else if (err instanceof NetworkError) {
     console.error('Erro de rede:', err.message);
   } else if (err instanceof AssinafyError) {

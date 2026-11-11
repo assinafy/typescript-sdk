@@ -243,7 +243,10 @@ export class OAuthResource extends BaseResource {
      * `['documents:read', 'documents:write', 'offline_access']`. Ask for the
      * minimum: the user approves all of them or none. Add `offline_access` to
      * receive a refresh token and `openid` to receive an `id_token`.
-     * `webhooks:write` permits subscription updates and inactivation.
+     * `account:read` reads the workspace profile, theme, logo, KPIs, webhook
+     * subscription and endpoints, and its signing features; `webhooks:write`
+     * changes the subscription, manages endpoints, re-sends and tests
+     * deliveries, and can obtain a new signing secret (signing on, or rotation).
      * @param options.authorizationEndpoint - Skip discovery by supplying the
      * endpoint yourself. Defaults to the discovered
      * `authorization_endpoint`.
@@ -505,6 +508,8 @@ export class OAuthResource extends BaseResource {
      * @throws {OAuthError} `invalid_grant` for a spent, expired, replayed or
      * mismatched code; `invalid_client` for a bad `client_id`/`client_secret`;
      * `invalid_target` for a `resource` mismatch.
+     * @throws {ApiError} `429` when the caller's IP is rate limited; token calls
+     * are never retried automatically, so wait `rateLimit.retryAfter` seconds.
      *
      * @example
      * ```ts
@@ -586,6 +591,8 @@ export class OAuthResource extends BaseResource {
      * @throws {OAuthError} `invalid_grant` when the refresh token was already
      * used, expired, or the user reconnected with different permissions — ask
      * the user to reconnect. `invalid_client` for bad client credentials.
+     * @throws {ApiError} `429` when the caller's IP is rate limited (not retried
+     * automatically: a replayed refresh token ends the connection).
      *
      * @example
      * ```ts

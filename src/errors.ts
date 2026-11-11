@@ -43,10 +43,37 @@ export class AssinafyError extends Error {
     }
 }
 
+/** One field the API refused, from the `errors` list of a `400` body. */
+export interface IApiFieldError {
+    /** Field path, e.g. `documents[1].signer_ids`; `null` when the refusal names no field. */
+    field: string | null;
+    /** `Required`, `UnknownField`, `Invalid`, or a more specific code. */
+    code: string;
+    message: string;
+}
+
 /** Thrown when the API returns a non-success HTTP status. */
 export class ApiError extends AssinafyError {
     public readonly statusCode: number;
     public readonly responseData: unknown;
+    /**
+     * Machine-readable refusal code from the error body, on the refusals a
+     * client can act on: `PlanRestricted` (offer the upgrade, don't retry),
+     * `InsufficientScope`, `DocumentNotReady`, `CreditCeilingExceeded`,
+     * `IdempotencyKeyInUse`, `EnvelopeOpen`, `EnvelopeClosed`, `DocumentClosed`,
+     * `ContractChanged`, `NoContractTerms`, `TagInUse`, `embed_origins_missing`, ….
+     * `undefined` when the body has none.
+     *
+     * @example
+     * ```ts
+     * if (error instanceof ApiError && error.code === 'IdempotencyKeyInUse') {
+     *   await sleep(1000); // the first request with this key is still running
+     * }
+     * ```
+     */
+    public readonly code?: string;
+    /** Each field a `400` refused, in the order the API reports them. */
+    public readonly fieldErrors?: IApiFieldError[];
     /**
      * Parsed `WWW-Authenticate` challenge, when the response carried one.
      *
@@ -54,8 +81,8 @@ export class ApiError extends AssinafyError {
      * means the OAuth token is valid but was never granted that permission:
      * send the user through the authorization flow again asking for the scope
      * named in `scope`. A `403` without a challenge has a different cause —
-     * another workspace, the user's role, or a surface OAuth tokens never
-     * reach — and reconnecting will not fix it.
+     * another workspace, the user's role, the plan (`code: 'PlanRestricted'`),
+     * or a surface OAuth tokens never reach — and reconnecting will not fix it.
      *
      * @example
      * ```ts
@@ -103,6 +130,15 @@ export class ApiError extends AssinafyError {
         this.name = 'ApiError';
         this.statusCode = statusCode;
         this.responseData = responseData;
+        if (responseData !== null && typeof responseData === 'object') {
+            const body = responseData as Record<string, unknown>;
+            // The generic 404 body carries a numeric `code: 0`, which names nothing.
+            if (typeof body['code'] === 'string' && body['code'].length > 0) this.code = body['code'];
+            if (Array.isArray(body['errors'])) {
+                const fieldErrors = body['errors'].filter(isFieldError);
+                if (fieldErrors.length > 0) this.fieldErrors = fieldErrors;
+            }
+        }
     }
 
     /**
@@ -275,4 +311,12 @@ export class NetworkError extends AssinafyError {
         super(message, {}, options);
         this.name = 'NetworkError';
     }
+}
+
+function isFieldError(value: unknown): value is IApiFieldError {
+    if (value === null || typeof value !== 'object') return false;
+    const entry = value as Record<string, unknown>;
+    return (entry['field'] === null || typeof entry['field'] === 'string')
+        && typeof entry['code'] === 'string'
+        && typeof entry['message'] === 'string';
 }

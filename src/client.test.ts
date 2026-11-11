@@ -639,6 +639,44 @@ describe('AssinafyClient', () => {
         ]);
     });
 
+    test('validates fields with a signer code without credentials, and with credentials otherwise', async () => {
+        const client = new AssinafyClient({ apiKey: 'secret-key', accountId: 'acc', maxRetries: 0 });
+        const seen: Array<{ transport: string; apiKey: unknown; params: unknown }> = [];
+        const capture = (transport: string): AxiosAdapter =>
+            async (config) => {
+                seen.push({ transport, apiKey: config.headers.get('X-Api-Key') ?? undefined, params: config.params });
+                return { data: { status: 200, data: [] }, status: 200, statusText: 'OK', headers: {}, config };
+            };
+        client.getAxiosInstance().defaults.adapter = capture('workspace');
+        (client as unknown as { publicAxiosInstance: AxiosInstance })
+            .publicAxiosInstance.defaults.adapter = capture('public');
+
+        await client.fields.validate('field-1', 'x', { signerAccessCode: 'code-1' });
+        await client.fields.validateMultiple([{ field_id: 'field-1', value: 'x' }], { signerAccessCode: 'code-1' });
+        await client.fields.validate('field-1', 'x');
+
+        expect(seen).toEqual([
+            { transport: 'public', apiKey: undefined, params: { 'signer-access-code': 'code-1' } },
+            { transport: 'public', apiKey: undefined, params: { 'signer-access-code': 'code-1' } },
+            { transport: 'workspace', apiKey: 'secret-key', params: undefined },
+        ]);
+    });
+
+    test('exposes envelopes and embedded signing on the credentialed transport', async () => {
+        const client = new AssinafyClient({ apiKey: 'secret-key', accountId: 'acc', maxRetries: 0 });
+        const seen: Array<{ url: string; apiKey: unknown }> = [];
+        client.getAxiosInstance().defaults.adapter = async (config) => {
+            seen.push({ url: config.url ?? '', apiKey: config.headers.get('X-Api-Key') ?? undefined });
+            return { data: { status: 200, data: [] }, status: 200, statusText: 'OK', headers: {}, config };
+        };
+        await client.envelopes.list();
+        await client.embed.listOrigins();
+        expect(seen).toEqual([
+            { url: '/accounts/acc/envelopes', apiKey: 'secret-key' },
+            { url: '/accounts/acc/embed-origins', apiKey: 'secret-key' },
+        ]);
+    });
+
     test('does not forward signer PII to logger callbacks', async () => {
         const entries: Array<{ message: string; context?: Record<string, unknown> }> = [];
         const client = new AssinafyClient({

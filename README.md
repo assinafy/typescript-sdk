@@ -5,7 +5,8 @@
 SDK oficial em TypeScript para a [API Assinafy](https://api.assinafy.com.br/v1/docs), com suporte
 a Node.js e Bun, tipos completos e builds ESM/CJS.
 
-O SDK cobre as 118 operações do OpenAPI publicado, além das extensões de compatibilidade mantidas
+O SDK mapeia as 147 operações do OpenAPI publicado (146 com métodos; a troca da sessão incorporada
+é reservada à página de embed da Assinafy), além das extensões de compatibilidade mantidas
 pela API. A referência completa, com payloads, respostas, erros e exemplos de cada recurso, está no
 **[manual em português](docs/README.md)**.
 
@@ -94,12 +95,15 @@ O [manual de configuração](docs/README.md#configuração) explica retentativas
    workspace.
 2. Crie ou localize os signatários.
 3. Envie o PDF e aguarde o processamento dos metadados.
-4. Estime o custo e crie o assignment com a verificação e a notificação desejadas.
-5. Entregue a URL de assinatura e valide os webhooks antes de processar eventos.
+4. Estime o custo e crie o assignment com a verificação e a notificação desejadas, ou envie vários
+   documentos aos mesmos signatários de uma vez com `client.envelopes`.
+5. Entregue a URL de assinatura, ou exiba a tela de assinatura dentro do seu app com
+   `client.embed`, e valide os webhooks antes de processar eventos.
 6. Acompanhe a conclusão e baixe o documento assinado ou o certificado.
 
-WhatsApp, biometria com documento e face e certificado digital ICP-Brasil têm pré-requisitos
-específicos. O SDK representa A1 e A3 como `DigitalCertificate`; a mídia é escolhida pelo
+WhatsApp, biometria com documento e face, certificado digital ICP-Brasil e a verificação `Bypass`
+(habilitada por conta) têm pré-requisitos específicos; `workspaces.get(id, { expand:
+'signing_features' })` informa quais o plano habilita. O SDK representa A1 e A3 como `DigitalCertificate`; a mídia é escolhida pelo
 signatário no navegador. Consulte os [ramos de assinatura](docs/README.md#ramos-pagos-de-assinatura).
 
 ## Recursos da API
@@ -109,9 +113,11 @@ signatário no navegador. Consulte os [ramos de assinatura](docs/README.md#ramos
 | `client.documents` | Upload, consulta, artefatos, tags e criação por template |
 | `client.signers` | Cadastro, busca e atualização de signatários |
 | `client.assignments` | Solicitações, custos, notificações e revisão de identidade |
+| `client.envelopes` | Vários documentos aos mesmos signatários, um convite e uma cobrança |
+| `client.embed` | Origens e sessões de uso único para assinar dentro do seu app |
 | `client.contracts` | Termos, famílias, renovação e encerramento de contratos |
 | `client.templates`, `client.tags`, `client.fields` | Conteúdo reutilizável e campos |
-| `client.workspaces`, `client.users` | Workspace, tema, preferências e MFA/TOTP |
+| `client.workspaces`, `client.users` | Workspace, tema, uso do plano, política de notificações, preferências e MFA/TOTP |
 | `client.auth`, `client.oauth` | Login, chaves de API e OAuth 2.1 |
 | `client.webhooks`, `client.webhookVerifier` | Endpoints, entregas e autenticação de eventos |
 | `client.signerDocuments` | Fluxo público e autenticado do signatário |

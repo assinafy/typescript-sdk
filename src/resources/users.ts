@@ -7,12 +7,14 @@ import type {
     IMfaRecoveryCodes,
     IMfaStatus,
     INotificationPreferences,
+    IPushPreferences,
     ITotpEnrollment,
     IUpdateNotificationPreferences,
+    IUpdatePushPreferences,
 } from '../types';
 import { ValidationError } from '../errors';
 import { documentStatsParams } from '../support/stats';
-import { assertNonEmptyString, assertRecord } from '../utils';
+import { assertBooleanMap, assertNonEmptyString, assertRecord } from '../utils';
 import { BaseResource } from './base';
 
 /** Operations for the authenticated Assinafy user. */
@@ -223,9 +225,67 @@ export class UserResource extends BaseResource {
     async updateNotificationPreferences(
         preferences: IUpdateNotificationPreferences,
     ): Promise<INotificationPreferences> {
-        validateNotificationPreferences(preferences);
+        assertBooleanMap(preferences, 'notification preferences', NOTIFICATION_PREFERENCE_KEYS);
         return this.call('Failed to update notification preferences', () =>
             this.http.put('/users/self/notification-preferences', preferences),
+        );
+    }
+
+    /**
+     * Read which document alerts reach the user as push notifications
+     * (`GET /users/self/push-preferences`).
+     *
+     * Separate from the e-mail preferences. Every key is returned and defaults
+     * to `true`; new keys may be added. Not available to third-party OAuth
+     * applications (`403`).
+     *
+     * @returns The push preferences:
+     * ```jsonc
+     * {
+     *   "SignerViewed": true,
+     *   "SignerSigned": true,
+     *   "DocumentCompleted": true,
+     *   "SignerDeclined": true,
+     *   "DocumentAboutToExpire": true,
+     *   "DocumentExpired": true,
+     *   "SignerIdentityReviewRequired": true,   // the review e-mail is always sent
+     *   "SignerWhatsappFailed": true
+     * }
+     * ```
+     * @throws {ApiError} `401` for invalid credentials, `403` for an OAuth application token.
+     *
+     * @example
+     * ```ts
+     * const push = await client.users.getPushPreferences();
+     * ```
+     */
+    async getPushPreferences(): Promise<IPushPreferences> {
+        return this.call('Failed to fetch push preferences', () =>
+            this.http.get('/users/self/push-preferences'),
+        );
+    }
+
+    /**
+     * Change which document alerts reach the user as push notifications
+     * (`PUT /users/self/push-preferences`).
+     *
+     * Merges the keys sent; `false` stops that push in every workspace the user
+     * belongs to. E-mail is not affected.
+     *
+     * @param preferences - Keys to change, e.g. `{ SignerViewed: false }`.
+     * @returns The full map, as {@link UserResource.getPushPreferences} returns.
+     * @throws {ValidationError} If the map is empty or a value is not a boolean.
+     * @throws {ApiError} `400` for an unknown code, `403` for an OAuth application token.
+     *
+     * @example
+     * ```ts
+     * await client.users.updatePushPreferences({ SignerViewed: false });
+     * ```
+     */
+    async updatePushPreferences(preferences: IUpdatePushPreferences): Promise<IPushPreferences> {
+        assertBooleanMap(preferences, 'push preferences');
+        return this.call('Failed to update push preferences', () =>
+            this.http.put('/users/self/push-preferences', { ...preferences }),
         );
     }
 
@@ -429,18 +489,4 @@ const NOTIFICATION_PREFERENCE_KEYS = new Set<keyof INotificationPreferences>([
     'ContractRenewed',
 ]);
 
-function validateNotificationPreferences(preferences: IUpdateNotificationPreferences): void {
-    assertRecord(preferences, 'notification preferences');
-    const entries = Object.entries(preferences);
-    if (entries.length === 0) {
-        throw new ValidationError('at least one notification preference is required');
-    }
-    for (const [key, value] of entries) {
-        if (!NOTIFICATION_PREFERENCE_KEYS.has(key as keyof INotificationPreferences)) {
-            throw new ValidationError(`unknown notification preference: ${key}`);
-        }
-        if (typeof value !== 'boolean') {
-            throw new ValidationError(`${key} must be a boolean`);
-        }
-    }
-}
+

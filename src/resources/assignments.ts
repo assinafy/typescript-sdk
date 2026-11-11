@@ -17,12 +17,27 @@ import type {
     SignerReference,
 } from '../types';
 import { ValidationError } from '../errors';
-import { assertExpirationDate, assertRecord, cleanListParams, cleanParams } from '../utils';
+import {
+    assertCreditCeiling,
+    assertExpirationDate,
+    assertRecord,
+    cleanListParams,
+    cleanParams,
+} from '../utils';
 import { BaseResource } from './base';
 
 const ASSIGNMENT_METHODS = new Set(['virtual', 'collect']);
-const VERIFICATION_METHODS = new Set(['Email', 'Whatsapp', 'DigitalCertificate', 'IdDocumentFaceMatchBasic']);
-const NOTIFICATION_METHODS = new Set(['Email', 'Whatsapp']);
+const VERIFICATION_METHODS = new Set([
+    'Email',
+    'Whatsapp',
+    'DigitalCertificate',
+    'IdDocumentFaceMatchBasic',
+    'Bypass',
+]);
+const MESSAGE_CHANNELS = new Set(['Email', 'Whatsapp']);
+const NOTIFICATION_METHODS = new Set([...MESSAGE_CHANNELS, 'Bypass']);
+/** Verification methods an `embedded` signer may use; the frame asks for no other proof. */
+const EMBEDDED_VERIFICATION_METHODS = new Set(['Email', 'Whatsapp', 'Bypass']);
 
 /** Stable {@link ValidationError.errors} code for an unusable certificate assignment. */
 export const DIGITAL_CERTIFICATE_REQUIRES_VIRTUAL_METHOD =
@@ -36,24 +51,28 @@ export const DIGITAL_CERTIFICATE_REQUIRES_VIRTUAL_METHOD =
  * travels on the notification channel. `DigitalCertificate` — where the
  * signer proves identity with their own ICP-Brasil certificate (A1 in software
  * or A3 on a token/smartcard) rather than with a code — is free to be announced
- * either way, as is hosted `IdDocumentFaceMatchBasic` verification. Any other
- * pairing is rejected with `400`.
+ * either way, as is hosted `IdDocumentFaceMatchBasic` verification. `Bypass`
+ * (no code, enabled per account) may also skip the invitation with the `Bypass`
+ * notification. Any other pairing is rejected with `400`.
  */
 const ALLOWED_NOTIFICATION_METHODS: Record<string, ReadonlySet<string>> = {
     Email: new Set(['Email']),
     Whatsapp: new Set(['Whatsapp']),
-    DigitalCertificate: NOTIFICATION_METHODS,
-    IdDocumentFaceMatchBasic: NOTIFICATION_METHODS,
+    DigitalCertificate: MESSAGE_CHANNELS,
+    IdDocumentFaceMatchBasic: MESSAGE_CHANNELS,
+    Bypass: NOTIFICATION_METHODS,
 };
 
 /**
  * Validate the per-signer channel and ordering options shared by assignment
- * creation, cost estimation, and template-driven document creation.
+ * creation, cost estimation, template-driven document creation, and envelopes.
  *
  * Enforces the published contract locally so an invalid combination fails
  * before a billable request: the `verification_method` and
  * `notification_methods` vocabularies, the one-notification-per-signer rule,
- * the verification/notification coupling table, and a positive integer `step`.
+ * the verification/notification coupling table, a boolean `embedded` that only
+ * `Email`, `Whatsapp` and `Bypass` verification may use, and a positive integer
+ * `step`.
  *
  * @param signer - The signer descriptor to check, in its wire shape.
  * @param label - Prefix used in error messages, e.g. `Template signer 2`.
@@ -63,6 +82,7 @@ export function validateAssignmentSignerOptions(
     signer: {
         verification_method?: unknown;
         notification_methods?: unknown;
+        embedded?: unknown;
         step?: unknown;
     },
     label = 'signer',
@@ -96,6 +116,18 @@ export function validateAssignmentSignerOptions(
                 );
             }
         }
+    }
+    if (signer.embedded !== undefined && typeof signer.embedded !== 'boolean') {
+        throw new ValidationError(`${label} embedded must be a boolean`);
+    }
+    if (
+        signer.embedded === true
+        && typeof signer.verification_method === 'string'
+        && !EMBEDDED_VERIFICATION_METHODS.has(signer.verification_method)
+    ) {
+        throw new ValidationError(
+            `${label} embedded signing supports only Email, Whatsapp and Bypass verification`,
+        );
     }
     if (
         signer.step !== undefined
@@ -162,7 +194,7 @@ export function validateDigitalCertificateMethod(
  * @param payload - Assignment method, signer references, and optional message,
  * expiration, copy-receiver signer IDs, or collect-field placements.
  * @returns A JSON-ready body shaped as
- * `{ method, signers: [{ id, verification_method?, notification_methods?, step? }], message?, expires_at?, copy_receivers?, entries? }`.
+ * `{ method, signers: [{ id, verification_method?, notification_methods?, embedded?, step? }], message?, expires_at?, copy_receivers?, entries?, max_total_credits? }`.
  * @throws {ValidationError} If no signer is present, a signer reference is
  * malformed, a collect assignment has no field-placement entries, or a
  * `DigitalCertificate` signer is combined with `method: 'collect'`. The last
@@ -214,6 +246,8 @@ export function buildAssignmentPayload(
         throw new ValidationError('copy_receivers must be an array of non-empty signer IDs');
     }
 
+    assertCreditCeiling(payload.max_total_credits);
+
     const normalisedSigners = signers.map((ref) => normaliseSignerRef(ref));
     validateDigitalCertificateMethod(method, normalisedSigners);
     validateSigningOrder(normalisedSigners, 'assignment signers');
@@ -224,6 +258,7 @@ export function buildAssignmentPayload(
         expires_at: payload.expires_at,
         copy_receivers: payload.copy_receivers,
         entries,
+        max_total_credits: payload.max_total_credits,
     });
 }
 
@@ -287,7 +322,7 @@ function extractSignerRefs(payload: ICreateAssignmentPayload): SignerReference[]
 
 function normaliseSignerRef(
     ref: SignerReference,
-): { id?: string; verification_method?: string; notification_methods?: string[]; step?: number } {
+): { id?: string; verification_method?: string; notification_methods?: string[]; embedded?: boolean; step?: number } {
     if (typeof ref === 'string') {
         if (!ref.trim()) throw new ValidationError('Signer ID cannot be empty');
         return { id: ref };
@@ -298,6 +333,7 @@ function normaliseSignerRef(
             signer_id?: string;
             verification_method?: string;
             notification_methods?: string[];
+            embedded?: boolean;
             step?: number;
         };
         validateAssignmentSignerOptions(input);
@@ -306,6 +342,7 @@ function normaliseSignerRef(
             id,
             verification_method: input.verification_method,
             notification_methods: input.notification_methods,
+            embedded: input.embedded,
             step: input.step,
         });
 
@@ -336,7 +373,7 @@ function normaliseEstimateSigner(signer: unknown): Record<string, unknown> {
     });
 }
 
-function normaliseAssignmentEntries(entries: unknown): IAssignmentEntry[] {
+export function normaliseAssignmentEntries(entries: unknown): IAssignmentEntry[] {
     if (!Array.isArray(entries)) {
         throw new ValidationError('entries must be an array of field-placement entries');
     }
@@ -430,12 +467,13 @@ export class AssignmentResource extends BaseResource {
     /**
      * List assignments across the workspace (`GET /assignments`).
      *
-     * The account is passed as an `accountId` **query parameter** — the API
-     * responds `400` ("Um contexto de conta é necessário e não foi fornecido")
-     * without it. Note the camelCase spelling: `account_id` and an
-     * `X-Account-Id` header are both rejected.
+     * The account is passed as the camelCase `accountId` **query parameter**,
+     * required unless an OAuth token names the workspace (the SDK always sends
+     * it; for a token, its own workspace). `account_id` and an `X-Account-Id`
+     * header are ignored.
      *
-     * @param params - `page`, `per-page`, and `sort`.
+     * @param params - `page`, `per-page` (at most 50), and `sort`: `created_at`
+     * (default, oldest first), `expires_at` or `id`, `-` prefix for descending.
      * @param accountId - Override the client's default account ID.
      * @returns Assignments, with pagination in `meta`. Each item is a full
      * {@link IAssignment} (same shape as {@link AssignmentResource.create}
@@ -503,13 +541,15 @@ export class AssignmentResource extends BaseResource {
      *   "signing_urls": [
      *     {
      *       "signer_id": "19e6b92e7895332ed9708535d8c",
-     *       "url": "https://app.assinafy.com.br/sign/103033c950d865a248a11c5cf96c?email=signer%40example.com"
+     *       "url": "https://app.assinafy.com.br/sign/103033c950d865a248a11c5cf96c?email=signer%40example.com",
+     *       "embedded": false
      *     }
      *   ]
      * }
      * ```
      * @throws {ValidationError} If no account ID is available.
-     * @throws {ApiError} If the API rejects the request.
+     * @throws {ApiError} `400` when no workspace is named, `403` when a role or
+     * OAuth scope refuses it, `404` for an unknown workspace.
      *
      * @example
      * ```ts
@@ -572,7 +612,13 @@ export class AssignmentResource extends BaseResource {
      * `message`, `expires_at`, `copy_receivers` (existing signer IDs, not
      * addresses), and `collect`-mode `entries` with page-image geometry.
      * `expires_at` accepts a date (ending at 23:59 UTC), a date-time without
-     * an offset (UTC), or an offset-aware date-time.
+     * an offset (UTC), or an offset-aware date-time, at least one hour ahead.
+     * `max_total_credits` refuses the send above that many credits. Signers may
+     * set `embedded: true` (Embed feature; `Email`, `Whatsapp` or `Bypass`
+     * verification) to sign in your app through `embed.createSession()`.
+     * This route takes no `Idempotency-Key`: a document takes one assignment,
+     * so a retry after a lost response answers `400` and charges nothing —
+     * read the document to see whether the first request went through.
      * @returns The created {@link IAssignment}: `signers` (rich, with `step` /
      * `notified` / `verification_method`), `items` (one row per signer × field),
      * a `summary` count block, and per-signer `signing_urls`. Response shape:
@@ -637,7 +683,8 @@ export class AssignmentResource extends BaseResource {
      *   "signing_urls": [
      *     {
      *       "signer_id": "19e6b92e7895332ed9708535d8c",
-     *       "url": "https://app.assinafy.com.br/sign/103033c950d865a248a11c5cf96c?email=signer%40example.com"
+     *       "url": "https://app.assinafy.com.br/sign/103033c950d865a248a11c5cf96c?email=signer%40example.com",
+     *       "embedded": false   // an embedded signer has "url": null
      *     }
      *   ]
      * }
@@ -647,7 +694,10 @@ export class AssignmentResource extends BaseResource {
      * combined with `collect`. The last case has `errors.code ===
      * 'digital_certificate_requires_virtual_method'`.
      * @throws {ApiError} `400` for an invalid assignment or unmet verification
-     * precondition; otherwise if the API rejects the request.
+     * precondition; `403` (`PlanRestricted` for a method or Embed the plan
+     * lacks, `InsufficientScope`); `404` for a document outside the workspace;
+     * `409` (`CreditCeilingExceeded`, with `total_credits` and
+     * `max_total_credits` in `responseData`).
      *
      * @example
      * ```ts
@@ -656,7 +706,7 @@ export class AssignmentResource extends BaseResource {
      *   message: 'Please sign this contract',
      * });
      * // → wire body: { method: 'virtual', signers: [{ id: '19e6…' }], message: 'Please sign this contract' }
-     * console.log(assignment.signing_urls?.length); // one protected link per signer
+     * console.log(assignment.signing_urls?.length); // one entry per notified signer; url is null for embedded or WhatsApp-only signers
      * ```
      */
     async create(
@@ -859,7 +909,11 @@ export class AssignmentResource extends BaseResource {
      * }
      * ```
      * @throws {ValidationError} If any of the three IDs is missing.
-     * @throws {ApiError} If the API rejects the request.
+     * @throws {ApiError} `400` when the document is not pending signature, the
+     * signer already signed or waits for an earlier step, or credits are short;
+     * `403`; `404`. The same verification code is resent, so an open embed frame
+     * keeps working; envelope signers can be reminded of every document at once
+     * with `envelopes.resendNotification()`.
      *
      * @example
      * ```ts
@@ -892,26 +946,20 @@ export class AssignmentResource extends BaseResource {
      * @param documentId - The document the assignment belongs to.
      * @param assignmentId - The assignment containing the signer.
      * @param signerId - The signer whose notification would be resent.
-     * @returns An {@link IResendCostEstimate}: either the full
-     * {@link ICostEstimate} or the compact `total` /
-     * `has_sufficient_credits` compatibility shape:
+     * @returns An {@link IResendCostEstimate}: the compact `total` /
+     * `has_sufficient_credits` shape production returns, or the full
+     * {@link ICostEstimate} on older deployments:
      * ```jsonc
      * {
-     *   "documents": 1,
-     *   "credits": 0,
-     *   "needs_extra_document": false,
-     *   "extra_document_cost": 0,
-     *   "total_credits": 0,
-     *   "breakdown": [],
-     *   "document_balance": 67,
-     *   "credit_balance": 0,
-     *   "has_sufficient_resources": true,
-     *   "blocking_reason": null,
-     *   "message": null
+     *   "total": 0.45,
+     *   "breakdown": [{ "code": "NotificationWhatsappResend", "name": "WhatsApp Notification Resend", "cost": 0.45 }],
+     *   "credit_balance": 10,          // null when credits are not limited
+     *   "has_sufficient_credits": true
      * }
      * ```
      * @throws {ValidationError} If any of the three IDs is missing.
-     * @throws {ApiError} If the API rejects the request.
+     * @throws {ApiError} `400` when the signer cannot be reminded (signed, not
+     * yet notified, or notified only by `Bypass`), `403`, `404`.
      *
      * @example
      * ```ts
@@ -953,11 +1001,11 @@ export class AssignmentResource extends BaseResource {
      * ```jsonc
      * [
      *   {
-     *     "sent_at": 1784145573,
+     *     "sent_at": "2026-10-19T19:05:48Z",
      *     "header": "Assinafy",
      *     "body": "Você tem um documento para assinar.",
      *     "buttons": [
-     *       { "text": "Assinar documento", "url": "https://app.assinafy.com.br/sign/103033c950d865a248a11c5cf96c" }
+     *       { "text": "Assinar documento" }   // production strips button URLs
      *     ],
      *     "phone_number": "+5511999998888",
      *     "signer_id": "19e6b92e7895332ed9708535d8c"

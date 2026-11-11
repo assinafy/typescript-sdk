@@ -96,6 +96,15 @@ describe('WebhookVerifier.verifySignature (Standard Webhooks)', () => {
         expect(verifier.verifySignature(body, mixedCase)).toBe(true);
     });
 
+    test('rejects a signature padded with characters the base64 decoder would skip', () => {
+        const verifier = new WebhookVerifier(secret);
+        const ts = now();
+        const valid = sign('msg_1', ts, body);
+        expect(verifier.verifySignature(body, headersFor(ts, `${valid}!!!`))).toBe(false);
+        expect(verifier.verifySignature(body, headersFor(ts, `${valid}=junk`))).toBe(false);
+        expect(verifier.verifySignature(body, headersFor(ts, valid))).toBe(true);
+    });
+
     test('accepts when any space-separated v1 entry matches', () => {
         const ts = now();
         const signature = `v1a,ignored v1,${Buffer.alloc(32).toString('base64')} ${sign('msg_1', ts, body)}`;

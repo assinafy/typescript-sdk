@@ -1,5 +1,7 @@
 import { describe, test, expect } from 'bun:test';
 import {
+    assertBooleanMap,
+    assertCreditCeiling,
     assertEmail,
     assertExpirationDate,
     assertRecord,
@@ -8,7 +10,9 @@ import {
     cleanListParams,
     cleanParams,
     createSafeLogger,
+    expandParam,
     handleAssinafyResponse,
+    idempotencyConfig,
     isE164PhoneNumber,
     isEmail,
     MAX_LIST_PAGE_SIZE,
@@ -455,5 +459,77 @@ describe('shared contact validation', () => {
         // Larger values are clamped silently rather than rejected, so this
         // constant is the only way a caller can size a page correctly.
         expect(MAX_LIST_PAGE_SIZE).toBe(50);
+    });
+});
+
+describe('shared request guards', () => {
+    test('assertCreditCeiling accepts zero or more credits and nothing else', () => {
+        for (const value of [undefined, 0, 1.5]) expect(() => assertCreditCeiling(value)).not.toThrow();
+        for (const value of [-1, Number.NaN, Number.POSITIVE_INFINITY, '1', null]) {
+            expect(() => assertCreditCeiling(value)).toThrow(ValidationError);
+        }
+    });
+
+    test('idempotencyConfig sets the header only for a non-empty key', () => {
+        expect(idempotencyConfig(undefined)).toEqual({});
+        expect(idempotencyConfig('key-1')).toEqual({ headers: { 'Idempotency-Key': 'key-1' } });
+        for (const value of ['', '  ', 42, null]) expect(() => idempotencyConfig(value)).toThrow(ValidationError);
+    });
+
+    test('assertBooleanMap requires a non-empty boolean map and, when given, known keys', () => {
+        const known = new Set(['A']);
+        expect(() => assertBooleanMap({ A: true }, 'prefs', known)).not.toThrow();
+        expect(() => assertBooleanMap({ B: false }, 'prefs')).not.toThrow();
+        for (const value of [{}, { A: 'yes' }, { B: true }, null]) {
+            expect(() => assertBooleanMap(value, 'prefs', known)).toThrow(ValidationError);
+        }
+    });
+});
+
+describe('ApiError refusal codes', () => {
+    test('exposes the string code and the field errors of an error body', () => {
+        const error = ApiError.fromResponse(400, {
+            status: 400,
+            message: '"Name" is required.',
+            code: 'Invalid',
+            errors: [
+                { field: 'name', code: 'Required', message: '"Name" is required.' },
+                { field: null, code: 'Invalid', message: 'Signer not found.' },
+                { field: 3, code: 'Invalid', message: 'dropped: field is not text' },
+            ],
+        });
+        expect(error.code).toBe('Invalid');
+        expect(error.fieldErrors).toEqual([
+            { field: 'name', code: 'Required', message: '"Name" is required.' },
+            { field: null, code: 'Invalid', message: 'Signer not found.' },
+        ]);
+    });
+
+    test('ignores the numeric code of the generic 404 body and absent or empty lists', () => {
+        const notFound = ApiError.fromResponse(404, { name: 'Not Found', message: 'Página não encontrada.', code: 0, status: 404 });
+        expect(notFound.code).toBeUndefined();
+        expect(notFound.fieldErrors).toBeUndefined();
+        expect(ApiError.fromResponse(409, { message: 'x', code: '', errors: [null] }).fieldErrors).toBeUndefined();
+        expect(ApiError.fromResponse(500, 'plain text').code).toBeUndefined();
+    });
+
+    test('carries the code through envelope unwrapping', () => {
+        try {
+            handleAssinafyResponse({ status: 403, message: 'Plan', data: null, code: 'PlanRestricted' });
+            throw new Error('expected a refusal');
+        } catch (error) {
+            expect(error).toBeInstanceOf(ApiError);
+            expect((error as ApiError).code).toBe('PlanRestricted');
+        }
+    });
+});
+
+describe('expandParam', () => {
+    test('joins allowed values with commas and rejects anything else', () => {
+        const allowed = new Set(['a', 'b']);
+        expect(expandParam(undefined, allowed)).toEqual({});
+        expect(expandParam([], allowed)).toEqual({});
+        expect(expandParam(['a', 'b'], allowed)).toEqual({ expand: 'a,b' });
+        for (const value of ['a', ['c'], [1]]) expect(() => expandParam(value, allowed)).toThrow(ValidationError);
     });
 });

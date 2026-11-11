@@ -5,7 +5,8 @@
 Official TypeScript SDK for the [Assinafy API](https://api.assinafy.com.br/v1/docs), with Node.js
 and Bun support, complete types, and ESM/CJS builds.
 
-The SDK covers all 118 operations in the published OpenAPI document, plus compatibility extensions
+The SDK maps all 147 operations in the published OpenAPI document (146 with methods; the embed
+session exchange is reserved for Assinafy's embed page), plus compatibility extensions
 maintained by the API. The complete reference, including payloads, responses, errors, and examples
 for every resource, is in the **[English manual](docs/README.en.md)**.
 
@@ -94,12 +95,15 @@ factories.
 1. Configure the client with an API key or complete OAuth in the workspace's environment.
 2. Create or find the signers.
 3. Upload the PDF and wait for metadata processing.
-4. Estimate the cost and create the assignment with the required verification and notification.
-5. Deliver the signing URL and authenticate webhooks before processing events.
+4. Estimate the cost and create the assignment with the required verification and notification,
+   or send several documents to the same signers at once with `client.envelopes`.
+5. Deliver the signing URL, or show the signing screen inside your app with `client.embed`, and
+   authenticate webhooks before processing events.
 6. Observe completion and download the signed document or certificate.
 
-WhatsApp, ID-document and face biometrics, and ICP-Brasil digital certificates have specific
-prerequisites. The SDK represents A1 and A3 as `DigitalCertificate`; the signer selects the medium
+WhatsApp, ID-document and face biometrics, ICP-Brasil digital certificates, and per-account
+`Bypass` verification have specific prerequisites; `workspaces.get(id, { expand:
+'signing_features' })` reports which ones the plan enables. The SDK represents A1 and A3 as `DigitalCertificate`; the signer selects the medium
 in their browser. See the [signing branches](docs/README.en.md#paid-signing-branches).
 
 ## API resources
@@ -109,9 +113,11 @@ in their browser. See the [signing branches](docs/README.en.md#paid-signing-bran
 | `client.documents` | Uploads, reads, artifacts, tags, and template creation |
 | `client.signers` | Signer registration, lookup, and updates |
 | `client.assignments` | Requests, costs, notifications, and identity review |
+| `client.envelopes` | Several documents to the same signers, one invitation and one charge |
+| `client.embed` | Embed origins and single-use sessions for in-app signing |
 | `client.contracts` | Terms, families, renewals, and contract termination |
 | `client.templates`, `client.tags`, `client.fields` | Reusable content and fields |
-| `client.workspaces`, `client.users` | Workspace, branding, preferences, and MFA/TOTP |
+| `client.workspaces`, `client.users` | Workspace, branding, usage, notification policy, preferences, and MFA/TOTP |
 | `client.auth`, `client.oauth` | Login, API keys, and OAuth 2.1 |
 | `client.webhooks`, `client.webhookVerifier` | Endpoints, deliveries, and event authentication |
 | `client.signerDocuments` | Public and authenticated signer flows |

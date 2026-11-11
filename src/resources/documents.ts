@@ -6,7 +6,9 @@ import type {
     ICreateDocumentFromTemplateOptions,
     IDetachDocumentTagResponse,
     IDocumentActivity,
+    IDocumentDetailsOptions,
     IDocumentDetailsResponse,
+    IDocumentRenderOptions,
     IDocumentListItem,
     IDocumentListParams,
     IDocumentSearchParams,
@@ -28,11 +30,14 @@ import type {
 } from '../types';
 import { ApiError, ValidationError } from '../errors';
 import {
+    assertCreditCeiling,
     assertExpirationDate,
     assertDocumentArtifactName,
     assertRecord,
     cleanListParams,
     isE164PhoneNumber,
+    expandParam,
+    idempotencyConfig,
     isEmail,
 } from '../utils';
 import { BaseResource } from './base';
@@ -367,7 +372,11 @@ export class DocumentResource extends BaseResource {
      * `null`), rendered `pages`, and `artifacts`. `decline_reason` is returned
      * only when the access token belongs to the document creator.
      *
+     * `expand: ['envelope_id']` adds the envelope the document is in and
+     * `expand: ['envelope']` its `{ id, name }` (each `null` outside one).
+     *
      * @param documentId - The document to fetch.
+     * @param options - `expand`: `envelope_id` and/or `envelope`.
      * @returns The document. Response shape (once `metadata_ready`):
      * ```jsonc
      * {
@@ -396,30 +405,45 @@ export class DocumentResource extends BaseResource {
      *       "download_url": "https://…/documents/103ad216…/pages/103ad216…/download"
      *     }
      *   ],
+     *   "has_contract": false,
+     *   "envelope_id": null,                          // with expand: ['envelope_id']
+     *   "envelope": null,                             // with expand: ['envelope']
      *   "created_at": "2026-07-19T17:24:43Z",
      *   "updated_at": "2026-07-19T17:24:46Z"
      * }
      * ```
-     * @throws {ValidationError} If `documentId` is missing.
-     * @throws {ApiError} `404` if the document does not exist.
+     * @throws {ValidationError} If `documentId` is missing or `expand` is unknown.
+     * @throws {ApiError} `403` when a role or OAuth scope refuses it, `404` if the
+     * document does not exist.
      *
      * @example
      * ```ts
-     * const doc = await client.documents.details('103ad216846e6b90710cb9acef59');
-     * console.log(doc.status, doc.pages.length);
+     * const doc = await client.documents.details('103ad216846e6b90710cb9acef59', {
+     *   expand: ['envelope'],
+     * });
+     * console.log(doc.status, doc.envelope?.name);
      * ```
      */
-    async details(documentId: string): Promise<IDocumentDetailsResponse> {
+    async details(
+        documentId: string,
+        options: IDocumentDetailsOptions = {},
+    ): Promise<IDocumentDetailsResponse> {
         const id = this.requireId(documentId, 'Document ID');
-        return this.fetchDetails(id);
+        return this.fetchDetails(id, undefined, options);
     }
 
-    private fetchDetails(id: string, signal?: AbortSignal): Promise<IDocumentDetailsResponse> {
+    private fetchDetails(
+        id: string,
+        signal?: AbortSignal,
+        options: IDocumentDetailsOptions = {},
+    ): Promise<IDocumentDetailsResponse> {
+        assertRecord(options, 'document details options');
+        const params = expandParam(options.expand, DETAIL_EXPANSIONS);
+        const config: { signal?: AbortSignal; params?: { expand?: string } } = {};
+        if (signal) config.signal = signal;
+        if (params.expand) config.params = params;
         return this.call('Failed to fetch document details', () =>
-            this.http.get(
-                `/documents/${this.pathSegment(id, 'Document ID')}`,
-                signal ? { signal } : undefined,
-            ),
+            this.http.get(`/documents/${this.pathSegment(id, 'Document ID')}`, config),
         );
     }
 
@@ -428,18 +452,19 @@ export class DocumentResource extends BaseResource {
      * (`GET /documents/{documentId}`).
      *
      * @param documentId - The document to fetch.
+     * @param options - `expand`, as on {@link DocumentResource.details}.
      * @returns The document details (see {@link DocumentResource.details} for
      * the response shape).
      * @throws {ValidationError} If `documentId` is missing.
-     * @throws {ApiError} `404` if the document does not exist.
+     * @throws {ApiError} `403` or `404`, as on {@link DocumentResource.details}.
      *
      * @example
      * ```ts
      * const doc = await client.documents.get('103ad216846e6b90710cb9acef59');
      * ```
      */
-    async get(documentId: string): Promise<IDocumentDetailsResponse> {
-        return this.details(documentId);
+    async get(documentId: string, options: IDocumentDetailsOptions = {}): Promise<IDocumentDetailsResponse> {
+        return this.details(documentId, options);
     }
 
     /**
@@ -570,10 +595,15 @@ export class DocumentResource extends BaseResource {
      * Download the document thumbnail image
      * (`GET /documents/{documentId}/thumbnail`).
      *
+     * `artifact: 'certificated'` renders it as it is in the signed document.
+     *
      * @param documentId - The document whose thumbnail to fetch.
-     * @returns A {@link Buffer} of the thumbnail image bytes.
-     * @throws {ValidationError} If `documentId` is missing.
-     * @throws {ApiError} `404` if the document or its thumbnail does not exist.
+     * @param options - `artifact: 'certificated'` for the signed render.
+     * @returns A {@link Buffer} of the thumbnail image bytes (`image/*`).
+     * @throws {ValidationError} If `documentId` is missing or `artifact` is unknown.
+     * @throws {ApiError} `404` if the document, its thumbnail, or (with
+     * `certificated`) its certification does not exist; `503` while the signed
+     * render is still being produced — wait `rateLimit.retryAfter` seconds.
      *
      * @example
      * ```ts
@@ -581,28 +611,29 @@ export class DocumentResource extends BaseResource {
      * await fs.promises.writeFile('thumb.jpg', thumb);
      * ```
      */
-    async thumbnail(documentId: string): Promise<Buffer> {
+    async thumbnail(documentId: string, options: IDocumentRenderOptions = {}): Promise<Buffer> {
         const id = this.requireId(documentId, 'Document ID');
+        const config = renderConfig(options);
         return this.callBinary('Failed to download document thumbnail', () =>
-            this.http.get<ArrayBuffer>(
-                `/documents/${this.pathSegment(id, 'Document ID')}/thumbnail`,
-                { responseType: 'arraybuffer' },
-            ),
+            this.http.get<ArrayBuffer>(`/documents/${this.pathSegment(id, 'Document ID')}/thumbnail`, config),
         );
     }
 
     /**
-     * Download a single rendered page as a JPEG
+     * Download a single rendered page image
      * (`GET /documents/{documentId}/pages/{pageId}/download`).
      *
      * The `pageId` comes from a page's `id` in {@link DocumentResource.details}
-     * or {@link DocumentResource.list} (`pages[].id`).
+     * or {@link DocumentResource.list} (`pages[].id`). `artifact: 'certificated'`
+     * renders the page as it is in the signed document.
      *
      * @param documentId - The document the page belongs to.
      * @param pageId - The page to download.
-     * @returns A {@link Buffer} of the page's JPEG bytes.
-     * @throws {ValidationError} If `documentId` or `pageId` is missing.
-     * @throws {ApiError} `404` if the document or page does not exist.
+     * @param options - `artifact: 'certificated'` for the signed render.
+     * @returns A {@link Buffer} of the page image bytes (`image/*`).
+     * @throws {ValidationError} If `documentId` or `pageId` is missing, or `artifact` is unknown.
+     * @throws {ApiError} `404` if the document or page does not exist (or, with
+     * `certificated`, is not certified); `503` while the signed render is pending.
      *
      * @example
      * ```ts
@@ -611,13 +642,18 @@ export class DocumentResource extends BaseResource {
      * await fs.promises.writeFile('page-1.jpg', page);
      * ```
      */
-    async downloadPage(documentId: string, pageId: string): Promise<Buffer> {
+    async downloadPage(
+        documentId: string,
+        pageId: string,
+        options: IDocumentRenderOptions = {},
+    ): Promise<Buffer> {
         const docId = this.requireId(documentId, 'Document ID');
         const pid = this.requireId(pageId, 'Page ID');
+        const config = renderConfig(options);
         return this.callBinary('Failed to download page', () =>
             this.http.get<ArrayBuffer>(
                 `/documents/${this.pathSegment(docId, 'Document ID')}/pages/${this.pathSegment(pid, 'Page ID')}/download`,
-                { responseType: 'arraybuffer' },
+                config,
             ),
         );
     }
@@ -635,7 +671,7 @@ export class DocumentResource extends BaseResource {
      * @param documentId - The document whose activity log to fetch.
      * @param params - Optional pagination and sorting parameters.
      * @param params.page - Page number, starting at 1.
-     * @param params.per-page - Entries per page (production default 20, documented max 100).
+     * @param params.per-page - Entries per page (default 20, at most 50; a larger value answers 50).
      * @param params.per_page - Alias for `per-page`; explicit `per-page` wins.
      * @param params.sort - `-id` (default, newest first) or `id` (oldest first).
      * @returns The requested page of activity entries, or `[]`:
@@ -665,7 +701,7 @@ export class DocumentResource extends BaseResource {
      * @example
      * ```ts
      * const events = await client.documents.activities('doc-1', {
-     *   page: 2, 'per-page': 100, sort: 'id',
+     *   page: 2, 'per-page': 50, sort: 'id',
      * });
      * console.log(events.map((e) => e.event));
      * ```
@@ -686,7 +722,7 @@ export class DocumentResource extends BaseResource {
      * @param documentId - The document whose activity log to fetch.
      * @param params - Optional pagination and sorting parameters.
      * @param params.page - Page number, starting at 1.
-     * @param params.per-page - Entries per page (production default 20, documented max 100).
+     * @param params.per-page - Entries per page (default 20, at most 50; a larger value answers 50).
      * @param params.per_page - Alias for `per-page`; explicit `per-page` wins.
      * @param params.sort - `-id` (default, newest first) or `id` (oldest first).
      * @returns Activity entries and pagination metadata when the server supplies it:
@@ -731,13 +767,16 @@ export class DocumentResource extends BaseResource {
      * Only documents in a deletable status can be removed — the API returns
      * `400` while the document is still `uploading` / `metadata_processing`
      * (await {@link DocumentResource.waitUntilReady} first) or once it has been
-     * certificated.
+     * certificated. Deleting a `pending_signature` or `pending_identity_review`
+     * document cancels it and notifies its signers. A document of an envelope
+     * with an open document cannot be deleted on its own: cancel the envelope.
      *
      * @param documentId - The document to delete.
      * @returns Nothing; resolves when the document is deleted.
      * @throws {ValidationError} If `documentId` is missing.
      * @throws {ApiError} `400` if the document is not in a deletable status;
-     * `404` if it does not exist.
+     * `403` when a role or OAuth scope refuses it; `404` if it does not exist;
+     * `409` (`EnvelopeOpen`) while its envelope has an open document.
      *
      * @example
      * ```ts
@@ -1064,6 +1103,8 @@ export class DocumentResource extends BaseResource {
         ) {
             throw new ValidationError('tags must be an array of non-empty tag names');
         }
+        assertCreditCeiling(options.max_total_credits);
+        const config = idempotencyConfig(options.idempotencyKey);
         const tmplId = this.requireId(templateId, 'Template ID');
         const accId = this.accountId(accountId);
         const body: Record<string, unknown> = {
@@ -1074,11 +1115,13 @@ export class DocumentResource extends BaseResource {
         if (options.expires_at !== undefined) body['expires_at'] = options.expires_at;
         if (editorFields !== undefined) body['editor_fields'] = editorFields;
         if (options.tags !== undefined) body['tags'] = [...options.tags];
+        if (options.max_total_credits !== undefined) body['max_total_credits'] = options.max_total_credits;
         this.logger.info('Creating document from template', { templateId: tmplId, accountId: accId });
         return this.call('Failed to create document from template', () =>
             this.http.post(
                 `/accounts/${this.pathSegment(accId, 'Account ID')}/templates/${this.pathSegment(tmplId, 'Template ID')}/documents`,
                 body,
+                config,
             ),
         );
     }
@@ -1217,13 +1260,14 @@ export class DocumentResource extends BaseResource {
      *   { "code": "uploaded", "deletable": false },
      *   { "code": "metadata_processing", "deletable": false },
      *   { "code": "metadata_ready", "deletable": true },
-     *   { "code": "pending_signature", "deletable": true },
-     *   { "code": "expired", "deletable": false },
+     *   { "code": "expired", "deletable": true },
      *   { "code": "certificating", "deletable": false },
      *   { "code": "certificated", "deletable": false },
-     *   { "code": "rejected_by_signer", "deletable": false },
-     *   { "code": "rejected_by_user", "deletable": false },
-     *   { "code": "failed", "deletable": false }
+     *   { "code": "rejected_by_signer", "deletable": true },
+     *   { "code": "pending_signature", "deletable": true },
+     *   { "code": "pending_identity_review", "deletable": true },   // deleting cancels and notifies signers
+     *   { "code": "rejected_by_user", "deletable": true },
+     *   { "code": "failed", "deletable": true }
      * ]
      * ```
      * @throws {ApiError} If the API rejects the request.
@@ -1458,11 +1502,27 @@ function normaliseTemplateSigners(signers: ITemplateSigner[]): ITemplateSigner[]
         if (signer.notification_methods !== undefined) {
             projected.notification_methods = [...signer.notification_methods];
         }
+        if (signer.embedded !== undefined) projected.embedded = signer.embedded;
         if (signer.step !== undefined) projected.step = signer.step;
         return projected;
     });
     // Only the API knows which role IDs are signers versus editors or copy receivers.
     return normalised;
+}
+
+const DETAIL_EXPANSIONS = new Set<string>(['envelope_id', 'envelope']);
+
+/** Binary render config; `artifact: 'certificated'` asks for the signed render. */
+function renderConfig(options: IDocumentRenderOptions): {
+    responseType: 'arraybuffer';
+    params?: { artifact: 'certificated' };
+} {
+    assertRecord(options, 'render options');
+    if (options.artifact === undefined) return { responseType: 'arraybuffer' };
+    if (options.artifact !== 'certificated') {
+        throw new ValidationError('artifact must be certificated when given');
+    }
+    return { responseType: 'arraybuffer', params: { artifact: options.artifact } };
 }
 
 function normaliseTemplateEditorFields(
