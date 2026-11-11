@@ -72,9 +72,9 @@
         "@types/bun": "^1.4.4",
         "@types/node": "^22.20.5",
         "@typescript/native": "npm:typescript@^7.0.2",
-        "eslint": "^10.13.0",
+        "eslint": "^10.14.0",
         "publint": "^0.3.25",
-        "tsup": "^8.5.1",
+        "tsup": "^9.0.0",
         "typescript": "^6.0.3",
         "typescript-eslint": "^8.72.1"
     },

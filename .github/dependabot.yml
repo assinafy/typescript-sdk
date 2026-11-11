@@ -28,3 +28,7 @@ updates:
       # Drop this ignore once both support the TS 7 API, then bump deliberately.
       - dependency-name: typescript
         versions: ['>=7']
+      # The package supports Node.js 22+ (`engines.node`). Newer typings would
+      # let APIs that Node 22 lacks type-check; move this with the minimum.
+      - dependency-name: '@types/node'
+        versions: ['>=23']
