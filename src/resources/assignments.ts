@@ -34,8 +34,7 @@ const VERIFICATION_METHODS = new Set([
     'IdDocumentFaceMatchBasic',
     'Bypass',
 ]);
-const MESSAGE_CHANNELS = new Set(['Email', 'Whatsapp']);
-const NOTIFICATION_METHODS = new Set([...MESSAGE_CHANNELS, 'Bypass']);
+const NOTIFICATION_METHODS = new Set(['Email', 'Whatsapp', 'Bypass']);
 /** Verification methods an `embedded` signer may use; the frame asks for no other proof. */
 const EMBEDDED_VERIFICATION_METHODS = new Set(['Email', 'Whatsapp', 'Bypass']);
 
@@ -51,15 +50,16 @@ export const DIGITAL_CERTIFICATE_REQUIRES_VIRTUAL_METHOD =
  * travels on the notification channel. `DigitalCertificate` — where the
  * signer proves identity with their own ICP-Brasil certificate (A1 in software
  * or A3 on a token/smartcard) rather than with a code — is free to be announced
- * either way, as is hosted `IdDocumentFaceMatchBasic` verification. `Bypass`
- * (no code, enabled per account) may also skip the invitation with the `Bypass`
- * notification. Any other pairing is rejected with `400`.
+ * either way, as are hosted `IdDocumentFaceMatchBasic` and per-account
+ * `Bypass` verification; those three may also use the `Bypass` notification,
+ * which sends no invitation (the account delivers the link). Any other pairing
+ * is rejected with `400`.
  */
 const ALLOWED_NOTIFICATION_METHODS: Record<string, ReadonlySet<string>> = {
     Email: new Set(['Email']),
     Whatsapp: new Set(['Whatsapp']),
-    DigitalCertificate: MESSAGE_CHANNELS,
-    IdDocumentFaceMatchBasic: MESSAGE_CHANNELS,
+    DigitalCertificate: NOTIFICATION_METHODS,
+    IdDocumentFaceMatchBasic: NOTIFICATION_METHODS,
     Bypass: NOTIFICATION_METHODS,
 };
 

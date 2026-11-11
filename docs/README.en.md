@@ -1042,8 +1042,8 @@ to `Email`.
 | --- | --- | --- | --- |
 | `Email` *(default)* | One-time code (OTP) by email | `Email` | Free |
 | `Whatsapp` | One-time code (OTP) by WhatsApp | `Whatsapp` | 0.45 credit (the notification), paid plans only |
-| `DigitalCertificate` | The signer signs with their **own ICP-Brasil certificate — A1 or A3 —** through the Web PKI extension, producing a **qualified PAdES signature**; requires `method: 'virtual'` | `Email` **or** `Whatsapp` | 0.5 credits + the notification |
-| `IdDocumentFaceMatchBasic` | Hosted identity-document, face and liveness verification | `Email` **or** `Whatsapp` | Use `estimateCost()` |
+| `DigitalCertificate` | The signer signs with their **own ICP-Brasil certificate — A1 or A3 —** through the Web PKI extension, producing a **qualified PAdES signature**; requires `method: 'virtual'` | `Email` **or** `Whatsapp` (or `Bypass`) | 0.5 credits + the notification |
+| `IdDocumentFaceMatchBasic` | Hosted identity-document, face and liveness verification | `Email` **or** `Whatsapp` (or `Bypass`) | Use `estimateCost()` |
 | `Bypass` | No code: your app has already authenticated the signer. Enabled per account by Assinafy | `Email`, `Whatsapp` **or** `Bypass` (sends no invitation) | The notification |
 
 Check what the plan allows before offering a method:

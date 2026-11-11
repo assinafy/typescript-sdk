@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.0.1] - 2026-11-11
+
+### Fixed
+
+- `DigitalCertificate` and `IdDocumentFaceMatchBasic` signers accept the
+  `Bypass` notification on assignment, template and envelope requests and cost
+  estimates, as the API does.
+
 ## [3.0.0] - 2026-11-11
 
 ### Breaking changes
@@ -1018,7 +1026,8 @@ signer fields with `cpf` and `whatsapp_phone_number`.
 - High-level `uploadAndRequestSignatures` helper on `AssinafyClient`.
 - `PaginatedResult<T>` with parsed `X-Pagination-*` header meta.
 
-[Unreleased]: https://github.com/assinafy/typescript-sdk/compare/v3.0.0...HEAD
+[Unreleased]: https://github.com/assinafy/typescript-sdk/compare/v3.0.1...HEAD
+[3.0.1]: https://github.com/assinafy/typescript-sdk/compare/v3.0.0...v3.0.1
 [3.0.0]: https://github.com/assinafy/typescript-sdk/compare/v2.11.0...v3.0.0
 [2.11.0]: https://github.com/assinafy/typescript-sdk/compare/v2.10.0...v2.11.0
 [2.10.0]: https://github.com/assinafy/typescript-sdk/compare/v2.9.1...v2.10.0

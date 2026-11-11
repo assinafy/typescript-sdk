@@ -627,7 +627,9 @@ the production route is available.
   answers a retry with `400`.
 - `Bypass` verification and notification are enabled per account and absent
   from the published request enums; the SDK accepts them with the pairing the
-  API applies (Bypass verification with `Email`, `Whatsapp` or `Bypass`).
+  API applies: the `Bypass` notification with `Bypass`, `DigitalCertificate` or
+  `IdDocumentFaceMatchBasic` verification, and `Bypass` verification with any
+  notification.
 - The embed session exchange route belongs to Assinafy's embed page and is not
   exposed.
 

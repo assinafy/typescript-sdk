@@ -810,6 +810,7 @@ describe('Assignment Bypass, embedded signers and credit ceiling', () => {
                 { id: 's2', verification_method: 'Bypass', notification_methods: ['Email'] },
                 { id: 's3', verification_method: 'Whatsapp', notification_methods: ['Whatsapp'], embedded: true },
                 { id: 's4', notification_methods: ['Bypass'], embedded: false },
+                { id: 's5', verification_method: 'IdDocumentFaceMatchBasic', notification_methods: ['Bypass'] },
             ],
         });
         expect(body).toEqual({
@@ -820,14 +821,24 @@ describe('Assignment Bypass, embedded signers and credit ceiling', () => {
                 { id: 's2', verification_method: 'Bypass', notification_methods: ['Email'] },
                 { id: 's3', verification_method: 'Whatsapp', notification_methods: ['Whatsapp'], embedded: true },
                 { id: 's4', notification_methods: ['Bypass'], embedded: false },
+                { id: 's5', verification_method: 'IdDocumentFaceMatchBasic', notification_methods: ['Bypass'] },
             ],
+        });
+    });
+
+    test('accepts the Bypass notification for a certificate signer, as the API does', () => {
+        expect(buildAssignmentEstimatePayload({
+            method: 'virtual',
+            signers: [{ verification_method: 'DigitalCertificate', notification_methods: ['Bypass'] }],
+        })).toEqual({
+            method: 'virtual',
+            signers: [{ verification_method: 'DigitalCertificate', notification_methods: ['Bypass'] }],
         });
     });
 
     test('rejects unpaired Bypass, non-boolean embedded, embedded certificate/identity signers and bad ceilings', () => {
         const invalid = [
             { signers: [{ id: 's', verification_method: 'Email', notification_methods: ['Bypass'] }] },
-            { signers: [{ id: 's', verification_method: 'DigitalCertificate', notification_methods: ['Bypass'] }] },
             { signers: [{ id: 's', embedded: 'true' }] },
             { signers: [{ id: 's', verification_method: 'DigitalCertificate', embedded: true }] },
             { signers: [{ id: 's', verification_method: 'IdDocumentFaceMatchBasic', embedded: true }] },

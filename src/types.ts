@@ -62,8 +62,8 @@ export type AssignmentMethod = 'virtual' | 'collect';
  * verification code travels on the notification channel, so `Email` pairs only
  * with `Email` and `Whatsapp` only with `Whatsapp`. `DigitalCertificate`
  * and `IdDocumentFaceMatchBasic` carry no OTP and may be announced over either
- * channel; `Bypass` may also use the `Bypass` notification, which sends no
- * invitation. The SDK rejects an invalid pairing before the request; the API
+ * channel; those and `Bypass` may also use the `Bypass` notification, which
+ * sends no invitation. The SDK rejects an invalid pairing before the request; the API
  * answers `400`. `embedded` signers use `Email`, `Whatsapp` or `Bypass`.
  *
  * Send neither field to get `Email`/`Email`; send one and the other is
@@ -149,7 +149,7 @@ export interface ISignerIdentityReview {
  * | --- | --- | --- |
  * | `Email` | An `email`. | 0 credits |
  * | `Whatsapp` | A `whatsapp_phone_number`; paid plan. | 0.45 credits |
- * | `Bypass` | Sends nothing; only with `Bypass` verification (per-account feature). The signer is reached through your app, e.g. an embed session. | — |
+ * | `Bypass` | Sends nothing; with `Bypass`, `DigitalCertificate` or `IdDocumentFaceMatchBasic` verification. Your app delivers the link, e.g. an embed session. | — |
  *
  * Notifications are charged when the assignment is created and again on every
  * resend. See {@link AssignmentVerificationMethod} for the pairing rules.

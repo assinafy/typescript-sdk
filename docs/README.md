@@ -996,8 +996,8 @@ que faltar é inferido. Sem nenhum dos dois, ambos assumem `Email`.
 | --- | --- | --- | --- |
 | `Email` *(padrão)* | Código de uso único (OTP) por e-mail | `Email` | Gratuito |
 | `Whatsapp` | Código de uso único (OTP) por WhatsApp | `Whatsapp` | 0,45 crédito (a notificação), só em planos pagos |
-| `DigitalCertificate` | O signatário assina com o **próprio certificado ICP-Brasil — A1 ou A3 —** pela extensão Web PKI, gerando uma assinatura **PAdES qualificada**; exige `method: 'virtual'` | `Email` **ou** `Whatsapp` | 0,5 crédito + a notificação |
-| `IdDocumentFaceMatchBasic` | Documento de identidade, foto e prova de vida em sessão hospedada | `Email` **ou** `Whatsapp` | Consulte `estimateCost()` |
+| `DigitalCertificate` | O signatário assina com o **próprio certificado ICP-Brasil — A1 ou A3 —** pela extensão Web PKI, gerando uma assinatura **PAdES qualificada**; exige `method: 'virtual'` | `Email` **ou** `Whatsapp` (ou `Bypass`) | 0,5 crédito + a notificação |
+| `IdDocumentFaceMatchBasic` | Documento de identidade, foto e prova de vida em sessão hospedada | `Email` **ou** `Whatsapp` (ou `Bypass`) | Consulte `estimateCost()` |
 | `Bypass` | Sem código: seu app já autenticou o signatário. Habilitado por conta pela Assinafy | `Email`, `Whatsapp` **ou** `Bypass` (não envia convite) | A notificação |
 
 Confira o que o plano permite antes de oferecer um método:
