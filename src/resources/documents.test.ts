@@ -671,7 +671,7 @@ describe('DocumentResource.estimateCostFromTemplate', () => {
         expect(body).toEqual({ signers });
     });
 
-    test('strips create-only id/step fields from cost descriptors at runtime', async () => {
+    test('strips signer identity and forwards the signing step in cost descriptors', async () => {
         let body: unknown;
         const ax = {
             post: async (_url: string, value: unknown) => {
@@ -683,7 +683,11 @@ describe('DocumentResource.estimateCostFromTemplate', () => {
             'tmpl1',
             [{ role_id: 'role1', id: 'ignored', step: 2 } as never],
         );
-        expect(body).toEqual({ signers: [{ role_id: 'role1' }] });
+        expect(body).toEqual({ signers: [{ role_id: 'role1', step: 2 }] });
+        await expect(new DocumentResource(ax, 'acc').estimateCostFromTemplate(
+            'tmpl1',
+            [{ role_id: 'role1', step: 0 }],
+        )).rejects.toThrow('step must be a positive safe integer');
     });
 
     test('requires at least one valid template role for cost estimation', async () => {

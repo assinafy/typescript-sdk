@@ -391,6 +391,13 @@ certificate/`collect` combination before assignment creation or cost
 estimation with `ValidationError.errors.code` set to
 `digital_certificate_requires_virtual_method`.
 
+Both cost estimates apply the one-certificate-signer-per-step rule too, and
+the API reads each signer's `step` there although the published estimate
+schemas omit it; signers without a `step` share one step. The SDK forwards
+`step` on assignment and template estimates, so send the creation steps when
+estimating. Assignment estimates check the signing order locally, as creation
+does.
+
 Template role IDs do not reveal which entries are signers, editors or copy
 receivers. The SDK validates each entry's channel and positive `step`, then
 lets the API enforce role-aware signing order. The server derives the method:

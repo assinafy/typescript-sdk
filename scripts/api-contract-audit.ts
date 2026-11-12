@@ -14,7 +14,7 @@ import { SDK_USER_AGENT } from '../src/support/transport';
 const DEFAULT_SPEC_URL = 'https://api.assinafy.com.br/v1/docs/openapi.json';
 const COVERAGE_FILE = new URL('../docs/API_COVERAGE.md', import.meta.url);
 const HTTP_METHODS = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']);
-const EXPECTED_CONTRACT_FINGERPRINT = 'd2c77fac558f459e4146d7aedae7e0d52e255753a416737e75f72f6a05f37ec5';
+const EXPECTED_CONTRACT_FINGERPRINT = '6647084a1cfa86d8d63b17e891d491b9c713267c0767b9c6a87cbb948cfaf5bc';
 const NON_CONTRACT_KEYS = new Set([
     'description',
     'summary',

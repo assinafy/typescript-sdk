@@ -446,6 +446,8 @@ export interface IAssignmentEntry {
 export interface IAssignmentCostSigner {
     verification_method?: AssignmentVerificationMethod;
     notification_methods?: AssignmentNotificationMethod[];
+    /** The signer's signing step at creation; each `DigitalCertificate` signer needs its own. */
+    step?: number;
 }
 
 /**
@@ -784,7 +786,8 @@ export interface IDocumentContractInput {
     currency?: string | null;
     start_date?: string | null;
     end_date?: string | null;
-    auto_renew?: boolean;
+    /** Null resets auto-renewal to false, or drops it from a pending amendment's terms. */
+    auto_renew?: boolean | null;
     renewal_term_months?: number | null;
     notice_period_days?: number | null;
     owner_id?: string | null;
@@ -1413,13 +1416,15 @@ export interface ITemplateSigner {
 }
 
 /**
- * Role/channel descriptor used only for template cost estimation. The official
- * schema intentionally omits signer identity and sequential-signing fields.
+ * Role/channel descriptor used only for template cost estimation. It carries no
+ * signer identity; `step` is the role's signing step at creation, which the API
+ * reads to keep each `DigitalCertificate` signer alone in its step.
  */
 export interface ITemplateCostSigner {
     role_id: string;
     verification_method?: AssignmentVerificationMethod;
     notification_methods?: AssignmentNotificationMethod[];
+    step?: number;
 }
 
 /** Options for creating a document from a template. */

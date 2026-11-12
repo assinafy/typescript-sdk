@@ -181,7 +181,8 @@ export class ContractResource extends BaseResource {
      * @param payload.currency - Three-letter currency; null resets as documented.
      * @param payload.start_date - Start date (`YYYY-MM-DD`), or null.
      * @param payload.end_date - End date (`YYYY-MM-DD`), or null.
-     * @param payload.auto_renew - Whether the hourly lifecycle starts a new term.
+     * @param payload.auto_renew - Whether the hourly lifecycle starts a new term;
+     * null resets it to false, or drops it from a pending amendment's terms.
      * @param payload.renewal_term_months - 1–600 months, or null for the default.
      * @param payload.notice_period_days - 0–3650 days, or null to disable notice.
      * @param payload.owner_id - Active workspace member ID, or null.
@@ -527,8 +528,8 @@ function buildContractInput(payload: IDocumentContractInput): Record<string, unk
     ) {
         throw new ValidationError('end_date must be on or after start_date');
     }
-    if (payload.auto_renew !== undefined && typeof payload.auto_renew !== 'boolean') {
-        throw new ValidationError('auto_renew must be a boolean');
+    if (payload.auto_renew !== undefined && payload.auto_renew !== null && typeof payload.auto_renew !== 'boolean') {
+        throw new ValidationError('auto_renew must be a boolean or null');
     }
     validateNullableInteger(payload.renewal_term_months, 'renewal_term_months', 1, 600);
     validateNullableInteger(payload.notice_period_days, 'notice_period_days', 0, 3650);

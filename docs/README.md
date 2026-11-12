@@ -1050,8 +1050,9 @@ nem encaminhe fora do fluxo de assinatura.
 
 `DigitalCertificate` exige `method: 'virtual'`, o recurso **Certificado Digital** na conta (planos
 Standard e Pro), CPF ou CNPJ em `government_id` do signatário, e exatamente **um signatário por
-certificado naquele passo de assinatura**. Custa 0,5 crédito por signatário, além do custo da
-notificação escolhida. O fluxo por certificado conclui o item virtual do signatário; ele não consegue
+certificado naquele passo de assinatura**. A estimativa recebe o mesmo `step` da criação: com dois
+ou mais signatários com certificado, dê a cada um o seu passo nas duas chamadas. Custa 0,5 crédito
+por signatário, além do custo da notificação escolhida. O fluxo por certificado conclui o item virtual do signatário; ele não consegue
 enviar campos posicionados pelo endpoint comum de assinatura `collect`.
 
 O SDK rejeita signatários por certificado em assignments `collect`, tanto em `create()` quanto em
@@ -1074,7 +1075,7 @@ const signatarioCertificado = await client.signers.update(signerId, {
 
 const custoCertificado = await client.assignments.estimateCost(documentId, {
   method: 'virtual',
-  signers: [{ verification_method: 'DigitalCertificate', notification_methods: ['Email'] }],
+  signers: [{ step: 1, verification_method: 'DigitalCertificate', notification_methods: ['Email'] }],
 });
 
 await client.assignments.create(documentId, {

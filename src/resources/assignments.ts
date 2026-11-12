@@ -263,15 +263,17 @@ export function buildAssignmentPayload(
 }
 
 /**
- * Build the narrower official cost-estimate body without create-only fields.
+ * Build the narrower official cost-estimate body without signer identities.
  *
  * @param payload - Assignment method plus channel descriptors, and, for
  * `collect`, the field-placement entries.
  * @returns A JSON-ready `{ method, signers, entries? }` request body. Signer
- * IDs and create-only step fields are never forwarded to pricing.
+ * IDs are never forwarded to pricing. Each signer's `step` is, because the API
+ * keeps every `DigitalCertificate` signer alone in its step when it estimates,
+ * so the signing order is checked as it is for creation.
  * @throws {ValidationError} If the estimate has no signer descriptor, or a
- * collect estimate has no placement entry, or a `DigitalCertificate` signer
- * is combined with `method: 'collect'`. The last case has `errors.code ===
+ * collect estimate has no placement entry, or the signing order is invalid,
+ * or a `DigitalCertificate` signer is combined with `method: 'collect'`. The last case has `errors.code ===
  * 'digital_certificate_requires_virtual_method'`.
  *
  * @example
@@ -304,6 +306,7 @@ export function buildAssignmentEstimatePayload(
 
     const normalisedSigners = signers.map((signer) => normaliseEstimateSigner(signer));
     validateDigitalCertificateMethod(method, normalisedSigners);
+    validateSigningOrder(normalisedSigners, 'assignment cost signers');
     return cleanParams({
         method,
         signers: normalisedSigners,
@@ -354,7 +357,7 @@ function normaliseSignerRef(
     throw new ValidationError('Invalid signer reference', { ref: ref as unknown });
 }
 
-function normaliseEstimateSigner(signer: unknown): Record<string, unknown> {
+function normaliseEstimateSigner(signer: unknown): { verification_method?: string; step?: number } {
     // Older SDK releases accepted signer IDs here. IDs do not participate in
     // the published cost schema; retain the signer count for JavaScript callers
     // while projecting every legacy string to the official `{}` descriptor.
@@ -365,12 +368,14 @@ function normaliseEstimateSigner(signer: unknown): Record<string, unknown> {
     const descriptor = signer as {
         verification_method?: unknown;
         notification_methods?: unknown;
+        step?: unknown;
     };
     validateAssignmentSignerOptions(descriptor);
     return cleanParams({
         verification_method: descriptor.verification_method,
         notification_methods: descriptor.notification_methods,
-    });
+        step: descriptor.step,
+    }) as { verification_method?: string; step?: number };
 }
 
 export function normaliseAssignmentEntries(entries: unknown): IAssignmentEntry[] {
@@ -760,9 +765,10 @@ export class AssignmentResource extends BaseResource {
      * ```
      *
      * @param documentId - The document the assignment would be created on.
-     * @param payload - `method` plus channel-only signer descriptors and/or
-     * `collect`-mode `entries`. Create-only fields and signer IDs are not part
-     * of this request schema.
+     * @param payload - `method` plus signer channel descriptors and/or
+     * `collect`-mode `entries`. Signer IDs are not part of this request. Send
+     * each signer's creation `step` too: the API keeps every
+     * `DigitalCertificate` signer alone in its step when it estimates.
      * @returns an {@link ICostEstimate} with `total_credits`, balances, a
      * line-item `breakdown`, and a `has_sufficient_resources` gate.
      * `blocking_reason` may be `PendingPayment`, `InsufficientDocuments`, or
@@ -784,7 +790,8 @@ export class AssignmentResource extends BaseResource {
      * ```
      * @throws {ValidationError} If `documentId` is missing, a `virtual` request
      * has no signer entry, or a `collect` request has no signer entry or no
-     * field-placement entry, or combines `DigitalCertificate` with `collect`.
+     * field-placement entry, the signing order is invalid, or the request
+     * combines `DigitalCertificate` with `collect`.
      * The last case has `errors.code ===
      * 'digital_certificate_requires_virtual_method'`.
      * @throws {ApiError} If the API rejects the request.

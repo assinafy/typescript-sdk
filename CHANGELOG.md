@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.0.2] - 2026-11-12
+
+### Fixed
+
+- `contracts.set()` accepts `auto_renew: null`, as the API does: a contract
+  resets auto-renewal to `false`, and a pending amendment drops it from its
+  terms. `IDocumentContractInput.auto_renew` is `boolean | null`.
+- `assignments.estimateCost()` and `documents.estimateCostFromTemplate()` send
+  each signer's `step`, which the API reads to keep every `DigitalCertificate`
+  signer alone in its step, so estimates with several certificate signers in
+  their own steps succeed. Assignment estimates check the signing order as
+  creation does. `IAssignmentCostSigner` and `ITemplateCostSigner` accept `step`.
+
 ## [3.0.1] - 2026-11-11
 
 ### Fixed
@@ -1026,7 +1039,8 @@ signer fields with `cpf` and `whatsapp_phone_number`.
 - High-level `uploadAndRequestSignatures` helper on `AssinafyClient`.
 - `PaginatedResult<T>` with parsed `X-Pagination-*` header meta.
 
-[Unreleased]: https://github.com/assinafy/typescript-sdk/compare/v3.0.1...HEAD
+[Unreleased]: https://github.com/assinafy/typescript-sdk/compare/v3.0.2...HEAD
+[3.0.2]: https://github.com/assinafy/typescript-sdk/compare/v3.0.1...v3.0.2
 [3.0.1]: https://github.com/assinafy/typescript-sdk/compare/v3.0.0...v3.0.1
 [3.0.0]: https://github.com/assinafy/typescript-sdk/compare/v2.11.0...v3.0.0
 [2.11.0]: https://github.com/assinafy/typescript-sdk/compare/v2.10.0...v2.11.0

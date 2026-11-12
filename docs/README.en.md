@@ -1097,8 +1097,9 @@ forward them outside the signing flow.
 
 `DigitalCertificate` requires `method: 'virtual'`, the account feature, a CPF
 or CNPJ in the signer's `government_id`, and exactly one certificate signer in
-that signing step. It costs 0.5 credits per certificate signer in addition to
-the selected notification cost. A certificate flow completes the signer's
+that signing step. Estimates take the same `step` as creation: with two or
+more certificate signers, give each its own step in both calls. It costs 0.5
+credits per certificate signer in addition to the selected notification cost. A certificate flow completes the signer's
 virtual item; it cannot submit placed fields through the ordinary `collect`
 signing endpoint.
 
@@ -1124,7 +1125,7 @@ const certificateSigner = await client.signers.update(signerId, {
 
 const certificateCost = await client.assignments.estimateCost(documentId, {
   method: 'virtual',
-  signers: [{ verification_method: 'DigitalCertificate', notification_methods: ['Email'] }],
+  signers: [{ step: 1, verification_method: 'DigitalCertificate', notification_methods: ['Email'] }],
 });
 
 await client.assignments.create(documentId, {

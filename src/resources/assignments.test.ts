@@ -148,12 +148,26 @@ describe('buildAssignmentPayload', () => {
 
     test('allows estimation payloads without signer ids when methods are supplied', () => {
         const body = buildAssignmentEstimatePayload({
-            signers: [{ verification_method: 'DigitalCertificate' }, {}],
+            signers: [{ verification_method: 'DigitalCertificate', step: 1 }, { step: 2 }],
         });
         expect(body).toEqual({
             method: 'virtual',
-            signers: [{ verification_method: 'DigitalCertificate' }, {}],
+            signers: [{ verification_method: 'DigitalCertificate', step: 1 }, { step: 2 }],
         });
+    });
+
+    test('estimates keep each certificate signer alone in its step, as creation does', () => {
+        const certificate = { verification_method: 'DigitalCertificate' as const, notification_methods: ['Email' as const] };
+        expect(buildAssignmentEstimatePayload({ signers: [{ ...certificate, step: 1 }, { ...certificate, step: 2 }] }))
+            .toEqual({ method: 'virtual', signers: [{ ...certificate, step: 1 }, { ...certificate, step: 2 }] });
+        for (const signers of [[certificate, certificate], [{ ...certificate, step: 1 }, { ...certificate, step: 1 }]]) {
+            expect(() => buildAssignmentEstimatePayload({ signers })).toThrow(
+                'DigitalCertificate assignment cost signers must be alone in their step',
+            );
+        }
+        expect(() => buildAssignmentEstimatePayload({ signers: [{ ...certificate, step: 1 }, certificate] })).toThrow(
+            'assignment cost signers must all define step when any signer defines it',
+        );
     });
 
     test('rejects certificate collect payloads with a stable code', () => {
@@ -377,14 +391,14 @@ describe('buildAssignmentPayload', () => {
 
     test('estimate bodies project away create-only and signer identity fields', () => {
         const payload = {
-            signers: [{ id: 'ignored', step: 3, verification_method: 'Email' }],
+            signers: [{ id: 'ignored', step: 1, verification_method: 'Email' }],
             message: 'ignored',
             expires_at: 'ignored',
             copy_receivers: ['ignored'],
         } as never;
         expect(buildAssignmentEstimatePayload(payload)).toEqual({
             method: 'virtual',
-            signers: [{ verification_method: 'Email' }],
+            signers: [{ verification_method: 'Email', step: 1 }],
         });
         expect(buildAssignmentEstimatePayload({ signers: ['legacy-id'] } as never)).toEqual({
             method: 'virtual',

@@ -1152,9 +1152,10 @@ export class DocumentResource extends BaseResource {
      *
      * @param templateId - The template that would be instantiated.
      * @param signers - One channel descriptor per template role. Cost requests
-     * use only `role_id`, `verification_method`, and `notification_methods`;
-     * they do not send a signer ID or signing-order step, and editor roles are
-     * ignored by the cost calculation.
+     * use `role_id`, `verification_method`, `notification_methods`, and the
+     * role's creation `step`, which the API reads to keep each
+     * `DigitalCertificate` signer alone in its step; they send no signer ID,
+     * and editor roles are ignored by the cost calculation.
      * @param accountId - Override the client's default account ID.
      * @returns An {@link ICostEstimate}: `total_credits`, balances, and a
      * per-line `breakdown` of what the operation would consume:
@@ -1564,6 +1565,7 @@ function normaliseTemplateCostSigners(signers: ITemplateCostSigner[]): ITemplate
         if (signer.notification_methods !== undefined) {
             descriptor.notification_methods = signer.notification_methods;
         }
+        if (signer.step !== undefined) descriptor.step = signer.step;
         return descriptor;
     });
     return normalised;

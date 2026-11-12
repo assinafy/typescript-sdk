@@ -191,6 +191,10 @@ describe('ContractResource', () => {
             updated_at: null,
         });
         expect(result).toEqual(contract);
+
+        // A pending amendment drops auto-renewal from its terms with null; a contract resets it to false.
+        await new ContractResource(http, 'acc').set('doc', { auto_renew: null, updated_at: '2027-05-10T15:00:00Z' });
+        expect(body).toEqual({ auto_renew: null, updated_at: '2027-05-10T15:00:00Z' });
     });
 
     test('set rejects malformed terms before requesting', async () => {
