@@ -1,6 +1,12 @@
 # The canonical package gate needs both Bun and real Node/npm: attw's `--pack`
 # mode shells out to `npm pack`. Start from the current Node LTS image and add
 # the exact Bun version used by package.json and GitHub Actions.
+include:
+  - component: git.febacapital.com/infra/gitlab-components/security-scan@main
+    inputs:
+      stage: verify
+      image_stage: compatibility
+
 image: node:24-bookworm-slim
 
 stages:
