@@ -801,7 +801,8 @@ export class SignerDocumentsResource extends BaseResource {
      * @param signerAccessCode - The signer's access code, from their signing link.
      * @param image - The image bytes as a non-empty `Buffer`.
      * @param options - `imageType` (`'signature'` default, or `'initial'`) and
-     *   `reuse` (persist for reuse). The official request content type is PNG.
+     *   `reuse` (persist for reuse). PNG is the default; staging also accepts JPEG.
+     * @param options.contentType - Raw media type: `image/png` (default) or `image/jpeg`.
      * @param options.imageType - Signature image category; defaults to `signature`.
      * @param options.reuse - Persist the image for future signing requests.
      * @returns Resolves when the API acknowledges the upload. The response
@@ -828,14 +829,14 @@ export class SignerDocumentsResource extends BaseResource {
     /**
      * Upload a signature image using a compatibility content type
      * (`POST /signature?signer-access-code=…&type=…`).
-     * @deprecated Compatibility overload for non-PNG media types. The current
-     * OpenAPI contract specifies only `image/png`; other values are not certified.
+     * @deprecated Compatibility overload for media types other than PNG/JPEG.
+     * Their acceptance depends on the deployment.
      * @param signerAccessCode - Access code sent in the query string.
      * @param image - Non-empty raw image bytes, without a JSON envelope.
      * @param options - Image type, reuse preference and compatibility content type.
      * @param options.imageType - Signature image category; defaults to `signature`.
      * @param options.reuse - Persist the image for future signing requests.
-     * @param options.contentType - Compatibility media type; the official type is `image/png`.
+     * @param options.contentType - Compatibility media type; prefer `image/png` or `image/jpeg`.
      * @returns Nothing; the acknowledgement body is discarded.
      * @throws {ValidationError} If the code, image or options are invalid.
      * @throws {ApiError} If the API rejects the upload.

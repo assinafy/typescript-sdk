@@ -6,6 +6,7 @@
  * endpoint additions/removals and stale method references do.
  */
 
+import { test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { AssinafyClient } from '../src';
@@ -14,7 +15,8 @@ import { SDK_USER_AGENT } from '../src/support/transport';
 const DEFAULT_SPEC_URL = 'https://api.assinafy.com.br/v1/docs/openapi.json';
 const COVERAGE_FILE = new URL('../docs/API_COVERAGE.md', import.meta.url);
 const HTTP_METHODS = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']);
-const EXPECTED_CONTRACT_FINGERPRINT = '6647084a1cfa86d8d63b17e891d491b9c713267c0767b9c6a87cbb948cfaf5bc';
+const EXPECTED_CONTRACT_FINGERPRINT = '151cfc722bad1eccdceffddcf61ff14271268f9ec74afd25da6a73f6e8687d1a';
+const EXPECTED_STAGING_FINGERPRINT = '69c991e22614a110bb19669c206c32e44e90d422b62a394879d3029ed87f4a91';
 const NON_CONTRACT_KEYS = new Set([
     'description',
     'summary',
@@ -110,7 +112,7 @@ function parameter(
     );
 }
 
-function validateProductionStructure(spec: OpenApiDocument): number {
+function validateProductionStructure(spec: OpenApiDocument, staging = false): number {
     let checked = 0;
     const requireValue = (condition: unknown, message: string): void => {
         assertContract(condition, message);
@@ -487,8 +489,11 @@ function validateProductionStructure(spec: OpenApiDocument): number {
         'authorizationCode',
     );
     requireValue(
-        at(oauthFlow, 'authorizationUrl') === 'https://auth.assinafy.com.br/oauth/authorize'
-            && at(oauthFlow, 'tokenUrl') === 'https://api.assinafy.com.br/v1/oauth/token',
+        staging
+            ? /^https:\/\/[^/]+\/oauth\/authorize$/u.test(String(at(oauthFlow, 'authorizationUrl')))
+                && /^https:\/\/[^/]+\/v1\/oauth\/token$/u.test(String(at(oauthFlow, 'tokenUrl')))
+            : at(oauthFlow, 'authorizationUrl') === 'https://auth.assinafy.com.br/oauth/authorize'
+                && at(oauthFlow, 'tokenUrl') === 'https://api.assinafy.com.br/v1/oauth/token',
         'OAuth authorization/token endpoints changed',
     );
     const oauthScopes = at(oauthFlow, 'scopes');
@@ -591,6 +596,10 @@ function validateSigningSurfaces(
         'envelope creation body changed',
     );
     requireValue(
+        at(schema('EnvelopeDocumentRequest'), 'properties', 'entries', 'items', 'properties', 'fields', 'minItems') === undefined,
+        'collect envelope pages must allow an empty fields list',
+    );
+    requireValue(
         sameMembers(
             at(parameter(spec, `${envelopes}/{envelopeId}/download/{artifactName}`, 'get', 'artifactName'), 'schema', 'enum'),
             ['original', 'certificated', 'certificate-page', 'pades', 'bundle'],
@@ -670,6 +679,44 @@ function validateSigningSurfaces(
     );
 }
 
+function validateStagingStructure(spec: OpenApiDocument): number {
+    let checked = 0;
+    const check = (condition: unknown, message: string): void => {
+        assertContract(condition, message);
+        checked++;
+    };
+    const body = (path: string): unknown =>
+        at(spec, 'paths', path, 'post', 'requestBody', 'content', 'application/json', 'schema');
+    const capacities = [
+        'Sign', 'Approve', 'Acknowledge', 'Party', 'Witness', 'Intervening', 'Receipt',
+        'IssuerEndorserGuarantor', 'IssuerEndorserGuarantorSurety', 'Surety', 'PartySurety',
+        'JointDebtor', 'PartyJointDebtor', 'ContractingParty', 'ContractedParty',
+        'Landlord', 'Tenant', 'Buyer', 'Seller', 'AttorneyInFact', 'LegalRepresentative',
+        'Employer', 'Employee',
+    ];
+    for (const suffix of ['', '/estimate-cost']) {
+        const capacity = at(body(`/v1/documents/{documentId}/assignments${suffix}`),
+            'properties', 'signers', 'items', 'properties', 'sign_as');
+        const values = at(capacity, 'enum');
+        check(Array.isArray(values) && values.includes(null)
+            && sameMembers(values.filter((value) => value !== null), capacities),
+        'assignment sign_as must preserve the documented nullable capacities');
+    }
+    check(isRecord(at(spec, 'paths', '/v1/signature', 'post', 'requestBody', 'content', 'image/jpeg')),
+        'signature uploads must accept JPEG');
+    check(at(spec, 'paths', '/v1/documents/{documentId}/watchers', 'put', 'requestBody',
+        'content', 'application/json', 'schema', 'properties', 'watcher_ids', 'maxItems') === 10,
+    'watcher sets must be bounded to ten contacts');
+    const scheduled = at(spec, 'components', 'schemas', 'ScheduledSend');
+    check(sameMembers(at(scheduled, 'properties', 'status', 'enum'),
+        ['pending', 'processing', 'sent', 'cancelled', 'failed'])
+        && sameMembers(at(scheduled, 'required'), [
+            'id', 'type', 'document_ids', 'status', 'send_at', 'assignment_id', 'envelope_id',
+            'failure_reason', 'created_at', 'processed_at',
+        ]), 'scheduled send state or required response fields changed');
+    return checked;
+}
+
 function operationKey(method: string, path: string): string {
     return `${method.toUpperCase()} ${path}`;
 }
@@ -692,7 +739,7 @@ function officialOperations(spec: OpenApiDocument): Set<string> {
     return operations;
 }
 
-function documentedOperations(markdown: string): Set<string> {
+function documentedOperations(markdown: string, staging = false): Set<string> {
     const operations = new Set<string>();
     for (const line of markdown.split(/\r?\n/u)) {
         const columns = line.split('|').map((column) => column.trim().replace(/^`|`$/gu, ''));
@@ -708,6 +755,7 @@ function documentedOperations(markdown: string): Set<string> {
         if (status.includes('compatibility extension')) {
             continue;
         }
+        if (status.includes('staging') && !staging) continue;
         // Official routes the API reserves for Assinafy's own pages are listed
         // without a method.
         const notExposed = status.includes('not exposed');
@@ -783,9 +831,9 @@ function difference(left: Set<string>, right: Set<string>): string[] {
  * silent change there breaks every client without changing the spec at all.
  * RFC 8615 requires both to be bare metadata objects, not this API's envelope.
  */
-async function validateOAuthDiscovery(spec: OpenApiDocument): Promise<number> {
-    const flow = at(spec, 'components', 'securitySchemes', 'oauth2', 'flows', 'authorizationCode');
-    const apiOrigin = new URL(String(at(flow, 'tokenUrl'))).origin;
+async function validateOAuthDiscovery(authorizationUrl: string, tokenUrl: string): Promise<number> {
+    const flow = { authorizationUrl, tokenUrl };
+    const apiOrigin = new URL(tokenUrl).origin;
 
     const resourceMetadata = await fetchJson(`${apiOrigin}/.well-known/oauth-protected-resource`);
     const issuer = at(resourceMetadata, 'authorization_servers', 0);
@@ -839,6 +887,8 @@ async function fetchJson(url: string): Promise<unknown> {
 
 async function main(): Promise<void> {
     validateFingerprintNormalization();
+    const staging = process.env['ASSINAFY_CONTRACT_ENV'] === 'staging';
+    assertContract(!staging || process.env['ASSINAFY_OPENAPI_URL'], 'staging checks require ASSINAFY_OPENAPI_URL');
     const specUrl = process.env['ASSINAFY_OPENAPI_URL'] ?? DEFAULT_SPEC_URL;
     const response = await fetch(specUrl, {
         headers: { Accept: 'application/json', 'User-Agent': SDK_USER_AGENT },
@@ -850,15 +900,16 @@ async function main(): Promise<void> {
 
     const spec = (await response.json()) as OpenApiDocument;
     const currentContractFingerprint = contractFingerprint(spec);
+    const expectedFingerprint = staging ? EXPECTED_STAGING_FINGERPRINT : EXPECTED_CONTRACT_FINGERPRINT;
     assertContract(
-        currentContractFingerprint === EXPECTED_CONTRACT_FINGERPRINT,
-        `full contract fingerprint changed (expected ${EXPECTED_CONTRACT_FINGERPRINT}, got ${currentContractFingerprint})`,
+        currentContractFingerprint === expectedFingerprint,
+        `full contract fingerprint changed (expected ${expectedFingerprint}, got ${currentContractFingerprint})`,
     );
     const official = officialOperations(spec);
-    const structuralChecks = validateProductionStructure(spec)
-        + (await validateOAuthDiscovery(spec));
+    const structuralChecks = validateProductionStructure(spec, staging)
+        + (staging ? validateStagingStructure(spec) : 0);
     const markdown = await readFile(COVERAGE_FILE, 'utf8');
-    const coverage = documentedOperations(markdown);
+    const coverage = documentedOperations(markdown, staging);
     const exportedMethods = validateExportedSdkMethods(markdown);
     const missing = difference(official, coverage);
     const stale = difference(coverage, official);
@@ -871,13 +922,39 @@ async function main(): Promise<void> {
         );
     }
 
+    console.log(`PASS: ${official.size} operations, ${exportedMethods} exports and ${structuralChecks} schema checks.`);
+    const flow = at(spec, 'components', 'securitySchemes', 'oauth2', 'flows', 'authorizationCode');
+    const discoveryChecks = staging ? 0 : await validateOAuthDiscovery(
+        String(at(flow, 'authorizationUrl')), String(at(flow, 'tokenUrl')),
+    );
+    if (staging) console.log('OAuth discovery is checked on the public production and sandbox deployments.');
     const operationFingerprint = createHash('sha256')
         .update([...official].sort().join('\n'))
         .digest('hex')
         .slice(0, 16);
     console.log(
-        `PASS: ${official.size}/${official.size} official operations are mapped to exported SDK methods (${exportedMethods} references and ${structuralChecks} named contracts checked; operation-set sha256:${operationFingerprint}; full-contract sha256:${currentContractFingerprint.slice(0, 16)}).`,
+        `PASS: ${official.size}/${official.size} official operations are mapped to exported SDK methods (${exportedMethods} references and ${structuralChecks + discoveryChecks} named contracts checked; operation-set sha256:${operationFingerprint}; full-contract sha256:${currentContractFingerprint.slice(0, 16)}).`,
     );
 }
 
-await main();
+test('contract fingerprints retain payload names and ignore prose', validateFingerprintNormalization);
+
+test('deployment-specific coverage rows', () => {
+    const row = '| GET | /v1/example | client.documents.list() | Covered (staging) |';
+    assertContract(documentedOperations(row).size === 0, 'production excludes staging routes');
+    assertContract(documentedOperations(row, true).has('GET /v1/example'), 'staging includes its routes');
+});
+
+test.skipIf(process.env['ASSINAFY_CONTRACT_CHECK'] !== '1')(
+    'published API operations, schemas, exports and OAuth discovery', main, 120_000,
+);
+
+
+test.skipIf(process.env['ASSINAFY_CONTRACT_CHECK'] !== '1')(
+    'public sandbox OAuth discovery', async () => {
+        await validateOAuthDiscovery(
+            'https://auth-sandbox.assinafy.com.br/oauth/authorize',
+            'https://sandbox.assinafy.com.br/v1/oauth/token',
+        );
+    }, 90_000,
+);

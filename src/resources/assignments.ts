@@ -14,6 +14,9 @@ import type {
     IdentityVerificationImageName,
     IReviewIdentityVerificationPayload,
     ISignerIdentityReview,
+    ISignerCapacity,
+    ISignerNotificationHistory,
+    SignerCapacity,
     SignerReference,
 } from '../types';
 import { ValidationError } from '../errors';
@@ -35,6 +38,13 @@ const VERIFICATION_METHODS = new Set([
     'Bypass',
 ]);
 const NOTIFICATION_METHODS = new Set(['Email', 'Whatsapp', 'Bypass']);
+const SIGNER_CAPACITIES = new Set<SignerCapacity>([
+    'Sign', 'Approve', 'Acknowledge', 'Party', 'Witness', 'Intervening', 'Receipt',
+    'IssuerEndorserGuarantor', 'IssuerEndorserGuarantorSurety', 'Surety', 'PartySurety',
+    'JointDebtor', 'PartyJointDebtor', 'ContractingParty', 'ContractedParty',
+    'Landlord', 'Tenant', 'Buyer', 'Seller', 'AttorneyInFact', 'LegalRepresentative',
+    'Employer', 'Employee',
+]);
 /** Verification methods an `embedded` signer may use; the frame asks for no other proof. */
 const EMBEDDED_VERIFICATION_METHODS = new Set(['Email', 'Whatsapp', 'Bypass']);
 
@@ -336,10 +346,12 @@ function normaliseSignerRef(
             signer_id?: string;
             verification_method?: string;
             notification_methods?: string[];
+            sign_as?: SignerCapacity | null;
             embedded?: boolean;
             step?: number;
         };
         validateAssignmentSignerOptions(input);
+        validateSignerCapacity(input.sign_as);
         const id = input.id ?? input.signer_id;
         const normalised = cleanParams({
             id,
@@ -348,6 +360,7 @@ function normaliseSignerRef(
             embedded: input.embedded,
             step: input.step,
         });
+        if (input.sign_as !== undefined) normalised['sign_as'] = input.sign_as;
 
         if (typeof id === 'string' && id.trim().length > 0) {
             return normalised as { id: string; verification_method?: string; notification_methods?: string[] };
@@ -369,13 +382,23 @@ function normaliseEstimateSigner(signer: unknown): { verification_method?: strin
         verification_method?: unknown;
         notification_methods?: unknown;
         step?: unknown;
+        sign_as?: unknown;
     };
     validateAssignmentSignerOptions(descriptor);
-    return cleanParams({
+    validateSignerCapacity(descriptor.sign_as);
+    const normalised = cleanParams({
         verification_method: descriptor.verification_method,
         notification_methods: descriptor.notification_methods,
         step: descriptor.step,
-    }) as { verification_method?: string; step?: number };
+    });
+    if (descriptor.sign_as !== undefined) normalised['sign_as'] = descriptor.sign_as;
+    return normalised as { verification_method?: string; step?: number };
+}
+
+function validateSignerCapacity(value: unknown): void {
+    if (value !== undefined && value !== null && !SIGNER_CAPACITIES.has(value as SignerCapacity)) {
+        throw new ValidationError('sign_as must be a supported signer capacity or null');
+    }
 }
 
 export function normaliseAssignmentEntries(entries: unknown): IAssignmentEntry[] {
@@ -624,6 +647,7 @@ export class AssignmentResource extends BaseResource {
      * This route takes no `Idempotency-Key`: a document takes one assignment,
      * so a retry after a lost response answers `400` and charges nothing —
      * read the document to see whether the first request went through.
+     * @param payload.signers[].sign_as - Staging capacity printed on the certificate; omitted/null means `Sign`.
      * @returns The created {@link IAssignment}: `signers` (rich, with `step` /
      * `notified` / `verification_method`), `items` (one row per signer × field),
      * a `summary` count block, and per-signer `signing_urls`. Response shape:
@@ -769,6 +793,7 @@ export class AssignmentResource extends BaseResource {
      * `collect`-mode `entries`. Signer IDs are not part of this request. Send
      * each signer's creation `step` too: the API keeps every
      * `DigitalCertificate` signer alone in its step when it estimates.
+     * @param payload.signers[].sign_as - Optional staging capacity, validated as on creation; it does not change the cost.
      * @returns an {@link ICostEstimate} with `total_credits`, balances, a
      * line-item `breakdown`, and a `has_sufficient_resources` gate.
      * `blocking_reason` may be `PendingPayment`, `InsufficientDocuments`, or
@@ -1190,6 +1215,57 @@ export class AssignmentResource extends BaseResource {
         if (payload.note !== undefined) body.note = payload.note;
         return this.call('Failed to decide signer identity review', () =>
             this.http.post(`${path}/review`, body),
+        );
+    }
+
+    /**
+     * Read the capacity each signer signs in (`GET /documents/{documentId}/signer-capacities`).
+     *
+     * Staging extension. Order matches the assignment's signers; an unsent
+     * document returns an empty list. OAuth applications need `documents:read`.
+     * @param documentId - Workspace document ID.
+     * @returns Sender-stated capacities, defaulting to `Sign`:
+     * ```jsonc
+     * [{ "signer_id": "signer-1", "sign_as": "Witness" }]
+     * ```
+     * @throws {ValidationError} If the document ID is invalid.
+     * @throws {ApiError} `401`, `403`, or `404` for an unknown document or an older deployment.
+     * @example
+     * ```ts
+     * const capacities = await client.assignments.getSignerCapacities(document.id);
+     * ```
+     */
+    async getSignerCapacities(documentId: string): Promise<ISignerCapacity[]> {
+        return this.call('Failed to fetch signer capacities', () =>
+            this.http.get(`/documents/${this.pathSegment(documentId, 'Document ID')}/signer-capacities`),
+        );
+    }
+
+    /**
+     * Read delivery and open times (`GET /documents/{documentId}/notification-history`).
+     *
+     * Staging extension. An open can come from a mail scanner; it is not proof
+     * of human reading. An unsent document returns `[]`. Needs `documents:read`.
+     * @param documentId - Workspace document ID.
+     * @returns History in assignment-signer order:
+     * ```jsonc
+     * [{ "signer_id": "signer-1", "notification_history": [{
+     *   "event": "signature_request", "status": "delivered",
+     *   "error_code": null, "error_message": null,
+     *   "sent_at": "2026-11-24T12:00:00Z", "failed_at": null,
+     *   "delivered_at": "2026-11-24T12:00:05Z", "opened_at": null
+     * }] }]
+     * ```
+     * @throws {ValidationError} If the document ID is invalid.
+     * @throws {ApiError} `401`, `403`, or `404` for an unknown document or an older deployment.
+     * @example
+     * ```ts
+     * const history = await client.assignments.getNotificationHistory(document.id);
+     * ```
+     */
+    async getNotificationHistory(documentId: string): Promise<ISignerNotificationHistory[]> {
+        return this.call('Failed to fetch notification history', () =>
+            this.http.get(`/documents/${this.pathSegment(documentId, 'Document ID')}/notification-history`),
         );
     }
 

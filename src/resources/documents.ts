@@ -20,6 +20,7 @@ import type {
     IPublicDocumentInfo,
     IRenameDocumentResponse,
     ISigningProgress,
+    ISigner,
     ITag,
     ITemplateCostSigner,
     ITemplateSigner,
@@ -1456,6 +1457,68 @@ export class DocumentResource extends BaseResource {
         const pending = Math.max(total - signed, 0);
         const percentage = total > 0 ? Math.round((signed / total) * 10_000) / 100 : 0;
         return { signed, total, pending, percentage };
+    }
+
+    /**
+     * List contacts watching a document (`GET /documents/{documentId}/watchers`).
+     *
+     * Staging extension. Returns contacts in the order set, omitting deleted
+     * contacts. API key or user token only; OAuth application tokens are refused.
+     * @param documentId - Workspace document ID.
+     * @returns Watcher contacts:
+     * ```jsonc
+     * [{ "resource": "signer", "id": "signer-1", "full_name": "Example Watcher",
+     *    "email": "watcher@example.com", "whatsapp_phone_number": null,
+     *    "government_id": null, "has_accepted_terms": false }]
+     * ```
+     * @throws {ValidationError} If the document ID is invalid.
+     * @throws {ApiError} `401`, `403`, or `404` for an unknown document or older deployment.
+     * @example
+     * ```ts
+     * const watchers = await client.documents.listWatchers(document.id);
+     * ```
+     */
+    async listWatchers(documentId: string): Promise<ISigner[]> {
+        return this.call('Failed to list document watchers', () =>
+            this.http.get(`/documents/${this.pathSegment(documentId, 'Document ID')}/watchers`),
+        );
+    }
+
+    /**
+     * Replace a document's watchers (`PUT /documents/{documentId}/watchers`).
+     *
+     * Staging extension. Each contact must belong to the workspace and have an
+     * email. Watchers get one queued email when the document ends, without a
+     * document link or file. Workspace notification preferences do not suppress
+     * it. Set before sending or while open; `[]` removes every watcher.
+     * API key or user token only; OAuth application tokens are refused.
+     * @param documentId - Workspace document ID.
+     * @param watcherIds - Up to ten contact IDs; duplicate IDs count once.
+     * @returns The stored contacts:
+     * ```jsonc
+     * [{ "resource": "signer", "id": "signer-1", "full_name": "Example Watcher",
+     *    "email": "watcher@example.com", "whatsapp_phone_number": null,
+     *    "government_id": null, "has_accepted_terms": false }]
+     * ```
+     * @throws {ValidationError} If an ID is invalid or more than ten distinct watchers are supplied.
+     * @throws {ApiError} `400` for a closed document or invalid contact; `401`, `403`, `404`.
+     * @example
+     * ```ts
+     * await client.documents.setWatchers(document.id, [contact.id]);
+     * // body: { watcher_ids: [contact.id] }
+     * ```
+     */
+    async setWatchers(documentId: string, watcherIds: string[]): Promise<ISigner[]> {
+        if (!Array.isArray(watcherIds)
+            || watcherIds.some((id) => typeof id !== 'string' || !id.trim())
+            || new Set(watcherIds).size > 10) {
+            throw new ValidationError('watcherIds must contain at most ten distinct non-empty contact IDs');
+        }
+        return this.call('Failed to set document watchers', () =>
+            this.http.put(`/documents/${this.pathSegment(documentId, 'Document ID')}/watchers`, {
+                watcher_ids: watcherIds,
+            }),
+        );
     }
 }
 

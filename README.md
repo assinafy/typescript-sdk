@@ -10,6 +10,10 @@ O SDK mapeia as 147 operações do OpenAPI publicado (146 com métodos; a troca 
 pela API. A referência completa, com payloads, respostas, erros e exemplos de cada recurso, está no
 **[manual em português](docs/README.md)**.
 
+Staging também oferece dez operações adicionais para agendamentos, observadores, qualificação
+dos signatários, histórico de notificações e estimativa de lembretes de envelopes; veja o
+[mapa de cobertura](docs/API_COVERAGE.md).
+
 ## Requisitos
 
 - Node.js 22+ ou Bun 1.4.4
@@ -100,6 +104,8 @@ O [manual de configuração](docs/README.md#configuração) explica retentativas
 5. Entregue a URL de assinatura, ou exiba a tela de assinatura dentro do seu app com
    `client.embed`, e valide os webhooks antes de processar eventos.
 6. Acompanhe a conclusão e baixe o documento assinado ou o certificado.
+7. Gerencie termos com `client.contracts`; em staging, agende com
+   `client.scheduledSends` e acompanhe o estado `pending`, `sent` ou `failed`.
 
 WhatsApp, biometria com documento e face, certificado digital ICP-Brasil e a verificação `Bypass`
 (habilitada por conta) têm pré-requisitos específicos; `workspaces.get(id, { expand:
@@ -115,6 +121,7 @@ signatário no navegador. Consulte os [ramos de assinatura](docs/README.md#ramos
 | `client.assignments` | Solicitações, custos, notificações e revisão de identidade |
 | `client.envelopes` | Vários documentos aos mesmos signatários, um convite e uma cobrança |
 | `client.embed` | Origens e sessões de uso único para assinar dentro do seu app |
+| `client.scheduledSends` | Assignments e envelopes agendados (staging) |
 | `client.contracts` | Termos, famílias, renovação e encerramento de contratos |
 | `client.templates`, `client.tags`, `client.fields` | Conteúdo reutilizável e campos |
 | `client.workspaces`, `client.users` | Workspace, tema, uso do plano, política de notificações, preferências e MFA/TOTP |

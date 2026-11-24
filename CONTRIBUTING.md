@@ -11,10 +11,10 @@ Use the versions exercised by automation:
 
 | Runtime | Role |
 | --- | --- |
-| Bun 1.4.0 | Package manager, test runner, and primary development runtime |
+| Bun 1.4.4 | Package manager, test runner, and primary development runtime |
 | Node.js 22 | Minimum supported Node.js major |
-| Node.js 24 | LTS build and release runtime |
-| Node.js 26 | Current-release compatibility target |
+| Node.js 24 | GitLab build runtime and maintenance LTS compatibility target |
+| Node.js 26 | GitHub build and release runtime (active LTS) |
 
 Install from the committed Bun lockfile:
 
@@ -26,7 +26,7 @@ bun install --frozen-lockfile
 generated `dist`, coverage, log, archive, or environment files.
 
 `bun run typecheck` invokes the native TypeScript 7 compiler for the library,
-maintainer scripts, and tests. The TypeScript 6 package remains available only
+and tests. The TypeScript 6 package remains available only
 for tools that have not yet adopted the native compiler API; do not substitute
 its `tsc` binary for the canonical typecheck gate.
 
@@ -43,8 +43,8 @@ The scripts have the following responsibilities:
 
 | Command | Checks |
 | --- | --- |
-| `bun run typecheck` | Library, script, and test TypeScript projects |
-| `bun run lint` | SDK and maintainer scripts, with zero warnings allowed |
+| `bun run typecheck` | Library and test TypeScript projects |
+| `bun run lint` | SDK and contract tests, with zero warnings allowed |
 | `bun run test:coverage` | Unit and contract tests plus coverage thresholds |
 | `bun run build` | CJS, ESM, and declaration outputs |
 | `bun run lint:pkg` | Packed exports, declarations, and consumer compatibility |
@@ -86,8 +86,10 @@ contributor's uncommitted work.
 
 ## Live tests
 
-Unit tests are the default. Live tests are an additional verification step and
-must use a dedicated account with short-lived credentials:
+Unit tests are the default. Live tests use local, gitignored `scripts/` utilities
+that maintainers supply separately; they are absent from a clean checkout.
+The required `scripts/node-consumer-smoke.mjs` CI runner remains tracked.
+Use a dedicated account with short-lived credentials:
 
 ```sh
 ASSINAFY_API_KEY='...' \

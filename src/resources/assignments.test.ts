@@ -10,6 +10,36 @@ import type { AxiosInstance } from 'axios';
 import type { ISignerIdentityReview } from '../types';
 import { recordingHttp } from '../testing/recording-http';
 
+describe('assignment capacities and notification history', () => {
+    test('preserves capacities on both create and estimate without changing their price descriptors', () => {
+        for (const sign_as of ['Witness', 'Sign', null] as const) {
+            expect(buildAssignmentPayload({ signers: [{ id: 's', sign_as }] })['signers']).toEqual([{ id: 's', sign_as }]);
+            expect(buildAssignmentEstimatePayload({ signers: [{ sign_as }] })['signers']).toEqual([{ sign_as }]);
+        }
+        for (const sign_as of ['', 'witness', ['Sign'], 1, {}]) {
+            expect(() => buildAssignmentPayload({ signers: [{ id: 's', sign_as: sign_as as never }] })).toThrow(ValidationError);
+            expect(() => buildAssignmentEstimatePayload({ signers: [{ sign_as: sign_as as never }] })).toThrow(ValidationError);
+        }
+    });
+
+    test('reads capacities and detailed delivery history without dropping timestamps', async () => {
+        const response = [{ signer_id: 's', sign_as: 'Witness', notification_history: [{
+            event: 'signature_request', status: 'delivered', error_code: null, error_message: null,
+            sent_at: '2026-11-24T12:00:00Z', failed_at: null, delivered_at: '2026-11-24T12:00:01Z', opened_at: null,
+        }] }];
+        const { http, calls } = recordingHttp(response);
+        const resource = new AssignmentResource(http);
+        expect(await resource.getSignerCapacities('doc/1')).toEqual(response);
+        expect(await resource.getNotificationHistory('doc/1')).toEqual(response);
+        expect(calls.map(({ url }) => url)).toEqual([
+            '/documents/doc%2F1/signer-capacities', '/documents/doc%2F1/notification-history',
+        ]);
+        await expect(resource.getSignerCapacities('')).rejects.toBeInstanceOf(ValidationError);
+        await expect(resource.getNotificationHistory('..')).rejects.toBeInstanceOf(ValidationError);
+        expect(calls).toHaveLength(2);
+    });
+});
+
 describe('AssignmentResource identity verification', () => {
     const review: ISignerIdentityReview = {
         id: 'verification-1', status: 'InReview', provider: 'AssinafyVerify',

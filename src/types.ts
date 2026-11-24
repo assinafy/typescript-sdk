@@ -49,7 +49,7 @@ export type AssignmentMethod = 'virtual' | 'collect';
  * | --- | --- | --- | --- |
  * | `Email` | One-time code sent by e-mail (the default). | An `email`. | 0 credits |
  * | `Whatsapp` | One-time code sent over WhatsApp. | A `whatsapp_phone_number`; paid plan. | 0.45 credits |
- * | `DigitalCertificate` | The signer signs with their own ICP-Brasil certificate — **A1** (software, a file on the machine) or **A3** (hardware, a token or smartcard) — through the Web PKI browser extension, producing a qualified PAdES signature. | `method: 'virtual'`; Digital Certificate feature (Standard/Pro); `government_id`; the signer must be alone in their signing step. | 0.5 credits + notification |
+ * | `DigitalCertificate` | The signer signs with their own ICP-Brasil certificate — **A1** (software, a file on the machine) or **A3** (hardware, a token or smartcard) — through the Web PKI browser extension, producing a qualified PAdES signature. | `method: 'virtual'`; Digital Certificate feature (Standard/Pro); `government_id`; the signer must be alone in their signing step. | Use the current cost estimate |
  * | `IdDocumentFaceMatchBasic` | Hosted identity-document and face verification, with explicit biometric consent. | ID Document + Face Match feature; valid CPF in `government_id`; account approval for any `InReview` result before certification. | Use cost estimation for current pricing. |
  * | `Bypass` | No verification code. Enabled per account by Assinafy (`signing_features.VerificationBypass`); typically for `embedded` signers your app has already authenticated. | The Verification Bypass feature (`403 PlanRestricted` otherwise). | Notification only. |
  *
@@ -306,18 +306,20 @@ export interface IConfirmSignerDataPayload {
 /** @deprecated Identical to {@link IConfirmSignerDataPayload}; kept for existing imports. */
 export type ILegacyConfirmSignerDataPayload = IConfirmSignerDataPayload;
 
-/** Official options for uploading the PNG signature image described by OpenAPI. */
+/** Options for uploading a signature image; staging also supports JPEG. */
 export interface IUploadSignatureOptions {
     imageType?: SignatureImageType;
+    /** Raw image media type; defaults to image/png. */
+    contentType?: 'image/png' | 'image/jpeg';
     /** Persist this image so it is reused on future documents. */
     reuse?: boolean;
 }
 
 /** Source-compatible options for older deployments that accepted other media types. */
-export interface ILegacyUploadSignatureOptions extends IUploadSignatureOptions {
+export interface ILegacyUploadSignatureOptions extends Omit<IUploadSignatureOptions, 'contentType'> {
     /**
-     * @deprecated The current API contract accepts only `image/png`. Non-PNG
-     * values are retained as a compatibility escape hatch.
+     * @deprecated Use IUploadSignatureOptions for PNG/JPEG. Other media types
+     * remain a compatibility escape hatch for older deployments.
      */
     contentType?: string;
 }
@@ -345,6 +347,20 @@ export type IPaginatedResponse<T> = PaginatedResult<T>;
 /** Paginated signer-list response. */
 export type ISignerListResponse = PaginatedResult<ISigner>;
 
+/** Sender-stated capacity printed on the certificate page; available on staging. */
+export type SignerCapacity =
+    | 'Sign' | 'Approve' | 'Acknowledge' | 'Party' | 'Witness' | 'Intervening' | 'Receipt'
+    | 'IssuerEndorserGuarantor' | 'IssuerEndorserGuarantorSurety' | 'Surety' | 'PartySurety'
+    | 'JointDebtor' | 'PartyJointDebtor' | 'ContractingParty' | 'ContractedParty'
+    | 'Landlord' | 'Tenant' | 'Buyer' | 'Seller' | 'AttorneyInFact' | 'LegalRepresentative'
+    | 'Employer' | 'Employee';
+
+/** Capacity stated by the sender; returned separately from the assignment. */
+export interface ISignerCapacity {
+    signer_id: string;
+    sign_as: SignerCapacity | AnyString;
+}
+
 /** Signer reference accepted by the assignment endpoints. */
 export type SignerReference =
     | string
@@ -354,6 +370,8 @@ export type SignerReference =
           /** `DigitalCertificate` is valid only when the assignment method is `virtual`. */
           verification_method?: AssignmentVerificationMethod;
           notification_methods?: AssignmentNotificationMethod[];
+          /** Capacity printed on the certificate; omitted or null means plain signing. */
+          sign_as?: SignerCapacity | null;
           /**
            * Sign inside your app through `embed.createSession()`: the signer gets
            * no link in `signing_urls`. Needs the Embed feature and `Email`,
@@ -446,6 +464,8 @@ export interface IAssignmentEntry {
 export interface IAssignmentCostSigner {
     verification_method?: AssignmentVerificationMethod;
     notification_methods?: AssignmentNotificationMethod[];
+    /** Validated as on creation; does not change the price. */
+    sign_as?: SignerCapacity | null;
     /** The signer's signing step at creation; each `DigitalCertificate` signer needs its own. */
     step?: number;
 }
@@ -504,6 +524,50 @@ export interface INotificationHistoryEntry {
     error_message: string | null;
     sent_at: string | null;
     failed_at: string | null;
+}
+
+/** Delivery timestamps returned by `assignments.getNotificationHistory()`. */
+export interface ISignerNotificationHistory {
+    signer_id: string;
+    notification_history: Array<INotificationHistoryEntry & {
+        delivered_at: string | null;
+        /** A delivery-provider hint, not proof that a person read the message. */
+        opened_at: string | null;
+    }>;
+}
+
+/** A queued assignment or envelope; creation itself sends and charges nothing. */
+export interface IScheduledSend {
+    resource?: string;
+    id: string;
+    type: 'assignment' | 'envelope';
+    document_ids: string[];
+    status: 'pending' | 'processing' | 'sent' | 'cancelled' | 'failed';
+    send_at: string;
+    assignment_id: string | null;
+    envelope_id: string | null;
+    failure_reason: string | null;
+    created_at: string;
+    processed_at: string | null;
+}
+
+/** An assignment request plus a send time from one hour to 90 days ahead. */
+export interface IScheduleAssignmentPayload extends Omit<ICreateAssignmentPayload, 'expires_at'> {
+    /** ISO date-time (no offset means UTC) or Unix seconds. */
+    send_at: string | number;
+    /** Absolute deadline at least two hours after send_at; null means no deadline. */
+    expires_at?: string | number | null;
+}
+
+/** An envelope request plus its deferred send time. No Idempotency-Key is supported. */
+export interface IScheduleEnvelopePayload extends ICreateEnvelopePayload {
+    /** ISO date-time (no offset means UTC) or Unix seconds, one hour to 90 days ahead. */
+    send_at: string | number;
+}
+
+/** Filters for scheduled sends; listing requires documents:write for OAuth apps. */
+export interface IScheduledSendListParams extends Pick<IListParams, 'page' | 'per-page' | 'per_page'> {
+    document_id?: string;
 }
 
 /** A placed field/item within an assignment (one row per signer × field). */

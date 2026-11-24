@@ -93,6 +93,7 @@ export class EmbedResource extends BaseResource {
      *
      * @param originId - Embed origin ID.
      * @param accountId - Override the client's default account ID.
+     * @returns Nothing; the acknowledgement body is discarded.
      * @throws {ValidationError} If an ID is missing or invalid.
      * @throws {ApiError} `403`, or `404` for an unknown origin ID.
      *

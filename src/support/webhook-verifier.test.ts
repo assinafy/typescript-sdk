@@ -102,6 +102,8 @@ describe('WebhookVerifier.verifySignature (Standard Webhooks)', () => {
         const valid = sign('msg_1', ts, body);
         expect(verifier.verifySignature(body, headersFor(ts, `${valid}!!!`))).toBe(false);
         expect(verifier.verifySignature(body, headersFor(ts, `${valid}=junk`))).toBe(false);
+        expect(verifier.verifySignature(body, headersFor(ts, `${valid},junk`))).toBe(false);
+        expect(verifier.verifySignature(body, headersFor(ts, `${valid},`))).toBe(false);
         expect(verifier.verifySignature(body, headersFor(ts, valid))).toBe(true);
     });
 

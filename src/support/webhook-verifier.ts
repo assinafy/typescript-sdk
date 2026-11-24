@@ -86,8 +86,8 @@ export class WebhookVerifier {
             .update(payload)
             .digest();
         return signatures.split(' ').some((entry) => {
-            const [version, signature] = entry.split(',', 2);
-            if (version !== 'v1' || !signature) return false;
+            const [version, signature, extra] = entry.split(',');
+            if (version !== 'v1' || !signature || extra !== undefined) return false;
             const actual = Buffer.from(signature, 'base64');
             // Node's decoder skips junk characters; accept only the canonical encoding.
             if (actual.toString('base64') !== signature) return false;

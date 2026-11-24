@@ -30,6 +30,7 @@ import { UserResource } from './resources/users';
 import { ContractResource } from './resources/contracts';
 import { EnvelopeResource } from './resources/envelopes';
 import { EmbedResource } from './resources/embed';
+import { ScheduledSendResource } from './resources/scheduled-sends';
 import { WebhookVerifier } from './support/webhook-verifier';
 import { SDK_USER_AGENT, withoutCredentials } from './support/transport';
 
@@ -90,6 +91,7 @@ export class AssinafyClient {
     public readonly contracts: ContractResource;
     public readonly envelopes: EnvelopeResource;
     public readonly embed: EmbedResource;
+    public readonly scheduledSends: ScheduledSendResource;
     public readonly webhookVerifier: WebhookVerifier;
 
     /**
@@ -231,6 +233,7 @@ export class AssinafyClient {
         );
         this.envelopes = new EnvelopeResource(this.axiosInstance, this.defaultAccountId, this.logger);
         this.embed = new EmbedResource(this.axiosInstance, this.defaultAccountId, this.logger);
+        this.scheduledSends = new ScheduledSendResource(this.axiosInstance, this.defaultAccountId, this.logger);
         this.webhookVerifier = new WebhookVerifier(this.webhookSecret);
     }
 

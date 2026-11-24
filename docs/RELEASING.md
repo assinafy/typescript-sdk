@@ -12,8 +12,8 @@ accept the package.
 | --- | --- |
 | Bun 1.4.4 | Locked install, tests, build, contract checks, and packaging |
 | Node.js 22 | Minimum supported consumer runtime |
-| Node.js 24 LTS | Packaging and registry publishing runtime |
-| Node.js 26 LTS | Forward-compatibility consumer test |
+| Node.js 24 LTS | GitLab verification and consumer compatibility |
+| Node.js 26 LTS | GitHub packaging, registry publishing and consumer compatibility |
 
 Keep this table, `package.json`, GitLab CI, and the GitHub workflows synchronized
 when changing runtime support.
@@ -74,7 +74,9 @@ deleting the same pattern to the mirror/release maintainers. Protect the GitHub
    bun run audit:api
    ```
 
-5. For API changes, run the sandbox smoke script against a dedicated account.
+5. For API changes, run the local sandbox smoke utility against a dedicated account.
+   The gitignored live-test utilities are supplied separately by maintainers;
+   the required `scripts/node-consumer-smoke.mjs` CI runner remains tracked.
    Start read-only:
 
    ```sh

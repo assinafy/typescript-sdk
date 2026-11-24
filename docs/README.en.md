@@ -344,6 +344,95 @@ const client = AssinafyClient.fromConfig({
 The configuration object accepted by `fromConfig` has the exported type
 `ClientConfigInput`.
 
+## Scheduled sends and document notifications (staging)
+
+These operations require a deployment that publishes them. Configure its API
+URL through `baseUrl`; the SDK never changes environments on a refusal.
+
+```ts
+const scheduled = await client.scheduledSends.createAssignment(document.id, {
+  method: 'virtual',
+  signers: [{ id: signer.id, sign_as: 'Witness', verification_method: 'Email',
+    notification_methods: ['Email'] }],
+  send_at: new Date(Date.now() + 86_400_000).toISOString(),
+  expires_at: null,
+  max_total_credits: 0,
+});
+```
+
+The request is the ordinary assignment body plus `send_at`. Its response is:
+
+```json
+{
+  "resource": "scheduled_send", "id": "send-1", "type": "assignment",
+  "document_ids": ["doc-1"], "status": "pending",
+  "send_at": "2026-12-01T12:00:00Z", "assignment_id": null,
+  "envelope_id": null, "failure_reason": null,
+  "created_at": "2026-11-30T12:00:00Z", "processed_at": null
+}
+```
+
+`send_at` accepts ISO date-time or Unix seconds, one hour to 90 days ahead.
+An offset-free value means UTC. An expiration must be at least two hours after
+the send time. Scheduling sends and charges nothing; execution rechecks the
+request, plan and balance. The server checks due requests every five minutes.
+`sign_as` records the sender's stated capacity on the certificate page only;
+omitting it or sending `null` means `Sign`. It does not change verification.
+
+```ts
+const page = await client.scheduledSends.list({ document_id: document.id });
+await client.scheduledSends.cancel(scheduled.id); // pending → cancelled
+// Alternatively: await client.scheduledSends.sendNow(scheduled.id);
+const envelopeSend = await client.scheduledSends.createEnvelope({
+  name: 'Agreement', signers: [{ id: signer.id }],
+  documents: [{ id: otherDocument.id, signer_ids: [signer.id] }],
+  send_at: new Date(Date.now() + 86_400_000).toISOString(),
+  max_total_credits: 0,
+});
+```
+
+All five methods, including listing, require OAuth `documents:write`.
+`list()` returns `{ data: IScheduledSend[], meta }`. Cancellation and immediate
+dispatch return the same state object, with `processed_at` and the created
+`assignment_id` or `envelope_id` when sent. A refused immediate dispatch leaves
+the request pending; cancel it to stop its future attempt. A failed scheduled
+execution records `failure_reason`. Mutations have no automatic retry or
+idempotency key; read the state after a lost response before acting again.
+
+```ts
+await client.documents.setWatchers(document.id, [contact.id]);
+const watchers = await client.documents.listWatchers(document.id);
+await client.documents.setWatchers(document.id, []); // clear
+const capacities = await client.assignments.getSignerCapacities(document.id);
+const history = await client.assignments.getNotificationHistory(document.id);
+const reminder = await client.envelopes.estimateResendCost(envelope.id, signer.id);
+```
+
+Watcher writes send `{ "watcher_ids": ["contact-1"] }`; reads and writes return
+`ISigner[]`. Up to ten distinct workspace contacts with email receive terminal
+notifications without a document link or attachment. Configure them before
+sending or while the document is open. These routes require an API key or user
+token; OAuth application tokens cannot manage watchers.
+
+Capacities return `[{ "signer_id": "signer-1", "sign_as": "Witness" }]`.
+Notification history returns one `{ signer_id, notification_history }` per
+signer; each history entry contains `event`, `status`, nullable `error_code`,
+`error_message`, `sent_at`, `failed_at`, `delivered_at` and `opened_at`. Times
+are ISO strings or null. Opens may be mail scanners, not human reading.
+Both reads require `documents:read` and return `[]` for an unsent document.
+Reminder estimates require `documents:write` and return
+`{ total, breakdown, credit_balance, has_sufficient_credits }` without sending
+or checking the cooldown. See each method's JSDoc for full typed examples and
+HTTP errors. Staging also accepts raw JPEG signature images using
+`uploadSignature(code, bytes, { contentType: 'image/jpeg' })`; PNG remains the default.
+
+Signer refusals expose `ApiError.code`: `SignerDataUnconfirmed`,
+`EmailVerificationRequired`, `WhatsappVerificationRequired`,
+`DigitalCertificateRequired` and `IdentityVerificationRequired` identify the
+missing signing step. Complete that step through the appropriate signer flow.
+Email token requests can return `429` during a two-minute cooldown; inspect
+`error.rateLimit.retryAfter` and do not loop on the send operation.
+
 ## Endpoint coverage
 
 All 147 operations documented at https://api.assinafy.com.br/v1/docs are
@@ -353,11 +442,12 @@ ledger is in [API_COVERAGE.md](API_COVERAGE.md).
 
 | Resource              | Endpoints                                                                                                                                                                                                                                          |
 | --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `client.documents`    | list, **search**, upload, details, get, **rename**, activities, listActivities, waitUntilReady, download, thumbnail, downloadPage, statuses, delete, verify, createFromTemplate, estimateCostFromTemplate, getPublic, sendToken, listTags, replaceTags, addTags, detachTag, isFullySigned, getSigningProgress |
+| `client.documents`    | list, **search**, upload, details, get, **rename**, activities, listActivities, waitUntilReady, download, thumbnail, downloadPage, statuses, delete, verify, createFromTemplate, estimateCostFromTemplate, getPublic, sendToken, listTags, replaceTags, addTags, detachTag, isFullySigned, getSigningProgress, listWatchers, setWatchers |
 | `client.signers`      | create, get, list, update, delete, findByEmail                                                                                                                                                                                                     |
-| `client.assignments`  | list, create, estimateCost, resetExpiration, resendNotification, estimateResendCost, listWhatsAppNotifications, getIdentityVerification, downloadIdentityVerificationImage, reviewIdentityVerification                                                                                                                                  |
+| `client.assignments`  | list, create, estimateCost, resetExpiration, resendNotification, estimateResendCost, listWhatsAppNotifications, getIdentityVerification, downloadIdentityVerificationImage, reviewIdentityVerification, getSignerCapacities, getNotificationHistory |
+| `client.scheduledSends` | createAssignment, createEnvelope, list, cancel, sendNow |
 | `client.contracts`    | list, get, set, listRelated, renew, terminate |
-| `client.envelopes`    | list, get, create, estimateCost, update, delete, cancel, listActivities, download, addDocument, removeDocument, resendNotification |
+| `client.envelopes`    | list, get, create, estimateCost, update, delete, cancel, listActivities, download, addDocument, removeDocument, resendNotification, estimateResendCost |
 | `client.embed`        | listOrigins, addOrigin, updateOrigin, deleteOrigin, createSession |
 | `client.templates`    | create, list, get, update, delete, downloadPage                                                                                                                                                                                        |
 | `client.tags`         | list, create, update, delete                                                                                                                                                                                                                       |
@@ -935,7 +1025,7 @@ await client.signers.get(signerId);
 await client.signers.list({ page: 1, 'per-page': 50, search: 'signer' });
 await client.signers.update(signerId, {
   full_name: 'Updated Signer',
-  government_id: '390.533.447-05', // official update field; sent as digits
+  government_id: '390.533.447-05', // sent unchanged; the API normalizes formatting
 });
 await client.signers.delete(signerId);
 
@@ -1042,7 +1132,7 @@ to `Email`.
 | --- | --- | --- | --- |
 | `Email` *(default)* | One-time code (OTP) by email | `Email` | Free |
 | `Whatsapp` | One-time code (OTP) by WhatsApp | `Whatsapp` | 0.45 credit (the notification), paid plans only |
-| `DigitalCertificate` | The signer signs with their **own ICP-Brasil certificate — A1 or A3 —** through the Web PKI extension, producing a **qualified PAdES signature**; requires `method: 'virtual'` | `Email` **or** `Whatsapp` (or `Bypass`) | 0.5 credits + the notification |
+| `DigitalCertificate` | The signer signs with their **own ICP-Brasil certificate — A1 or A3 —** through the Web PKI extension, producing a **qualified PAdES signature**; requires `method: 'virtual'` | `Email` **or** `Whatsapp` (or `Bypass`) | Use the current estimate |
 | `IdDocumentFaceMatchBasic` | Hosted identity-document, face and liveness verification | `Email` **or** `Whatsapp` (or `Bypass`) | Use `estimateCost()` |
 | `Bypass` | No code: your app has already authenticated the signer. Enabled per account by Assinafy | `Email`, `Whatsapp` **or** `Bypass` (sends no invitation) | The notification |
 
@@ -1098,8 +1188,8 @@ forward them outside the signing flow.
 `DigitalCertificate` requires `method: 'virtual'`, the account feature, a CPF
 or CNPJ in the signer's `government_id`, and exactly one certificate signer in
 that signing step. Estimates take the same `step` as creation: with two or
-more certificate signers, give each its own step in both calls. It costs 0.5
-credits per certificate signer in addition to the selected notification cost. A certificate flow completes the signer's
+more certificate signers, give each its own step in both calls. The price depends on the workspace and deployment; call `estimateCost()`
+and use its `total_credits` as `max_total_credits` when creating the request. A certificate flow completes the signer's
 virtual item; it cannot submit placed fields through the ordinary `collect`
 signing endpoint.
 

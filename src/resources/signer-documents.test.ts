@@ -4,6 +4,7 @@ import { SignerDocumentsResource } from './signer-documents';
 import { ValidationError } from '../errors';
 import type {
     IAcceptTermsResult,
+    IUploadSignatureOptions,
     ISigningDocument,
     IDocumentListResponse,
     ISigner,
@@ -393,12 +394,12 @@ describe('SignerDocumentsResource — signer-access-code query auth', () => {
         expect(result).toBeUndefined();
     });
 
-    test('uploadSignature retains the deprecated content-type pass-through', async () => {
+    test('uploadSignature sends the typed JPEG media type', async () => {
         const { http, calls } = mockHttp();
         await new SignerDocumentsResource(http).uploadSignature(
             'code-xyz',
             Buffer.from([1, 2, 3]),
-            { contentType: 'image/jpeg' },
+            { contentType: 'image/jpeg' } satisfies IUploadSignatureOptions,
         );
         expect(calls[0]?.config).toEqual({
             params: { 'signer-access-code': 'code-xyz', type: 'signature' },

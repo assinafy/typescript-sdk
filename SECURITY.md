@@ -69,8 +69,10 @@ opportunity to upgrade.
   JSON only after verification. The default five-minute timestamp tolerance
   blocks replayed deliveries; keep the receiver clock synchronized. Rotate the
   secret with `webhooks.rotateEndpointSecret()` when it may have leaked —
-  rotation is immediate and the secret/rotate routes accept an API key only,
-  not OAuth tokens. See `docs/COMPATIBILITY.md`.
+  rotation is immediate by default. Readback requires an API key; OAuth
+  applications with `webhooks:write` can rotate and receive the new secret.
+  For planned rotation, `{ keep_previous: true }` signs with both secrets for
+  24 hours; omit it when the previous secret may be compromised. See `docs/COMPATIBILITY.md`.
 - Dependency changes must keep `bun.lock` synchronized and pass `bun run audit`.
   GitHub Actions are pinned to immutable commit SHAs and updated through
   Dependabot review.

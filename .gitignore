@@ -19,3 +19,8 @@ SHA256SUMS
 # are intentionally not part of the published package or the git history.
 AGENTS.md
 CLAUDE.md
+
+# Local maintenance and live-test utilities.
+/scripts/*
+!/scripts/node-consumer-smoke.mjs
+tsconfig.scripts.json

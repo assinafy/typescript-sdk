@@ -27,6 +27,7 @@ export { UserResource } from './resources/users';
 export { ContractResource } from './resources/contracts';
 export { EnvelopeResource } from './resources/envelopes';
 export { EmbedResource } from './resources/embed';
+export { ScheduledSendResource } from './resources/scheduled-sends';
 export { WebhookVerifier } from './support/webhook-verifier';
 export type { WebhookHeaders } from './support/webhook-verifier';
 /** Parsed `WWW-Authenticate` challenge exposed on {@link ApiError.challenge}. */

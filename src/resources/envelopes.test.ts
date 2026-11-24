@@ -90,6 +90,27 @@ const payload: ICreateEnvelopePayload = {
 };
 
 describe('EnvelopeResource', () => {
+    test('keeps empty collect pages alongside pages with signer fields', async () => {
+        const { resource, calls } = mockHttp();
+        const request = structuredClone(payload);
+        request.documents[0]!.entries!.push({ page_id: 'page-2', fields: [] });
+        await resource.create(request);
+        expect((calls[0]?.body as ICreateEnvelopePayload).documents[0]?.entries?.at(-1))
+            .toEqual({ page_id: 'page-2', fields: [] });
+    });
+
+    test('estimates one whole-envelope reminder without sending it', async () => {
+        const estimate = { total: 0, breakdown: [], credit_balance: null, has_sufficient_credits: true };
+        const { resource, calls } = mockHttp(estimate);
+        expect(await resource.estimateResendCost('env/1', 'signer/1', 'other')).toEqual(estimate);
+        expect(calls).toEqual([{
+            method: 'POST', url: '/accounts/other/envelopes/env%2F1/signers/signer%2F1/estimate-resend-cost',
+            body: undefined, config: undefined,
+        }]);
+        await expect(resource.estimateResendCost('', 's')).rejects.toBeInstanceOf(ValidationError);
+        await expect(resource.estimateResendCost('e', '..')).rejects.toBeInstanceOf(ValidationError);
+        expect(calls).toHaveLength(1);
+    });
     test('create sends the documented body and the Idempotency-Key header', async () => {
         const { resource, calls } = mockHttp();
         const result = await resource.create(payload, { idempotencyKey: 'key-1' });

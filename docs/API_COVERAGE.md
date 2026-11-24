@@ -3,7 +3,8 @@
 This ledger maps the official
 [`GET /v1/docs/openapi.json`](https://api.assinafy.com.br/v1/docs/openapi.json)
 contract to the public SDK API: 112 paths, 147 HTTP operations, and 62 component
-schemas.
+schemas. Staging additionally publishes 10 operations (120 paths, 157 operations,
+63 schemas); those methods require a deployment that serves them.
 
 All paths below include the `/v1` prefix shown by the OpenAPI document, except
 the RFC 8615 `.well-known` document, which is served at the host root. The
@@ -13,6 +14,7 @@ the corresponding relative path without repeating that prefix.
 Status meanings:
 
 - **Covered** — a public, typed SDK method sends the operation.
+- **Covered (staging)** — typed method for an operation currently published on staging.
 - **Not exposed** — official route the API reserves for Assinafy's own pages;
   integrations must not call it.
 - **Compatibility extension** — route retained for existing integrations but
@@ -321,3 +323,18 @@ interfaces and each method's JSDoc examples together with the
 [official API reference](https://api.assinafy.com.br/v1/docs). Deployment
 variants that require compatibility handling are recorded in
 [COMPATIBILITY.md](COMPATIBILITY.md).
+
+## Additional staging operations — 10/10
+
+| Method | Path | SDK method | Status |
+| --- | --- | --- | --- |
+| `GET` | `/v1/documents/{documentId}/signer-capacities` | `client.assignments.getSignerCapacities(documentId)` | Covered (staging) |
+| `GET` | `/v1/documents/{documentId}/notification-history` | `client.assignments.getNotificationHistory(documentId)` | Covered (staging) |
+| `GET` | `/v1/documents/{documentId}/watchers` | `client.documents.listWatchers(documentId)` | Covered (staging) |
+| `PUT` | `/v1/documents/{documentId}/watchers` | `client.documents.setWatchers(documentId, watcherIds)` | Covered (staging) |
+| `POST` | `/v1/accounts/{accountId}/envelopes/{envelopeId}/signers/{signerId}/estimate-resend-cost` | `client.envelopes.estimateResendCost(envelopeId, signerId, accountId?)` | Covered (staging) |
+| `POST` | `/v1/documents/{documentId}/scheduled-sends` | `client.scheduledSends.createAssignment(documentId, payload)` | Covered (staging) |
+| `POST` | `/v1/accounts/{accountId}/scheduled-sends` | `client.scheduledSends.createEnvelope(payload, accountId?)` | Covered (staging) |
+| `GET` | `/v1/accounts/{accountId}/scheduled-sends` | `client.scheduledSends.list(params?, accountId?)` | Covered (staging) |
+| `PUT` | `/v1/accounts/{accountId}/scheduled-sends/{scheduledSendId}/cancel` | `client.scheduledSends.cancel(scheduledSendId, accountId?)` | Covered (staging) |
+| `PUT` | `/v1/accounts/{accountId}/scheduled-sends/{scheduledSendId}/send` | `client.scheduledSends.sendNow(scheduledSendId, accountId?)` | Covered (staging) |

@@ -10,6 +10,7 @@ import type {
     IEnvelopeListParams,
     IEnvelopeListResponse,
     IEnvelopeResendResponse,
+    IResendCostEstimate,
     IListParams,
     IUpdateEnvelopePayload,
     PaginatedResult,
@@ -286,6 +287,7 @@ export class EnvelopeResource extends BaseResource {
      *
      * @param envelopeId - Envelope ID.
      * @param accountId - Override the client's default account ID.
+     * @returns Nothing; the acknowledgement body is discarded.
      * @throws {ValidationError} If an ID is missing or invalid.
      * @throws {ApiError} `403` for a token without `documents:write`, `404` for an
      * unknown envelope, `409` (`EnvelopeOpen`) while a document is still open.
@@ -523,6 +525,39 @@ export class EnvelopeResource extends BaseResource {
         );
     }
 
+    /**
+     * Price a whole-envelope reminder
+     * (`POST /accounts/{accountId}/envelopes/{envelopeId}/signers/{signerId}/estimate-resend-cost`).
+     *
+     * Staging extension. Sends and charges nothing. Prices one reminder per
+     * channel regardless of document count, without checking reminder cooldown
+     * or whether the envelope is closed. OAuth requires `documents:write`.
+     * @param envelopeId - Envelope ID.
+     * @param signerId - Signer of the envelope.
+     * @param accountId - Override the client's default workspace.
+     * @returns The current reminder price:
+     * ```jsonc
+     * { "total": 0, "breakdown": [], "credit_balance": null, "has_sufficient_credits": true }
+     * ```
+     * @throws {ValidationError} If an ID is missing or invalid.
+     * @throws {ApiError} `401`, `403`, or `404` for an unknown envelope/signer or older deployment.
+     * @example
+     * ```ts
+     * const estimate = await client.envelopes.estimateResendCost(envelope.id, signer.id);
+     * ```
+     */
+    async estimateResendCost(
+        envelopeId: string,
+        signerId: string,
+        accountId?: string,
+    ): Promise<IResendCostEstimate> {
+        return this.call('Failed to estimate envelope reminder cost', () =>
+            this.http.post(
+                `${this.envelopePath(envelopeId, accountId)}/signers/${this.pathSegment(signerId, 'Signer ID')}/estimate-resend-cost`,
+            ),
+        );
+    }
+
     private envelopesPath(accountId?: string): string {
         return `/accounts/${this.pathSegment(this.accountId(accountId), 'Account ID')}/envelopes`;
     }
@@ -537,7 +572,7 @@ export class EnvelopeResource extends BaseResource {
  * rules, the API refuses a broken envelope rule itself, creating and charging
  * nothing, and names each field in `ApiError.fieldErrors`.
  */
-function buildEnvelopePayload(payload: ICreateEnvelopePayload): Record<string, unknown> {
+export function buildEnvelopePayload(payload: ICreateEnvelopePayload): Record<string, unknown> {
     assertRecord(payload, 'envelope payload');
     assertNonEmptyString(payload.name, 'name');
     assertMessage(payload.message);

@@ -31,7 +31,7 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 24
+          node-version: 26
           package-manager-cache: false
 
       - name: Verify stable package version, tag, and ancestry
@@ -66,7 +66,7 @@ jobs:
           npm init --yes
           npm install "${GITHUB_WORKSPACE}"/assinafy-sdk-*.tgz --ignore-scripts --no-audit --no-fund
           cp "${GITHUB_WORKSPACE}/scripts/node-consumer-smoke.mjs" .
-          node node-consumer-smoke.mjs
+          node --test node-consumer-smoke.mjs
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: npm-package
@@ -91,7 +91,7 @@ jobs:
           name: npm-package
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 24
+          node-version: 26
           registry-url: https://registry.npmjs.org
           package-manager-cache: false
       - run: shasum -a 256 -c SHA256SUMS
@@ -114,7 +114,7 @@ jobs:
           name: npm-package
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 24
+          node-version: 26
           registry-url: https://npm.pkg.github.com
           package-manager-cache: false
       - run: shasum -a 256 -c SHA256SUMS

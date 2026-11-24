@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.1.0] - 2026-11-24
+
+### Added
+
+- Scheduled assignments and envelopes through `client.scheduledSends`, including
+  listing, cancellation and immediate dispatch on supported staging deployments.
+- Document watchers, signer capacities, notification delivery/open history and
+  envelope reminder cost estimates on staging.
+- Typed PNG/JPEG signature-image upload options.
+
+### Fixed
+
+- Preserve and validate assignment `sign_as` on creation and cost estimation.
+- Use current cost estimates for certificate pricing in integration guidance.
+- Require Axios 1.21.1, including its updated redirect dependency minimum.
+- Reject malformed webhook signature entries with extra comma-separated data.
+
+### Changed
+
+- GitHub builds and releases use Node.js 26 LTS, retaining Node.js 22/24 support.
+- Keep local maintenance utilities outside version control; CI uses tracked
+  contract and packed-consumer tests.
+
 ## [3.0.2] - 2026-11-12
 
 ### Fixed
@@ -1039,7 +1062,8 @@ signer fields with `cpf` and `whatsapp_phone_number`.
 - High-level `uploadAndRequestSignatures` helper on `AssinafyClient`.
 - `PaginatedResult<T>` with parsed `X-Pagination-*` header meta.
 
-[Unreleased]: https://github.com/assinafy/typescript-sdk/compare/v3.0.2...HEAD
+[Unreleased]: https://github.com/assinafy/typescript-sdk/compare/v3.1.0...HEAD
+[3.1.0]: https://github.com/assinafy/typescript-sdk/releases/tag/v3.1.0
 [3.0.2]: https://github.com/assinafy/typescript-sdk/compare/v3.0.1...v3.0.2
 [3.0.1]: https://github.com/assinafy/typescript-sdk/compare/v3.0.0...v3.0.1
 [3.0.0]: https://github.com/assinafy/typescript-sdk/compare/v2.11.0...v3.0.0

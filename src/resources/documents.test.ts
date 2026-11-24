@@ -4,6 +4,31 @@ import { ApiError, ValidationError } from '../errors';
 import axios, { type AxiosInstance } from 'axios';
 import { recordingHttp } from '../testing/recording-http';
 
+describe('document watchers', () => {
+    test('reads and replaces watchers, including clearing and duplicate contacts', async () => {
+        const contacts = [{ id: 's', full_name: 'Example Watcher', email: 'watcher@example.com' }];
+        const { http, calls } = recordingHttp(contacts);
+        const resource = new DocumentResource(http);
+        expect(await resource.listWatchers('doc/1')).toEqual(contacts);
+        for (const ids of [['s'], [], Array<string>(11).fill('s')]) {
+            expect(await resource.setWatchers('doc/1', ids)).toEqual(contacts);
+            expect(calls.at(-1)).toEqual({ method: 'PUT', url: '/documents/doc%2F1/watchers', body: { watcher_ids: ids }, config: undefined });
+        }
+        expect(calls[0]).toEqual({ method: 'GET', url: '/documents/doc%2F1/watchers', config: undefined });
+    });
+
+    test('rejects invalid contacts, IDs and oversized sets before dispatch', async () => {
+        const { http, calls } = recordingHttp();
+        const resource = new DocumentResource(http);
+        for (const ids of [null, {}, [''], [null], Array.from({ length: 11 }, (_, i) => String(i))]) {
+            await expect(resource.setWatchers('d', ids as never)).rejects.toBeInstanceOf(ValidationError);
+        }
+        await expect(resource.listWatchers('')).rejects.toBeInstanceOf(ValidationError);
+        await expect(resource.setWatchers('..', [])).rejects.toBeInstanceOf(ValidationError);
+        expect(calls).toHaveLength(0);
+    });
+});
+
 describe('DocumentResource', () => {
     let mockAxios: AxiosInstance;
     let docs: DocumentResource;

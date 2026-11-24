@@ -10,6 +10,9 @@ session exchange is reserved for Assinafy's embed page), plus compatibility exte
 maintained by the API. The complete reference, including payloads, responses, errors, and examples
 for every resource, is in the **[English manual](docs/README.en.md)**.
 
+Staging also exposes ten additional operations for scheduled sends, watchers, capacities,
+notification history and envelope reminder estimates; see the [coverage map](docs/API_COVERAGE.md).
+
 ## Requirements
 
 - Node.js 22+ or Bun 1.4.4
@@ -100,6 +103,8 @@ factories.
 5. Deliver the signing URL, or show the signing screen inside your app with `client.embed`, and
    authenticate webhooks before processing events.
 6. Observe completion and download the signed document or certificate.
+7. Track contract terms with `client.contracts`; on staging, defer a request with
+   `client.scheduledSends` and monitor its `pending`, `sent` or `failed` state.
 
 WhatsApp, ID-document and face biometrics, ICP-Brasil digital certificates, and per-account
 `Bypass` verification have specific prerequisites; `workspaces.get(id, { expand:
@@ -115,6 +120,7 @@ in their browser. See the [signing branches](docs/README.en.md#paid-signing-bran
 | `client.assignments` | Requests, costs, notifications, and identity review |
 | `client.envelopes` | Several documents to the same signers, one invitation and one charge |
 | `client.embed` | Embed origins and single-use sessions for in-app signing |
+| `client.scheduledSends` | Deferred assignments and envelopes (staging) |
 | `client.contracts` | Terms, families, renewals, and contract termination |
 | `client.templates`, `client.tags`, `client.fields` | Reusable content and fields |
 | `client.workspaces`, `client.users` | Workspace, branding, usage, notification policy, preferences, and MFA/TOTP |

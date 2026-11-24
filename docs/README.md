@@ -327,6 +327,95 @@ const client = AssinafyClient.fromConfig({
 
 O objeto aceito por `fromConfig` tem o tipo exportado `ClientConfigInput`.
 
+## Agendamentos e notificações de documentos (staging)
+
+Essas operações precisam estar disponíveis no ambiente configurado em
+`baseUrl`. O SDK não muda de ambiente quando recebe uma recusa.
+
+```ts
+const agendamento = await client.scheduledSends.createAssignment(document.id, {
+  method: 'virtual',
+  signers: [{ id: signer.id, sign_as: 'Witness', verification_method: 'Email',
+    notification_methods: ['Email'] }],
+  send_at: new Date(Date.now() + 86_400_000).toISOString(),
+  expires_at: null,
+  max_total_credits: 0,
+});
+```
+
+O corpo é o mesmo de criação do assignment, acrescido de `send_at`. Resposta:
+
+```json
+{
+  "resource": "scheduled_send", "id": "send-1", "type": "assignment",
+  "document_ids": ["doc-1"], "status": "pending",
+  "send_at": "2026-12-01T12:00:00Z", "assignment_id": null,
+  "envelope_id": null, "failure_reason": null,
+  "created_at": "2026-11-30T12:00:00Z", "processed_at": null
+}
+```
+
+`send_at` aceita data/hora ISO ou segundos Unix, de uma hora a 90 dias no futuro.
+Sem fuso explícito, vale UTC. A expiração deve ser pelo menos duas horas depois
+do envio. Agendar não envia nem cobra; a execução valida novamente a solicitação,
+o plano e o saldo. O servidor verifica agendamentos a cada cinco minutos.
+`sign_as` indica a qualificação declarada pelo remetente apenas na página do
+certificado; ausente ou `null` significa `Sign`. Não altera a verificação.
+
+```ts
+const pagina = await client.scheduledSends.list({ document_id: document.id });
+await client.scheduledSends.cancel(agendamento.id); // pending → cancelled
+// Alternativa: await client.scheduledSends.sendNow(agendamento.id);
+const envelopeAgendado = await client.scheduledSends.createEnvelope({
+  name: 'Contrato', signers: [{ id: signer.id }],
+  documents: [{ id: otherDocument.id, signer_ids: [signer.id] }],
+  send_at: new Date(Date.now() + 86_400_000).toISOString(),
+  max_total_credits: 0,
+});
+```
+
+Os cinco métodos, inclusive a listagem, exigem OAuth `documents:write`.
+`list()` retorna `{ data: IScheduledSend[], meta }`. Cancelamento e envio imediato
+retornam o mesmo objeto de estado, com `processed_at` e `assignment_id` ou
+`envelope_id` após o envio. Se o envio imediato for recusado, o agendamento
+continua pendente: cancele-o para impedir a tentativa futura. Falhas na execução
+agendada registram `failure_reason`. Não há repetição automática nem chave de
+idempotência; após perder uma resposta, leia o estado antes de agir novamente.
+
+```ts
+await client.documents.setWatchers(document.id, [contact.id]);
+const observadores = await client.documents.listWatchers(document.id);
+await client.documents.setWatchers(document.id, []); // remover todos
+const qualificacoes = await client.assignments.getSignerCapacities(document.id);
+const historico = await client.assignments.getNotificationHistory(document.id);
+const lembrete = await client.envelopes.estimateResendCost(envelope.id, signer.id);
+```
+
+A escrita de observadores envia `{ "watcher_ids": ["contact-1"] }`; leitura e
+escrita retornam `ISigner[]`. Até dez contatos distintos do workspace, com email,
+recebem avisos de encerramento sem link ou anexo. Configure antes do envio ou
+enquanto o documento estiver aberto. Essas rotas exigem API key ou token de
+usuário; tokens de aplicações OAuth não podem gerenciar observadores.
+
+As qualificações retornam `[{ "signer_id": "signer-1", "sign_as": "Witness" }]`.
+O histórico retorna `{ signer_id, notification_history }` por signatário; cada
+entrada contém `event`, `status`, `error_code`, `error_message`, `sent_at`,
+`failed_at`, `delivered_at` e `opened_at`. Erros e horários podem ser nulos;
+horários presentes são ISO. Aberturas podem vir de filtros de email, não de
+pessoas. Ambas as leituras exigem `documents:read` e retornam `[]` antes do envio.
+Estimativas de lembrete exigem `documents:write` e retornam
+`{ total, breakdown, credit_balance, has_sufficient_credits }`, sem envio nem
+verificação do intervalo entre lembretes. O JSDoc de cada método inclui exemplos
+tipados e erros HTTP. Staging também aceita assinaturas JPEG em
+`uploadSignature(code, bytes, { contentType: 'image/jpeg' })`; PNG é o padrão.
+
+Recusas de assinatura expõem `ApiError.code`: `SignerDataUnconfirmed`,
+`EmailVerificationRequired`, `WhatsappVerificationRequired`,
+`DigitalCertificateRequired` e `IdentityVerificationRequired` indicam a etapa
+pendente. Complete-a pelo fluxo correspondente. Solicitações de token por email
+podem retornar `429` durante dois minutos; consulte `error.rateLimit.retryAfter`
+e não repita o envio em um laço.
+
 ## Cobertura de endpoints
 
 As 147 operações documentadas em https://api.assinafy.com.br/v1/docs estão mapeadas: 146 têm métodos
@@ -336,11 +425,12 @@ no SDK, e a troca da sessão incorporada é reservada à página de embed da Ass
 
 | Recurso | Endpoints |
 | --- | --- |
-| `client.documents` | list, search, upload, details, get, rename, activities, listActivities, waitUntilReady, download, thumbnail, downloadPage, statuses, delete, verify, createFromTemplate, estimateCostFromTemplate, getPublic, sendToken, listTags, replaceTags, addTags, detachTag, isFullySigned, getSigningProgress |
+| `client.documents` | list, search, upload, details, get, rename, activities, listActivities, waitUntilReady, download, thumbnail, downloadPage, statuses, delete, verify, createFromTemplate, estimateCostFromTemplate, getPublic, sendToken, listTags, replaceTags, addTags, detachTag, isFullySigned, getSigningProgress, listWatchers, setWatchers |
 | `client.signers` | create, get, list, update, delete, findByEmail |
-| `client.assignments` | list, create, estimateCost, resetExpiration, resendNotification, estimateResendCost, listWhatsAppNotifications, getIdentityVerification, downloadIdentityVerificationImage, reviewIdentityVerification |
+| `client.assignments` | list, create, estimateCost, resetExpiration, resendNotification, estimateResendCost, listWhatsAppNotifications, getIdentityVerification, downloadIdentityVerificationImage, reviewIdentityVerification, getSignerCapacities, getNotificationHistory |
+| `client.scheduledSends` | createAssignment, createEnvelope, list, cancel, sendNow |
 | `client.contracts` | list, get, set, listRelated, renew, terminate |
-| `client.envelopes` | list, get, create, estimateCost, update, delete, cancel, listActivities, download, addDocument, removeDocument, resendNotification |
+| `client.envelopes` | list, get, create, estimateCost, update, delete, cancel, listActivities, download, addDocument, removeDocument, resendNotification, estimateResendCost |
 | `client.embed` | listOrigins, addOrigin, updateOrigin, deleteOrigin, createSession |
 | `client.templates` | create, list, get, update, delete, downloadPage |
 | `client.tags` | list, create, update, delete |
@@ -889,7 +979,7 @@ await client.signers.get(signerId);
 await client.signers.list({ page: 1, 'per-page': 50, search: 'signatario' });
 await client.signers.update(signerId, {
   full_name: 'Signatário Atualizado',
-  government_id: '390.533.447-05', // campo oficial de atualização; enviado só com dígitos
+  government_id: '390.533.447-05', // enviado como informado; a API normaliza a formatação
 });
 await client.signers.delete(signerId);
 
@@ -996,7 +1086,7 @@ que faltar é inferido. Sem nenhum dos dois, ambos assumem `Email`.
 | --- | --- | --- | --- |
 | `Email` *(padrão)* | Código de uso único (OTP) por e-mail | `Email` | Gratuito |
 | `Whatsapp` | Código de uso único (OTP) por WhatsApp | `Whatsapp` | 0,45 crédito (a notificação), só em planos pagos |
-| `DigitalCertificate` | O signatário assina com o **próprio certificado ICP-Brasil — A1 ou A3 —** pela extensão Web PKI, gerando uma assinatura **PAdES qualificada**; exige `method: 'virtual'` | `Email` **ou** `Whatsapp` (ou `Bypass`) | 0,5 crédito + a notificação |
+| `DigitalCertificate` | O signatário assina com o **próprio certificado ICP-Brasil — A1 ou A3 —** pela extensão Web PKI, gerando uma assinatura **PAdES qualificada**; exige `method: 'virtual'` | `Email` **ou** `Whatsapp` (ou `Bypass`) | Consulte a estimativa atual |
 | `IdDocumentFaceMatchBasic` | Documento de identidade, foto e prova de vida em sessão hospedada | `Email` **ou** `Whatsapp` (ou `Bypass`) | Consulte `estimateCost()` |
 | `Bypass` | Sem código: seu app já autenticou o signatário. Habilitado por conta pela Assinafy | `Email`, `Whatsapp` **ou** `Bypass` (não envia convite) | A notificação |
 
@@ -1051,8 +1141,8 @@ nem encaminhe fora do fluxo de assinatura.
 `DigitalCertificate` exige `method: 'virtual'`, o recurso **Certificado Digital** na conta (planos
 Standard e Pro), CPF ou CNPJ em `government_id` do signatário, e exatamente **um signatário por
 certificado naquele passo de assinatura**. A estimativa recebe o mesmo `step` da criação: com dois
-ou mais signatários com certificado, dê a cada um o seu passo nas duas chamadas. Custa 0,5 crédito
-por signatário, além do custo da notificação escolhida. O fluxo por certificado conclui o item virtual do signatário; ele não consegue
+ou mais signatários com certificado, dê a cada um o seu passo nas duas chamadas. O preço depende do workspace e do ambiente; consulte `estimateCost()` e envie
+o `total_credits` retornado como `max_total_credits` ao criar a solicitação. O fluxo por certificado conclui o item virtual do signatário; ele não consegue
 enviar campos posicionados pelo endpoint comum de assinatura `collect`.
 
 O SDK rejeita signatários por certificado em assignments `collect`, tanto em `create()` quanto em

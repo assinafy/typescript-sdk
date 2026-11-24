@@ -1,6 +1,6 @@
 {
     "name": "@assinafy/sdk",
-    "version": "3.0.2",
+    "version": "3.1.0",
     "packageManager": "bun@1.4.4",
     "description": "TypeScript SDK for Assinafy API - Digital signature platform",
     "type": "commonjs",
@@ -23,16 +23,16 @@
     "sideEffects": false,
     "scripts": {
         "build": "tsup src/index.ts --format cjs,esm --dts --clean",
-        "test": "bun test",
-        "test:coverage": "bun test --coverage",
-        "lint": "eslint src scripts --max-warnings=0",
-        "lint:fix": "eslint src scripts --fix",
+        "test": "bun test src tests/api-contract.test.ts",
+        "test:coverage": "bun test src tests/api-contract.test.ts --coverage",
+        "lint": "eslint src tests/api-contract.test.ts --max-warnings=0",
+        "lint:fix": "eslint src tests/api-contract.test.ts --fix",
         "lint:pkg": "publint --strict && attw --pack .",
         "audit": "bun audit",
-        "audit:api": "bun scripts/api-contract-audit.ts",
+        "audit:api": "ASSINAFY_CONTRACT_CHECK=1 bun test tests/api-contract.test.ts",
         "prepack": "bun run build",
         "prepublishOnly": "bun run verify && bun run audit",
-        "typecheck": "bun ./node_modules/@typescript/native/bin/tsc --noEmit && bun ./node_modules/@typescript/native/bin/tsc --noEmit -p tsconfig.scripts.json && bun ./node_modules/@typescript/native/bin/tsc --noEmit -p tsconfig.tests.json",
+        "typecheck": "bun ./node_modules/@typescript/native/bin/tsc --noEmit && bun ./node_modules/@typescript/native/bin/tsc --noEmit -p tsconfig.tests.json",
         "verify": "bun run typecheck && bun run lint && bun run test:coverage && bun run build && bun run lint:pkg"
     },
     "keywords": [
@@ -72,20 +72,20 @@
         "@types/bun": "^1.4.4",
         "@types/node": "^22.20.5",
         "@typescript/native": "npm:typescript@^7.0.2",
-        "eslint": "^10.14.0",
+        "eslint": "^10.15.0",
         "publint": "^0.3.25",
         "tsup": "^9.0.0",
         "typescript": "^6.0.3",
-        "typescript-eslint": "^8.72.1"
+        "typescript-eslint": "^8.72.2"
     },
     "dependencies": {
-        "axios": "^1.21.0"
+        "axios": "^1.21.1"
     },
     "overrides": {
         "esbuild": "0.28.2",
         "follow-redirects": "1.16.2",
         "brace-expansion": "5.0.12",
-        "minimatch": "11.0.3"
+        "minimatch": "11.0.9"
     },
     "files": [
         "dist",

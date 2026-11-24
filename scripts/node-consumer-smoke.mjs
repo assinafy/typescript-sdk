@@ -1,3 +1,4 @@
+import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Buffer } from 'node:buffer';
 import { once } from 'node:events';
@@ -9,18 +10,25 @@ import {
     ApiError,
     AssinafyClient,
     ContractResource,
+    ScheduledSendResource,
+    EnvelopeResource,
+    EmbedResource,
     OAuthError,
     SDK_USER_AGENT,
     ValidationError,
     WebhookVerifier,
 } from '@assinafy/sdk';
 
+test('packed CJS/ESM SDK, HTTP, credentials and multipart', async () => {
 const require = createRequire(import.meta.url);
 const commonJsSdk = require('@assinafy/sdk');
 
 for (const exported of [
     AssinafyClient,
     ContractResource,
+    ScheduledSendResource,
+    EnvelopeResource,
+    EmbedResource,
     WebhookVerifier,
     ApiError,
     OAuthError,
@@ -31,6 +39,9 @@ for (const exported of [
 for (const name of [
     'AssinafyClient',
     'ContractResource',
+    'ScheduledSendResource',
+    'EnvelopeResource',
+    'EmbedResource',
     'WebhookVerifier',
     'ApiError',
     'OAuthError',
@@ -45,6 +56,9 @@ const commonJsClient = new commonJsSdk.AssinafyClient({
     accountId: 'commonjs-account',
 });
 assert.ok(commonJsClient.contracts instanceof commonJsSdk.ContractResource);
+assert.ok(commonJsClient.scheduledSends instanceof commonJsSdk.ScheduledSendResource);
+assert.equal(typeof commonJsClient.envelopes.estimateResendCost, 'function');
+assert.equal(typeof commonJsClient.documents.setWatchers, 'function');
 assert.equal(typeof commonJsClient.documents.listActivities, 'function');
 
 const activity = {
@@ -196,4 +210,6 @@ assert.deepEqual(Object.fromEntries(new URLSearchParams(tokenRequest.body.toStri
     code_verifier: 'a'.repeat(43),
     client_id: 'consumer-client',
     client_secret: 'consumer-secret',
+});
+
 });

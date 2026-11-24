@@ -61,6 +61,24 @@ Older signer-self responses can omit `has_signature`, `has_initial`, and
 `is_signature_reusable`; assignment signers can omit `notification_history`.
 Those fields are optional in the SDK response types.
 
+## Staging additions
+
+Staging publishes 157 operations; production publishes 147. The additional
+operations expose scheduled assignments/envelopes (`client.scheduledSends`),
+document watchers, signer capacities, notification delivery/open history, and
+envelope reminder estimates. They are marked **Covered (staging)** in the
+coverage ledger. No method falls back to another environment.
+
+Assignment creation and estimates also accept nullable `sign_as`; it is a
+sender-stated certificate label, not an identity claim. Signature-image upload
+accepts PNG and, on staging, JPEG. Plan prices are deployment-specific: use
+cost estimates and pass `max_total_credits` when creating a signing request.
+
+Run `ASSINAFY_CONTRACT_ENV=staging ASSINAFY_OPENAPI_URL=... bun run audit:api`
+to validate the staging specification. OAuth discovery checks target the public
+production and sandbox deployments.
+Keep the selected deployment URL in local configuration.
+
 ## Contract lifecycle management (CLM)
 
 Production exposes the six contract lifecycle operations under
@@ -96,9 +114,8 @@ not reinterpret either response or route a sandbox request to production.
 Read operations remain available after a production plan lapses; writes are
 plan-gated. Signed amendments wait and the lifecycle catches up after the plan
 returns, as defined by the production integration guide.
-The current sandbox specification publishes neither the six CLM operations nor
-activity paging. The SDK's `audit:api` checks the production contract; passing
-sandbox smoke tests does not verify either capability.
+Staging publishes the six CLM operations and activity paging. Deployment
+availability remains explicit: configure `baseUrl` for the environment being used.
 
 `documents.details()` can expose `has_contract` only in a workspace context and
 only when contract tracking is available. A missing key means unknown, not
@@ -383,8 +400,8 @@ embed frame then reports `session_expired`.
 
 `DigitalCertificate` requires the account feature, a CPF or CNPJ stored in the
 signer's `government_id`, and exactly one certificate signer in that signing
-step. It costs 0.5 credits per signer in addition to the selected notification
-cost. Notification methods remain `Email` and `Whatsapp`. It also requires
+step. Read the current cost estimate for verification and notification fees.
+Notification methods are `Email`, `Whatsapp` or `Bypass`. It also requires
 `method: virtual`: certificate completion completes a virtual item, while the
 ordinary field-signing endpoint refuses certificate signers. The SDK rejects a
 certificate/`collect` combination before assignment creation or cost
